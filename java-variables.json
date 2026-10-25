@@ -1,0 +1,10 @@
+{
+  "_leírás": "A generált Java által létrehozott változók értéke (DPS ServiceImpl: fejlesztői bemenetek és a Java lekérdezőgombok képernyőértékei). Ahol a generátor a variableName nevű változót hozza létre, ott a típus mellé a variableValue kerül (String ibuKod = commonService.Details(param);), a ServiceImpl-be bekerül az import, az osztály tetejére pedig az @Autowired mező (private CommonService commonService; - a típus az autowired nagy kezdőbetűvel). Az import és az autowired elhagyható. A bejegyzéseket a variables listába írd; a _ kezdetű kulcsok megjegyzések. Másik fájl: java_variable_map beállítás vagy FRM_JAVA_VARIABLE_MAP; \"-\" = kikapcsolva. Generálás után: analysis/java-variables.json (melyik bejegyzés hova került).",
+  "_példa": {
+    "variableName": "ibuKod",
+    "variableValue": "commonService.Details(param)",
+    "autowired": "commonService",
+    "import": "hu.company.pelda.CommonService"
+  },
+  "variables": []
+}

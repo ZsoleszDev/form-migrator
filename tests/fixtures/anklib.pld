@@ -1,0 +1,34 @@
+.attach LIBRARY QMSLIB65 END NOCONDENSE
+PACKAGE ank_ctrl IS
+  PROCEDURE set_title(p_title VARCHAR2);
+  PROCEDURE set_hint(p_hint VARCHAR2);
+END ank_ctrl;
+PACKAGE BODY ank_ctrl IS
+  PROCEDURE set_title(p_title VARCHAR2) IS
+  BEGIN
+    SET_WINDOW_PROPERTY(FORMS_MDI_WINDOW, TITLE, p_title);
+  END;
+  PROCEDURE set_hint(p_hint VARCHAR2) IS
+  BEGIN
+    NULL;
+  END;
+END ank_ctrl;
+PACKAGE ank_jog IS
+  FUNCTION irhat RETURN BOOLEAN;
+END ank_jog;
+PACKAGE BODY ank_jog IS
+  FUNCTION irhat RETURN BOOLEAN IS
+    v_db NUMBER;
+  BEGIN
+    SELECT COUNT(*) INTO v_db FROM jogosultsag WHERE felhasznalo = USER AND jog = 'IR';
+    RETURN v_db > 0;
+  END;
+END ank_jog;
+PROCEDURE naplo_init(p_kod VARCHAR2) IS
+BEGIN
+  INSERT INTO naplo (kod, idopont) VALUES (p_kod, SYSDATE);
+END;
+PROCEDURE nem_hasznalt IS
+BEGIN
+  GO_BLOCK('X');
+END;

@@ -1,0 +1,73 @@
+package hu.company.features.customer.dps;
+
+import hu.company.features.customer.cl.CustomerDtos.*;
+import hu.company.features.cl.CommonMigrateTools.SqlValues;  // shared CL helper
+import smoke.MemoryCustomerJdbc;
+
+import java.math.BigDecimal;
+import java.util.List;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+
+/** Runs against generated sources, with only the external framework API stubbed. */
+public class RuntimeSmoke {
+    static void check(boolean result, String message) { if (!result) throw new AssertionError(message); }
+    static BigDecimal decimal(String value) { return new BigDecimal(value); }
+    static CustomerRow copy(CustomerRow in) {
+        var out = new CustomerRow();
+        out.id = in.id; out.name = in.name; out.amount = in.amount;
+        out.approvalRequired = in.approvalRequired; out.active = in.active;
+        out.status = in.status; out.createdAt = in.createdAt;
+        return out;
+    }
+    static void expectStatus(Runnable call, HttpStatus expected) {
+        try { call.run(); throw new AssertionError("Expected " + expected); }
+        catch (ResponseStatusException error) { check(error.status == expected, "Wrong status " + error.status); }
+    }
+    public static void main(String[] args) {
+        check(SqlValues.isNull(""), "Oracle empty string must be null");
+        check(SqlValues.compare(null, decimal("1"), "=") == null, "NULL comparison");
+        check(SqlValues.not(null) == null, "NOT NULL");
+        check(!SqlValues.truth(null), "IF NULL is not true");
+        check(SqlValues.same(decimal("1.00"), decimal("1")), "Scale independent decimal equality");
+        check(!SqlValues.and(() -> false, () -> { throw new AssertionError("AND failed short circuit"); }), "False AND");
+        check(SqlValues.or(() -> true, () -> { throw new AssertionError("OR failed short circuit"); }), "True OR");
+        check(SqlValues.and(() -> null, () -> false).equals(false), "NULL AND FALSE");
+        check(SqlValues.or(() -> null, () -> true).equals(true), "NULL OR TRUE");
+        check(SqlValues.and(() -> null, () -> true) == null, "NULL AND TRUE");
+        check(SqlValues.math(decimal("9007199254740993"), decimal("0.01"), "+").toPlainString().equals("9007199254740993.01"), "Decimal precision lost");
+        check(SqlValues.concat(null, "a").equals("a"), "NULL concat");
+        check(SqlValues.concat(null, null) == null, "Empty concat");
+        check(SqlValues.trim("  \t  ").equals("\t"), "Oracle TRIM removes spaces, not tabs");
+        var repository = new MemoryCustomerJdbc();
+        var service = new CustomerServiceImpl(repository);
+        var row = new CustomerRow(); row.name = "  Teszt  "; row.amount = decimal("1000000.01"); row.status = "NEW";
+        var checked = service.createCustomer(row).row();
+        check(checked.name.equals("Teszt") && checked.approvalRequired.equals("Y"), "Generated validation logic");
+        row = new CustomerRow(); row.name = "Teszt"; row.amount = null;
+        checked = service.createCustomer(row).row();
+        check(checked.approvalRequired.equals("N"), "NVL and ELSE branch");
+        var blank = new CustomerRow(); blank.name = "   ";
+        expectStatus(() -> service.createCustomer(blank), HttpStatus.UNPROCESSABLE_ENTITY);
+        var negative = new CustomerRow(); negative.name = "Teszt"; negative.amount = decimal("-1");
+        expectStatus(() -> service.createCustomer(negative), HttpStatus.UNPROCESSABLE_ENTITY);
+        repository.changes = 0;
+        var input = new CustomerRow(); input.name = "First";
+        var created = service.createCustomer(input).row();
+        check(created.id.toPlainString().equals("9007199254740993"), "Sequence ID precision");
+        check(created.active.equals("Y") && created.status.equals("NEW") && created.amount.equals(BigDecimal.ZERO), "Server literal defaults");
+        var original = copy(created); var edit = copy(created); edit.name = "Second";
+        var updated = service.updateCustomer(original, edit).row();
+        check(updated.name.equals("Second"), "Update failed");
+        expectStatus(() -> service.updateCustomer(original, edit), HttpStatus.CONFLICT);
+        var badKey = copy(updated); badKey.id = decimal("2");
+        expectStatus(() -> service.updateCustomer(updated, badKey), HttpStatus.UNPROCESSABLE_ENTITY);
+        var badDomain = copy(updated); badDomain.status = "INJECTED";
+        expectStatus(() -> service.updateCustomer(updated, badDomain), HttpStatus.UNPROCESSABLE_ENTITY);
+        check(repository.changes == 2, "Rejected operations wrote data");
+        check(repository.queries.stream().anyMatch(q -> q.endsWith(" FOR UPDATE")), "Missing write lock");
+        service.deleteCustomer(updated); check(repository.data == null, "Delete failed");
+        System.out.println("Generated Java compile and runtime assertions passed.");
+    }
+}

@@ -1,0 +1,123 @@
+import hu.company.features.customer.cl.*;
+import hu.company.features.customer.cl.CustomerDtos.*;
+import smoke.MemoryCustomerJdbc;
+import hu.company.features.customer.dps.CustomerServiceImpl;
+import java.math.BigDecimal;
+import java.net.InetSocketAddress;
+import java.net.URI;
+import java.lang.reflect.Proxy;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
+import com.sun.net.httpserver.HttpServer;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import jakarta.validation.Validator;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.client.RestClient;
+import org.springframework.web.server.ResponseStatusException;
+import org.springframework.aop.framework.ProxyFactory;
+import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
+import org.springframework.transaction.interceptor.TransactionInterceptor;
+import org.springframework.transaction.support.AbstractPlatformTransactionManager;
+import org.springframework.transaction.support.DefaultTransactionStatus;
+import org.springframework.transaction.TransactionDefinition;
+
+/** Real Spring MVC routing + real CL HTTP transport; only persistence/auth validation are test doubles. */
+public class HttpLayersSmoke {
+    static final ObjectMapper mapper = new ObjectMapper().registerModule(new JavaTimeModule());
+    static void check(boolean ok, String message) { if (!ok) throw new AssertionError(message); }
+    static CustomerRow copy(CustomerRow row) { return mapper.convertValue(row, CustomerRow.class); }
+    static MockMvc mvc(Object controller) {
+        return MockMvcBuilders.standaloneSetup(controller)
+            .setMessageConverters(new MappingJackson2HttpMessageConverter(mapper)).build();
+    }
+    static JsonNode request(MockMvc mvc, HttpMethod method, String path, Object body, int expected) throws Exception {
+        var request = MockMvcRequestBuilders.request(method, URI.create(path));
+        if (body != null) request.contentType("application/json").content(mapper.writeValueAsBytes(body));
+        var response = mvc.perform(request).andReturn().getResponse();
+        check(response.getStatus() == expected, method + " " + path + ": " + response.getStatus() + " != " + expected + ": " + response.getContentAsString());
+        return response.getContentAsByteArray().length == 0 ? null : mapper.readTree(response.getContentAsByteArray());
+    }
+    public static void main(String[] args) throws Exception {
+        var validator = (Validator) Proxy.newProxyInstance(Validator.class.getClassLoader(), new Class<?>[] {Validator.class},
+            (proxy, method, values) -> { if (method.getName().equals("validate")) return Set.of(); throw new UnsupportedOperationException(method.getName()); });
+        var repository = new MemoryCustomerJdbc();
+        var accessCalls = new AtomicInteger();
+        CustomerRestClient.Access access = (block, operation) -> { check(block.equals("CUSTOMER"), "Wrong block"); accessCalls.incrementAndGet(); };
+        var reads = new AtomicInteger(); var writes = new AtomicInteger();
+        var manager = new AbstractPlatformTransactionManager() {
+            @Override protected Object doGetTransaction() { return new Object(); }
+            @Override protected void doBegin(Object tx, TransactionDefinition definition) {
+                (definition.isReadOnly() ? reads : writes).incrementAndGet();
+            }
+            @Override protected void doCommit(DefaultTransactionStatus status) {}
+            @Override protected void doRollback(DefaultTransactionStatus status) {}
+        };
+        var proxy = new ProxyFactory(new CustomerServiceImpl(repository, validator, access));
+        proxy.setProxyTargetClass(true); // Spring Boot commonly uses class proxies, including for action calls.
+        proxy.addAdvice(new TransactionInterceptor(manager, new AnnotationTransactionAttributeSource()));
+        var dps = mvc(new hu.company.features.customer.dps.CustomerControllerImpl(
+            (hu.company.features.customer.dps.CustomerService) proxy.getProxy()));
+        var httpCalls = new AtomicInteger();
+        var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/gateway", exchange -> {
+            try {
+                httpCalls.incrementAndGet();
+                String uri = exchange.getRequestURI().toString().substring("/gateway".length());
+                var req = MockMvcRequestBuilders.request(HttpMethod.valueOf(exchange.getRequestMethod()), URI.create(uri));
+                byte[] incoming = exchange.getRequestBody().readAllBytes();
+                if (incoming.length > 0) req.contentType("application/json").content(incoming);
+                var response = dps.perform(req).andReturn().getResponse();
+                byte[] data = response.getContentAsByteArray();
+                exchange.getResponseHeaders().set("Content-Type", "application/json");
+                exchange.sendResponseHeaders(response.getStatus(), data.length == 0 ? -1 : data.length);
+                exchange.getResponseBody().write(data);
+            } catch (Exception error) { throw new RuntimeException(error); }
+            finally { exchange.close(); }
+        });
+        server.start();
+        try {
+            var builder = RestClient.builder().messageConverters(converters -> { converters.clear(); converters.add(new MappingJackson2HttpMessageConverter(mapper)); });
+            String dpsUrl = "http://127.0.0.1:" + server.getAddress().getPort() + "/gateway";
+            var wbs = mvc(new hu.company.features.customer.wbs.CustomerControllerImpl(new hu.company.features.customer.wbs.CustomerServiceImpl(builder, access, dpsUrl)));
+            String base = CustomerConstants.BASE_PATH;
+            var input = mapper.createObjectNode().put("name", "  Teszt  ").put("amount", "1000000.01").put("createdAt", "2026-09-16T10:11:12");
+            JsonNode created = request(wbs, HttpMethod.POST, base + CustomerConstants.CUSTOMER_CREATE_PATH, input, 201).get("row");
+            check(created.get("id").isTextual() && created.get("id").asText().equals("9007199254740993"), "NUMBER precision across HTTP");
+            check(created.get("name").asText().equals("Teszt") && created.get("approvalRequired").asText().equals("Y"), "DPS business rules were skipped");
+            check(created.get("createdAt").asText().equals("2026-09-16T10:11:12"), "DATE seconds changed");
+            JsonNode rows = request(wbs, HttpMethod.GET, base + CustomerConstants.CUSTOMER_LIST_PATH + "?offset=0&limit=50", null, 200).get("rows");
+            check(rows.size() == 1, "GET list routing");
+            ObjectNode changed = created.deepCopy(); changed.put("name", "Második");
+            ObjectNode update = mapper.createObjectNode().set("original", created); update.set("value", changed);
+            JsonNode updated = request(wbs, HttpMethod.PUT, base + CustomerConstants.CUSTOMER_UPDATE_PATH, update, 200).get("row");
+            check(updated.get("name").asText().equals("Második"), "Update payload forwarding");
+            request(wbs, HttpMethod.PUT, base + CustomerConstants.CUSTOMER_UPDATE_PATH, update, 409);
+            request(wbs, HttpMethod.GET, base + CustomerConstants.CUSTOMER_LIST_PATH + "?limit=0", null, 422);
+            request(wbs, HttpMethod.DELETE, base + CustomerConstants.CUSTOMER_DELETE_PATH, updated, 200);
+            check(repository.data == null && httpCalls.get() == 6, "DELETE body forwarding / request count");
+            check(accessCalls.get() == 12, "WBS and DPS access checks must both execute");
+            check(reads.get() == 2 && writes.get() == 4, "Public service entry points must open read/write transactions");
+            String actionPath = java.util.Arrays.stream(CustomerConstants.class.getFields())
+                .filter(field -> field.getName().startsWith("ACTION_")).findFirst().orElseThrow().get(null).toString();
+            request(wbs, HttpMethod.POST, base + actionPath, new ActionRequest(java.util.Map.of(), java.util.Map.of()), 501);
+            check(accessCalls.get() == 14, "Proxied action must check access on WBS and DPS");
+            int before = httpCalls.get();
+            var denied = new hu.company.features.customer.wbs.CustomerServiceImpl(builder, (block, operation) -> { throw new ResponseStatusException(HttpStatus.FORBIDDEN); }, dpsUrl);
+            try { denied.listCustomer(0, 50); throw new AssertionError("WBS denied access was ignored"); }
+            catch (ResponseStatusException expected) { check(expected.getStatusCode().value() == 403, "Wrong access status"); }
+            check(httpCalls.get() == before, "Denied WBS request reached DPS");
+            System.out.println("OK: real Spring CL/DPS/WBS routing, HTTP CRUD/action, class proxies, transactions, gateway prefix, NUMBER/DATE, stale 409, validation 422, access checks");
+        } finally { server.stop(0); }
+    }
+}

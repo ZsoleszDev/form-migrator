@@ -1,0 +1,135 @@
+// ALWAYS_REGENERATE. Runtime for the validated UI model; no Forms business code executes here.
+export type UiValue = string | number | boolean | Date | string[] | null;
+export type Translate = (key: string) => string;
+export interface LookupOption { label: string; value: UiValue; columns: Record<string, UiValue>; }
+export interface UiAction { block: string; item: string; values: Record<string, UiValue>; }
+export type ActionHandler = (action: UiAction) => void;
+export type LookupHandler = (endpoint: string, query: string, values: Record<string, UiValue>) => Promise<LookupOption[]>;
+export interface UiBlockState { values: Record<string, UiValue>; rows: Record<string, UiValue>[]; }
+export interface UiValidation {
+  required: boolean; maximum_length: number | null; fixed_length: number | null;
+  minimum: string | null; maximum: string | null; precision: number | null; scale: number | null;
+  format_mask: string; date_format: string | null; case: 'mixed' | 'upper' | 'lower';
+}
+export interface UiItem {
+  name: string; key: string; owner: string; widget: string; representation: string;
+  type_source: string; inference_reason: string | null;
+  visible: boolean; enabled: boolean; readonly: boolean;
+  allowed_operations: { query: boolean; insert: boolean; update: boolean };
+  text_keys: { prompt: string | null; label: string | null; hint: string | null; tooltip: string | null };
+  validation: UiValidation; initial_value: string | null;
+  checkbox: {checked: string | null; unchecked: string | null; other_values: string} | null;
+  options: {value: string; label_key: string; enabled: boolean; visible: boolean}[];
+  layout: { col: number; col_before: number; col_after: number; row: number; order: number };
+  lov: { name: string; endpoint_id: string | null; return_mappings: {column: string | null; return_item: string | null}[] } | null;
+  widget_type: string; widget_props: Record<string, boolean>; exact_decimal_type?: string;
+}
+export interface UiRegion { id: string; canvas: string; tab_page: string; items: string[]; }
+export interface UiBlockSpec { name: string; key: string; mode: string; items: UiItem[]; regions: UiRegion[]; }
+
+export function missingAction(_action: UiAction): never { throw new Error('TODO: connect the reviewed host action handler.'); }
+export function missingLookup(_endpoint: string, _query: string): Promise<LookupOption[]> {
+  return Promise.reject(new Error('TODO: configure the declared LOV endpoint and response adapter.'));
+}
+export function initialValue(item: UiItem): UiValue {
+  const value = item.initial_value;
+  if (item.widget === 'checkbox') return checkboxValue(item, value);
+  if (value === null || value === '') return item.widget === 'multiselect' ? [] : null;
+  if (item.representation === 'safe-integer') {
+    const parsed = Number(value);
+    if (!Number.isSafeInteger(parsed)) throw new Error('Invalid integer: ' + item.owner);
+    return parsed;
+  }
+  if (item.representation === 'date') return localDate(value);
+  return value;
+}
+export function localDate(value: string): Date {
+  // Oracle DATE is a local date/time. No UTC conversion, Date.parse or timezone inference.
+  const match = /^(\d{4})-(\d\d)-(\d\d)(?:T(\d\d):(\d\d)(?::(\d\d))?)?$/.exec(value);
+  if (!match) throw new Error('Expected ISO local date/time');
+  const [, y, m, d, hh = '0', mm = '0', ss = '0'] = match;
+  const date = new Date(0); date.setFullYear(+y, +m - 1, +d); date.setHours(+hh, +mm, +ss, 0);
+  if (date.getFullYear() !== +y || date.getMonth() !== +m - 1 || date.getDate() !== +d || date.getHours() !== +hh || date.getMinutes() !== +mm || date.getSeconds() !== +ss) throw new Error('Invalid local date/time');
+  return date;
+}
+export function checkboxValue(item: UiItem, value: UiValue): boolean | null {
+  const mapping = item.checkbox;
+  if (!mapping) throw new Error('Missing checkbox mapping');
+  if (value === null || value === '') return null;
+  if (value === true || value === mapping.checked) return true;
+  if (value === false || value === mapping.unchecked) return false;
+  if (mapping.other_values === 'checked') return true;
+  if (mapping.other_values === 'unchecked') return false;
+  throw new Error('Unmapped checkbox value: ' + item.owner);
+}
+export function createBlockState(spec: UiBlockSpec): UiBlockState {
+  return { values: Object.fromEntries(spec.items.filter(i => i.widget !== 'button').map(i => [i.key, initialValue(i)])), rows: [] };
+}
+export function toOracleRow(spec: UiBlockSpec, values: Record<string, UiValue>): Record<string, UiValue> {
+  const result: Record<string, UiValue> = {};
+  for (const item of spec.items) {
+    if (item.widget === 'button' || item.widget === 'image') continue;
+    let value = values[item.key] ?? null;
+    if (item.checkbox && value !== null) {
+      if (typeof value !== 'boolean') throw new Error('Expected checkbox boolean: ' + item.owner);
+      value = value ? item.checkbox.checked : item.checkbox.unchecked;
+    } else if (value instanceof Date) {
+      if (!Number.isFinite(value.getTime())) throw new Error('Invalid Date: ' + item.owner);
+      const pad = (n: number) => String(n).padStart(2, '0');
+      value = String(value.getFullYear()).padStart(4, '0') + '-' + pad(value.getMonth()+1) + '-' + pad(value.getDate())
+        + 'T' + pad(value.getHours()) + ':' + pad(value.getMinutes()) + ':' + pad(value.getSeconds());
+    } else if (item.widget === 'number' && typeof value === 'number') value = String(value);
+    result[item.key] = value;
+  }
+  return result;
+}
+export function loadOracleRow(spec: UiBlockSpec, row: Record<string, UiValue>): Record<string, UiValue> {
+  return Object.fromEntries(spec.items.filter(i => i.widget !== 'button').map(item => {
+    const value = row[item.key] ?? null;
+    if (item.checkbox) return [item.key, checkboxValue(item, value)];
+    if (item.representation === 'date' && typeof value === 'string') return [item.key, localDate(value)];
+    if (item.representation === 'safe-integer' && value !== null) {
+      const numeric = Number(value); if (!Number.isSafeInteger(numeric)) throw new Error('Unsafe integer: ' + item.owner);
+      return [item.key, numeric];
+    }
+    if (item.representation === 'decimal-string' && value !== null && typeof value !== 'string') throw new Error('Exact NUMBER must arrive as a string: ' + item.owner);
+    return [item.key, value];
+  }));
+}
+function decimal(value: string): {sign: bigint; digits: bigint; scale: number; integral: number} | null {
+  const m = /^([+-]?)(\d+)(?:\.(\d+))?$/.exec(value);
+  if (!m) return null;
+  return {sign: m[1] === '-' ? -1n : 1n, digits: BigInt(m[2] + (m[3] ?? '')), scale: (m[3] ?? '').length, integral: m[2].replace(/^0+/, '').length};
+}
+function compareDecimal(left: string, right: string): number {
+  const a = decimal(left), b = decimal(right);
+  if (!a || !b) throw new Error('Invalid decimal');
+  const scale = Math.max(a.scale, b.scale);
+  const x = a.sign * a.digits * 10n ** BigInt(scale - a.scale), y = b.sign * b.digits * 10n ** BigInt(scale - b.scale);
+  return x < y ? -1 : x > y ? 1 : 0;
+}
+export function validateValue(item: UiItem, value: unknown): string | null {
+  const rule = item.validation;
+  const empty = value === null || value === undefined || value === '' || (Array.isArray(value) && value.length === 0);
+  if (empty) return rule.required ? 'required' : null;
+  if (item.widget === 'checkbox') return typeof value === 'boolean' ? null : 'checkbox';
+  if (item.representation === 'date') return value instanceof Date && Number.isFinite(value.getTime()) ? null : 'date';
+  if (item.widget === 'number') {
+    const text = String(value), number = decimal(text);
+    if (!number) return 'number';
+    if (rule.precision !== null && number.integral + (rule.scale ?? number.scale) > rule.precision) return 'precision';
+    if (rule.scale !== null && number.scale > rule.scale) return 'scale';
+    if (rule.minimum !== null && compareDecimal(text, rule.minimum) < 0) return 'min';
+    if (rule.maximum !== null && compareDecimal(text, rule.maximum) > 0) return 'max';
+  }
+  if (item.widget === 'select' || item.widget === 'radio' || item.widget === 'multiselect') {
+    const values = Array.isArray(value) ? value : [value];
+    if (values.some(v => !item.options.some(o => o.value === v))) return 'option';
+  }
+  if (typeof value === 'string') {
+    if (rule.maximum_length !== null && value.length > rule.maximum_length) return 'maxlength';
+    if (rule.fixed_length !== null && value.length !== rule.fixed_length) return 'fixedLength';
+    if (rule.case === 'upper' && value !== value.toUpperCase() || rule.case === 'lower' && value !== value.toLowerCase()) return 'caseRestriction';
+  }
+  return null;
+}

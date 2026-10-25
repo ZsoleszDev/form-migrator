@@ -1,0 +1,55 @@
+package smoke;
+
+import hu.company.features.customer.cl.CustomerDtos.CustomerRow;
+import java.math.BigDecimal;
+import java.lang.reflect.Proxy;
+import java.sql.ResultSet;
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.List;
+import org.springframework.jdbc.core.RowMapper;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.jdbc.core.namedparam.SqlParameterSource;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
+
+/** Fake persistence boundary; the GENERATED JDBC mappings, validation and SQL guards run. */
+public class MemoryCustomerJdbc extends NamedParameterJdbcTemplate {
+    public CustomerRow data;
+    public int changes;
+    public final List<String> queries = new ArrayList<>();
+    public MemoryCustomerJdbc() { super(new DriverManagerDataSource()); }
+    @Override public <T> T queryForObject(String sql, SqlParameterSource p, Class<T> cls) {
+        if (!sql.equals("SELECT CUSTOMERS_SEQ.NEXTVAL FROM DUAL")) throw new AssertionError(sql);
+        return cls.cast(new BigDecimal("9007199254740993"));
+    }
+    @Override public <T> List<T> query(String sql, SqlParameterSource p, RowMapper<T> mapper) {
+        queries.add(sql);
+        if (!sql.startsWith("SELECT ID, NAME, AMOUNT, APPROVAL_REQUIRED, ACTIVE, STATUS, CREATED_AT FROM CUSTOMERS"))
+            throw new AssertionError(sql);
+        if (data == null) return List.of();
+        Object[] fields = { data.id, data.name, data.amount, data.approvalRequired, data.active, data.status,
+                            data.createdAt == null ? null : Timestamp.valueOf(data.createdAt) };
+        var rs = (ResultSet) Proxy.newProxyInstance(ResultSet.class.getClassLoader(), new Class<?>[] { ResultSet.class },
+            (proxy, method, args) -> fields[(Integer) args[0] - 1]);
+        try { return List.of(mapper.mapRow(rs, 0)); }
+        catch (java.sql.SQLException error) { throw new AssertionError(error); }
+    }
+    @Override public int update(String sql, SqlParameterSource p) {
+        queries.add(sql);
+        if (sql.startsWith("DELETE FROM CUSTOMERS WHERE ID = :id")) data = null;
+        else {
+            if (!(sql.startsWith("INSERT INTO CUSTOMERS (") || sql.startsWith("UPDATE CUSTOMERS SET ")))
+                throw new AssertionError(sql);
+            data = new CustomerRow();
+            data.id = (BigDecimal) p.getValue("id");
+            data.name = (String) p.getValue("name");
+            data.amount = (BigDecimal) p.getValue("amount");
+            data.approvalRequired = (String) p.getValue("approvalRequired");
+            data.active = (String) p.getValue("active");
+            data.status = (String) p.getValue("status");
+            data.createdAt = (java.time.LocalDateTime) p.getValue("createdAt");
+        }
+        changes++;
+        return 1;
+    }
+}

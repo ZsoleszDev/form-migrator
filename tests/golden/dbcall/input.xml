@@ -1,0 +1,11 @@
+<Module><FormModule Name="DBCALL"><Coordinate CoordinateSystem="Real" RealUnit="Pixel"/>
+ <Block Name="B" DatabaseDataBlock="true" QueryDataSourceName="T_B">
+  <Item ItemType="Text Item" Name="ID" DataType="Number" PrimaryKey="true"/>
+  <Item ItemType="Text Item" Name="KOD" DataType="Char" MaximumLength="10"/>
+  <Item ItemType="Text Item" Name="NEV" DataType="Char" MaximumLength="80" DatabaseItem="false"/>
+  <Item ItemType="Text Item" Name="DATUM" DataType="Datetime"/>
+  <Trigger Name="POST-QUERY" TriggerText="BEGIN&amp;#10;  :B.NEV := kod_pkg.get_nev(:B.KOD);&amp;#10;EXCEPTION&amp;#10;  WHEN OTHERS THEN&amp;#10;    cgte$other_exceptions;&amp;#10;END;"/>
+  <Trigger Name="PRE-INSERT" TriggerText="kod_pkg.check_insert(:B.KOD, :B.DATUM, :B.NEV);"/>
+  <Trigger Name="PRE-DELETE" TriggerText="BEGIN undocumented_pkg.purge(:B.ID); EXCEPTION WHEN OTHERS THEN NULL; END;"/>
+ </Block>
+</FormModule></Module>

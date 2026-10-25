@@ -1,0 +1,126 @@
+{
+  "blocks": {
+    "B": {
+      "writable": true
+    }
+  },
+  "tables": {
+    "APP.T_B": {
+      "primary_key": [
+        "ID"
+      ],
+      "columns": {
+        "ID": {
+          "type": "number",
+          "data_type": "NUMBER",
+          "nullable": false,
+          "precision": 10,
+          "scale": 0
+        },
+        "KOD": {
+          "type": "text",
+          "data_type": "VARCHAR2",
+          "nullable": true,
+          "max_length": 10
+        },
+        "DATUM": {
+          "type": "datetime",
+          "data_type": "DATE",
+          "nullable": true
+        }
+      }
+    }
+  },
+  "procedures": {
+    "APP.KOD_PKG.CHECK_INSERT": {
+      "kind": "procedure",
+      "source": "dictionary:APP.KOD_PKG.CHECK_INSERT",
+      "arguments": [
+        {
+          "name": "P_KOD",
+          "mode": "IN",
+          "type": "text",
+          "default": false
+        },
+        {
+          "name": "P_DATUM",
+          "mode": "IN",
+          "type": "datetime",
+          "default": false
+        },
+        {
+          "name": "P_NEV",
+          "mode": "OUT",
+          "type": "text",
+          "default": false
+        },
+        {
+          "name": "P_FORCE",
+          "mode": "IN",
+          "type": "text",
+          "default": true
+        }
+      ]
+    },
+    "APP.KOD_PKG.GET_NEV": {
+      "kind": "function",
+      "source": "dictionary:APP.KOD_PKG.GET_NEV",
+      "arguments": [
+        {
+          "name": "P_KOD",
+          "mode": "IN",
+          "type": "text",
+          "default": false
+        }
+      ],
+      "returns": "text"
+    },
+    "APP.REFRESH_ALL": {
+      "kind": "procedure",
+      "source": "dictionary:APP.REFRESH_ALL",
+      "arguments": []
+    },
+    "KOD_PKG.CHECK_INSERT": {
+      "kind": "procedure",
+      "arguments": [
+        {
+          "name": "P_KOD",
+          "mode": "IN",
+          "type": "text"
+        },
+        {
+          "name": "P_DATUM",
+          "mode": "IN",
+          "type": "datetime"
+        },
+        {
+          "name": "P_NEV",
+          "mode": "OUT",
+          "type": "text"
+        },
+        {
+          "name": "P_FORCE",
+          "mode": "IN",
+          "type": "text",
+          "default": true
+        }
+      ]
+    },
+    "KOD_PKG.GET_NEV": {
+      "kind": "function",
+      "returns": "text",
+      "arguments": [
+        {
+          "name": "P_KOD",
+          "mode": "IN",
+          "type": "text"
+        }
+      ]
+    },
+    "REFRESH_ALL": {
+      "kind": "procedure",
+      "source": "dictionary:APP.REFRESH_ALL",
+      "arguments": []
+    }
+  }
+}

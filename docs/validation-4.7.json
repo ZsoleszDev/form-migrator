@@ -1,0 +1,74 @@
+{
+  "python_full": {
+    "result": "passed",
+    "log_sha256": "b55f96bdcb92b04adabf7116be6c197cede9c7a93e023c70850b87f50c3b530b",
+    "tests": 269
+  },
+  "python_final_targeted": {
+    "result": "passed",
+    "log_sha256": "721d37463432a97186877291b5cb0c29581b2f5ecb2882d9535b28ea741d005c",
+    "tests": 49
+  },
+  "java_http": {
+    "result": "passed",
+    "log_sha256": "53f7fd63b85bc3ffe6f1bb665e9daab1af885202d6671f4aad946bccc88091a5",
+    "suites": [
+      "CRUD/actions",
+      "typed filtered master-detail search"
+    ],
+    "java_release": 17,
+    "spring": "6.2.11",
+    "database": "in-memory JDBC test double, not Oracle"
+  },
+  "release_http": {
+    "result": "passed",
+    "log_sha256": "07c07c225cc9438dae9f7b9b2508206004a48281b41aae80934ab83173543fcc",
+    "ai_calls": 0,
+    "from_extracted_archive": true
+  },
+  "samples": {
+    "backend-query": {
+      "CL": 4,
+      "DPS": 5,
+      "WBS": 5
+    },
+    "customer": {
+      "CL": 4,
+      "DPS": 5,
+      "WBS": 5
+    },
+    "inherited-checkbox": {
+      "CL": 4,
+      "DPS": 5,
+      "WBS": 5
+    },
+    "multi-input": {
+      "CL": 4,
+      "DPS": 5,
+      "WBS": 5
+    },
+    "review": {
+      "CL": 4,
+      "DPS": 5,
+      "WBS": 5
+    },
+    "ui-features": {
+      "CL": 4,
+      "DPS": 5,
+      "WBS": 5
+    },
+    "vasarloLekerdezo": {
+      "CL": 4,
+      "DPS": 5,
+      "WBS": 5
+    }
+  },
+  "version": "4.7.0",
+  "date": "2026-09-22",
+  "limitations": [
+    "No real Oracle execution",
+    "No company host application integration run",
+    "Ollama budget/cache tested with fake responses; no model quality evaluation",
+    "Bundled Angular studio unchanged; no new frontend build"
+  ]
+}

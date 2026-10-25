@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<Module version="101020002" xmlns="http://xmlns.oracle.com/Forms">
+ <FormModule Name="FRM_ANK_TESZT" Title="Feldolgozatlan adatlapok" FirstNavigationBlock="V_ELEK_ADLAP">
+  <Coordinate CoordinateSystem="Real" RealUnit="Pixel"/>
+  <Trigger Name="PRE-FORM" TriggerText="/* QMS$FORM_PRE_FORM */&amp;#10;BEGIN&amp;#10;  qms$event_form(&apos;PRE-FORM&apos;);&amp;#10;END;"/>
+  <Trigger Name="WHEN-NEW-FORM-INSTANCE" TriggerText="/* QMS$FORM_WHEN_NEW_FORM_INSTANCE */&amp;#10;BEGIN&amp;#10;  qms$event_form(&apos;WHEN-NEW-FORM-INSTANCE&apos;);&amp;#10;END;"/>
+  <Trigger Name="ON-ERROR" TriggerText="/* QMS$FORM_ON_ERROR */&amp;#10;BEGIN&amp;#10;  qms$event_form(&apos;ON-ERROR&apos;);&amp;#10;END;"/>
+  <Trigger Name="ON-MESSAGE" TriggerText="/* QMS$FORM_ON_MESSAGE */&amp;#10;BEGIN&amp;#10;  qms$event_form(&apos;ON-MESSAGE&apos;);&amp;#10;END;"/>
+  <Trigger Name="KEY-EXIT" TriggerText="/* QMS$FORM_KEY_EXIT */&amp;#10;BEGIN&amp;#10;  qms$event_form(&apos;KEY-EXIT&apos;);&amp;#10;END;"/>
+  <Trigger Name="KEY-HELP" TriggerText="/* QMS$FORM_KEY_HELP */&amp;#10;BEGIN&amp;#10;  qms$event_form(&apos;KEY-HELP&apos;);&amp;#10;END;"/>
+  <Trigger Name="KEY-CLRFRM" TriggerText="/* QMS$FORM_KEY_CLRFRM */&amp;#10;BEGIN&amp;#10;  qms$event_form(&apos;KEY-CLRFRM&apos;);&amp;#10;END;"/>
+  <Trigger Name="WHEN-WINDOW-CLOSED" TriggerText="/* QMS$FORM_WHEN_WINDOW_CLOSED */&amp;#10;BEGIN&amp;#10;  qms$event_form(&apos;WHEN-WINDOW-CLOSED&apos;);&amp;#10;END;"/>
+  <Trigger Name="POST-FORMS-COMMIT" TriggerText="/* QMS$FORM_POST_FORMS_COMMIT */&amp;#10;BEGIN&amp;#10;  qms$event_form(&apos;POST-FORMS-COMMIT&apos;);&amp;#10;END;"/>
+  <Trigger Name="KEY-COMMIT" TriggerText="BEGIN&amp;#10;  IF :SYSTEM.FORM_STATUS = &apos;CHANGED&apos; THEN&amp;#10;    commit_form;&amp;#10;  END IF;&amp;#10;END;"/>
+  <Block Name="V_ELEK_ADLAP" DatabaseDataBlock="false" RecordsDisplayCount="1">
+   <Item Name="UBI_INPTIP_KOD" ItemType="Text Item" DataType="Char" MaximumLength="10" Prompt="Adatlap típus" CanvasName="CG$PAGE_1" XPosition="10" YPosition="10" Width="80" Height="20" LOVName="INPTIP"/>
+   <Item Name="UBI_INPTIP_KOD_NEV" ItemType="Display Item" DataType="Char" MaximumLength="80" CanvasName="CG$PAGE_1" XPosition="100" YPosition="10" Width="300" Height="20" Prompt="Megnevezés"/>
+   <Item Name="L_URES_1" ItemType="Display Item" DataType="Char" MaximumLength="1" CanvasName="CG$PAGE_1" XPosition="10" YPosition="40" Width="390" Height="20" DatabaseItem="false"/>
+   <Item Name="DATUM_TOL" ItemType="Text Item" DataType="Date" Prompt="Dátum" CanvasName="CG$PAGE_1" XPosition="10" YPosition="70" Width="100" Height="20"/>
+   <Item Name="L_URES_2" ItemType="Text Item" DataType="Char" MaximumLength="1" CanvasName="CG$PAGE_1" XPosition="120" YPosition="70" Width="60" Height="20" Enabled="false"/>
+   <Item Name="DATUM_IG" ItemType="Text Item" DataType="Date" Prompt="-" CanvasName="CG$PAGE_1" XPosition="190" YPosition="70" Width="100" Height="20"/>
+   <Item Name="UBI_E04" ItemType="Check Box" DataType="Char" Prompt="Elektronikus" CheckedValue="1" UncheckedValue="0" CanvasName="CG$PAGE_1" XPosition="10" YPosition="100" Width="100" Height="20"/>
+  </Block>
+  <Block Name="AIT" DatabaseDataBlock="true" QueryDataSourceType="Table" QueryDataSourceName="ANK_ADLAP_ITEMS" RecordsDisplayCount="15"
+         InsertAllowed="false" DeleteAllowed="false" UpdateAllowed="true" QueryAllowed="true"
+         WhereClause="AIT_STATUS = &apos;F&apos;&amp;#10;AND AIT_TIPUS = :V_ELEK_ADLAP.UBI_INPTIP_KOD" OrderByClause="AIT_KULCS&amp;#10;DESC">
+   <Item Name="AIT_KULCS" ItemType="Text Item" DataType="Number" ColumnName="AIT_KULCS" PrimaryKey="true" Prompt="Kulcs" CanvasName="CG$PAGE_1" XPosition="10" YPosition="200" Width="80" Height="20"/>
+   <Item Name="AIT_TIPUS" ItemType="Text Item" DataType="Char" MaximumLength="10" ColumnName="AIT_TIPUS" Prompt="Típus" CanvasName="CG$PAGE_1" XPosition="100" YPosition="200" Width="80" Height="20"/>
+   <Item Name="AIT_STATUS" ItemType="Text Item" DataType="Char" MaximumLength="1" ColumnName="AIT_STATUS" Prompt="Státusz" CanvasName="CG$PAGE_1" XPosition="190" YPosition="200" Width="40" Height="20"/>
+   <Item Name="AIT_MEGJ" ItemType="Text Item" DataType="Char" MaximumLength="200" ColumnName="AIT_MEGJ" Prompt="Megjegyzés" CanvasName="CG$PAGE_1" XPosition="240" YPosition="200" Width="200" Height="20"/>
+   <Item Name="L_URES_3" ItemType="Display Item" DataType="Char" CanvasName="CG$PAGE_1" XPosition="450" YPosition="200" Width="20" Height="20" DatabaseItem="false"/>
+   <Trigger Name="WHEN-NEW-RECORD-INSTANCE" TriggerText="BEGIN&amp;#10;  qms$event_block(&apos;WHEN-NEW-RECORD-INSTANCE&apos;);&amp;#10;END;"/>
+   <Trigger Name="KEY-DELREC" TriggerText="BEGIN&amp;#10;  message(&apos;Nem törölhető&apos;);&amp;#10;END;"/>
+   <Trigger Name="POST-QUERY" TriggerText="BEGIN&amp;#10;  :AIT.AIT_MEGJ := UPPER(:AIT.AIT_MEGJ);&amp;#10;END;"/>
+  </Block>
+  <Block Name="CGNV$W01_1" DatabaseDataBlock="false">
+   <Item Name="PB_RESZLETEK" ItemType="Push Button" Label="Részletek" CanvasName="CG$PAGE_1" XPosition="10" YPosition="600" Width="100" Height="24">
+    <Trigger Name="WHEN-BUTTON-PRESSED" TriggerText="BEGIN&amp;#10;  go_block(&apos;AIT&apos;);&amp;#10;  execute_query;&amp;#10;END;"/>
+   </Item>
+  </Block>
+  <Block Name="CALENDAR" DatabaseDataBlock="true" RecordsDisplayCount="1">
+   <Item Name="DAY1" ItemType="Text Item" DataType="Char" MaximumLength="2"/>
+   <Item Name="MONTH" ItemType="Text Item" DataType="Char" MaximumLength="10"/>
+   <Trigger Name="WHEN-NEW-BLOCK-INSTANCE" TriggerText="BEGIN&amp;#10;  qms$calendar.init;&amp;#10;END;"/>
+  </Block>
+  <Block Name="QMS$TRANS_ERRORS" DatabaseDataBlock="true" RecordsDisplayCount="10">
+   <Item Name="MSG_TEXT" ItemType="Text Item" DataType="Char" MaximumLength="2000"/>
+   <Item Name="SEVERITY" ItemType="Text Item" DataType="Char" MaximumLength="1"/>
+  </Block>
+  <Canvas Name="CG$PAGE_1" CanvasType="Content" WindowName="WINDOW" Width="700" Height="700"/>
+  <Window Name="WINDOW" Title="Adatlapok"/>
+  <LOV Name="INPTIP" RecordGroupName="RG_INPTIP">
+   <LOVColumnMapping ColumnName="KOD" ReturnItem="V_ELEK_ADLAP.UBI_INPTIP_KOD"/>
+   <LOVColumnMapping ColumnName="NEV" ReturnItem="V_ELEK_ADLAP.UBI_INPTIP_KOD_NEV"/>
+  </LOV>
+  <RecordGroup Name="RG_INPTIP" RecordGroupQuery="SELECT KOD, NEV&amp;#10;FROM ANK_INPTIP&amp;#10;ORDER BY KOD"/>
+ </FormModule>
+</Module>

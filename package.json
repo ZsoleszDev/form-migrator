@@ -1,0 +1,12 @@
+{
+  "name": "form-migrator-workspace",
+  "version": "4.35.0",
+  "private": true,
+  "workspaces": [
+    "web-ui"
+  ],
+  "scripts": {
+    "build:ui": "npm run build --workspace web-ui",
+    "start:ui": "npm start --workspace web-ui"
+  }
+}

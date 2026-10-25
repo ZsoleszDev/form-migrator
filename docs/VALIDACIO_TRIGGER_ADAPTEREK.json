@@ -1,0 +1,38 @@
+{
+  "date": "2026-10-01",
+  "scope": "Generic query/action recognition, Forms key dispatch evidence, regeneration diagnostics",
+  "verification": {
+    "core_regressions": {"tests": 94, "failures": 0, "errors": 0},
+    "self_contained_screen_and_java_style": {"tests": 46, "failures": 0, "errors": 0},
+    "total_passed": 140,
+    "generated_java": "Java 11 compilation and JDBC doubles for both NUMBER and VARCHAR checkbox inputs; builder, SELECT, POST-QUERY and messages",
+    "generated_typescript": "Generated action handlers executed with Node TypeScript stripping",
+    "real_oracle": "Not available",
+    "full_host_spring_angular": "Not available",
+    "full_project_suite": "Not a full-suite pass: example-dependent tests need source files absent from the supplied project"
+  },
+  "commands": {
+    "core": "FRM_JAVA_IMPORT_MAP=- PYTHONPATH=tests python3 -m unittest test_automation test_plsql_and_states test_forms_runtime test_company_backend test_trigger_noise test_normal_mode test_company_cl test_query_actions test_forms_keys -v",
+    "screen_style": "test_java_style plus all test_screen/test_screen_windows methods without references to the missing examples directory"
+  },
+  "missing_example_tests_observed": [
+    "test_screen_windows.WindowTests.test_source_references_are_audited_without_automatic_execution",
+    "test_screen_windows.WindowTests.test_alternative_content_canvases_share_window_state",
+    "test_screen_windows.WindowTests.test_dialog_accordion_keeps_pages_in_one_window",
+    "test_screen_windows.WindowTests.test_window_owns_all_content_tabs_and_stacked_regions"
+  ],
+  "cases": [
+    "CHAR checkbox compared to numeric literal: native Oracle code and VARCHAR bind preserved",
+    "Numeric native guard with NVL; JDBC SQL compiler still rejects unverified conversions",
+    "Unknown, Forms-only and shadowed condition functions remain manual",
+    "Same query pattern with renamed module, blocks, items, table and local procedure",
+    "DO_KEY EXECUTE_QUERY tail with no KEY-EXEQRY override",
+    "Form/block/item KEY overrides retained even for NULL source",
+    "Known calendar key and plain LOV opener produce no duplicate action endpoint",
+    "Own KEY-LISTVAL logic prevents list-button folding",
+    "Real Oracle key event names and related local sources included as evidence candidates",
+    "Full adapter diagnosis retained in Java and backend reports",
+    "CREATE_ONCE regeneration retains the old 501 and reports the fresh candidate requiring merge"
+  ],
+  "specific_user_module": "Original first/third button PL/SQL and full current Form XML were not supplied; all three production buttons cannot be verified from truncated Java comments"
+}

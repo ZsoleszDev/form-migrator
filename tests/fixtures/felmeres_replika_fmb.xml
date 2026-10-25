@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!-- A FELMERES_HU.md tipikus mintáit utánzó szintetikus form (Headstart PRE-FORM, ON-INSERT/ON-UPDATE,
+     WHERE/ORDER BY, kulcs nélküli blokk, master-detail, alert, helyi csomag, :SYSTEM és :GLOBAL). -->
+<Module version="101020002" xmlns="http://xmlns.oracle.com/Forms">
+ <FormModule Name="RENDELES" Title="Rendelések">
+  <Coordinate CoordinateSystem="Real" RealUnit="Pixel"/>
+  <Trigger Name="PRE-FORM" TriggerText="BEGIN&amp;#10;  qms$event_form(&apos;PRE-FORM&apos;);&amp;#10;END;&amp;#10;&amp;#10;BEGIN&amp;#10;  SET_APPLICATION_PROPERTY(CURSOR_STYLE, &apos;DEFAULT&apos;);&amp;#10;  SET_APPLICATION_PROPERTY(BUILTIN_DATE_FORMAT, &apos;YYYY/MM/DD HH24:MI:SS&apos;);&amp;#10;  SET_APPLICATION_PROPERTY(PLSQL_DATE_FORMAT, &apos;YYYY/MM/DD HH24:MI:SS&apos;);&amp;#10;  FORMS_DDL(&apos;ALTER SESSION SET NLS_DATE_FORMAT = &apos;&apos;YYYY/MM/DD HH24:MI:SS&apos;&apos;&apos;);&amp;#10;END;&amp;#10;&amp;#10;  DECLARE&amp;#10;  rg_id RECORDGROUP;&amp;#10;  gc_kod GROUPCOLUMN;&amp;#10;  gc_nev GROUPCOLUMN;&amp;#10;BEGIN&amp;#10;  rendeles_globals.activate := FALSE;&amp;#10;  rg_id := CREATE_GROUP(&apos;RG_ALLAPOT&apos;);&amp;#10;  gc_kod := ADD_GROUP_COLUMN(rg_id, &apos;KOD&apos;, CHAR_COLUMN, 80);&amp;#10;  gc_nev := ADD_GROUP_COLUMN(rg_id, &apos;NEV&apos;, CHAR_COLUMN, 80);&amp;#10;  ADD_GROUP_ROW(rg_id, 1);&amp;#10;  SET_GROUP_CHAR_CELL(gc_kod, 1, &apos;U&apos;);&amp;#10;  SET_GROUP_CHAR_CELL(gc_nev, 1, &apos;Új&apos;);&amp;#10;  ADD_GROUP_ROW(rg_id, 2);&amp;#10;  SET_GROUP_CHAR_CELL(gc_kod, 2, &apos;L&apos;);&amp;#10;  SET_GROUP_CHAR_CELL(gc_nev, 2, &apos;Lezárt&apos;);&amp;#10;END;"/>
+  <Trigger Name="WHEN-NEW-FORM-INSTANCE" TriggerText="BEGIN&amp;#10;  qms$event_form(&apos;WHEN-NEW-FORM-INSTANCE&apos;);&amp;#10;END;&amp;#10;&amp;#10;BEGIN&amp;#10;  ank_ctrl.set_title( &apos;Rendelések&apos; );&amp;#10;  ank_ctrl.set_hint( &apos;Rendelések kezelése&apos; );&amp;#10;  :GLOBAL.CG$APP := &apos;RENDELES&apos;;&amp;#10;  ank_menu.init( :GLOBAL.CG$APP );&amp;#10;  naplo_init( :GLOBAL.CG$APP );&amp;#10;END;&amp;#10;DECLARE&amp;#10;    v_ev param_tabla.ertek%TYPE;&amp;#10;BEGIN&amp;#10;    SELECT ertek&amp;#10;      INTO v_ev&amp;#10;      FROM param_tabla&amp;#10;     WHERE kod = &apos;AKT_EV&apos;;&amp;#10;&amp;#10;    :CTRL.MODUS := &apos;U&apos;;&amp;#10;    :CTRL.EV := v_ev;&amp;#10;&amp;#10;    SET_ITEM_PROPERTY(&apos;CTRL.EV&apos;, INSERT_ALLOWED, PROPERTY_FALSE);&amp;#10;    SET_ITEM_PROPERTY(&apos;CTRL.EV&apos;, UPDATE_ALLOWED, PROPERTY_FALSE);&amp;#10;    SET_ITEM_PROPERTY(&apos;CTRL.EV&apos;, VISUAL_ATTRIBUTE, &apos;VA_DISPLAY&apos;);&amp;#10;END;&amp;#10;&amp;#10;BEGIN&amp;#10;  qms$event_form(&apos;WHEN-NEW-FORM-INSTANCE&apos;,&apos;POST&apos;);&amp;#10;END;"/>
+  <Trigger Name="KEY-COMMIT" TriggerText="BEGIN&amp;#10;    IF ank_jog.irhat THEN&amp;#10;        COMMIT_FORM;&amp;#10;        ank_naplo.mentes(:RENDELES.ID,&amp;#10;                         :RENDELES.STATUSZ,&amp;#10;                         :RENDELES.VEVO);&amp;#10;        :CTRL.UTOLSO := :RENDELES.STATUSZ;&amp;#10;    END IF;&amp;#10;END;"/>
+  <Trigger Name="KEY-EXIT" TriggerText="BEGIN&amp;#10;  qms$event_form(&apos;KEY-EXIT&apos;);&amp;#10;END;"/>
+  <Trigger Name="ON-ERROR" TriggerText="BEGIN&amp;#10;   qms$event_ctrl_block(&apos;ON-ERROR&apos;);&amp;#10;END;&amp;#10;BEGIN&amp;#10;    hiba_kezelo(ERROR_CODE, ERROR_TEXT);&amp;#10;END;"/>
+  <Block Name="CTRL" DatabaseDataBlock="false" RecordsDisplayCount="1">
+   <Item Name="MODUS" ItemType="Text Item" DataType="Char" MaximumLength="1" Prompt="Mód" CanvasName="C" XPosition="10" YPosition="10" Width="40" Height="20"/>
+   <Item Name="EV" ItemType="Text Item" DataType="Number" MaximumLength="4" Prompt="Év" CanvasName="C" XPosition="60" YPosition="10" Width="60" Height="20"/>
+   <Item Name="UTOLSO" ItemType="Display Item" DataType="Char" MaximumLength="1" Prompt="Utolsó" CanvasName="C" XPosition="130" YPosition="10" Width="40" Height="20"/>
+   <Item Name="SZURO" ItemType="Text Item" DataType="Char" MaximumLength="30" Prompt="Szűrő" CanvasName="C" XPosition="180" YPosition="10" Width="120" Height="20"/>
+   <Item Name="PB_KERES" ItemType="Push Button" Label="Keresés" CanvasName="C" XPosition="10" YPosition="40" Width="80" Height="22">
+    <Trigger Name="WHEN-BUTTON-PRESSED" TriggerText="BEGIN&amp;#10;  qms$event_item(&apos;WHEN-BUTTON-PRESSED&apos;);&amp;#10;END;&amp;#10;BEGIN&amp;#10;  VALIDATE(ITEM_SCOPE);&amp;#10;  IF NOT FORM_SUCCESS THEN&amp;#10;    RAISE FORM_TRIGGER_FAILURE;&amp;#10;  END IF;&amp;#10;  :CTRL.MODUS := &apos;K&apos;;&amp;#10;  GO_BLOCK(&apos;RENDELES&apos;);&amp;#10;  EXECUTE_QUERY;&amp;#10;END;"/>
+   </Item>
+   <Item Name="PB_LEZAR" ItemType="Push Button" Label="Lezárás" CanvasName="C" XPosition="100" YPosition="40" Width="80" Height="22">
+    <Trigger Name="WHEN-BUTTON-PRESSED" TriggerText="DECLARE&amp;#10;  al_id ALERT;&amp;#10;  al_button NUMBER;&amp;#10;BEGIN&amp;#10;  al_id := FIND_ALERT(&apos;KERDES&apos;);&amp;#10;  SET_ALERT_PROPERTY(al_id, ALERT_MESSAGE_TEXT, &apos;Biztosan lezárja a rendelést?&apos;);&amp;#10;  al_button := SHOW_ALERT(al_id);&amp;#10;  IF al_button = ALERT_BUTTON1 THEN&amp;#10;    UPDATE rendeles SET statusz = &apos;L&apos; WHERE id = :RENDELES.ID;&amp;#10;    :RENDELES.STATUSZ := &apos;L&apos;;&amp;#10;  ELSE&amp;#10;    RAISE FORM_TRIGGER_FAILURE;&amp;#10;  END IF;&amp;#10;END;"/>
+   </Item>
+   <Item Name="PB_UJRASZAMOL" ItemType="Push Button" Label="Újraszámol" CanvasName="C" XPosition="190" YPosition="40" Width="80" Height="22">
+    <Trigger Name="WHEN-BUTTON-PRESSED" TriggerText="BEGIN&amp;#10;   qms$event_item(&apos;WHEN-BUTTON-PRESSED&apos;);&amp;#10;END;&amp;#10;&amp;#10;BEGIN&amp;#10;&amp;#10;  rendeles_pkg.ujraszamol;&amp;#10;END;"/>
+   </Item>
+   <Item Name="PB_ALAP" ItemType="Push Button" Label="Alapérték" CanvasName="C" XPosition="280" YPosition="40" Width="80" Height="22">
+    <Trigger Name="WHEN-BUTTON-PRESSED" TriggerText="BEGIN&amp;#10;  DEFAULT_VALUE(&apos;2024&apos;, &apos;GLOBAL.EV&apos;);&amp;#10;  :CTRL.EV := TO_NUMBER(:GLOBAL.EV);&amp;#10;END;"/>
+   </Item>
+   <Item Name="PB_MENT" ItemType="Push Button" Label="Mentés" CanvasName="C" XPosition="370" YPosition="40" Width="80" Height="22">
+    <Trigger Name="WHEN-BUTTON-PRESSED" TriggerText="BEGIN&amp;#10;  DO_KEY(&apos;COMMIT_FORM&apos;);&amp;#10;END;"/>
+   </Item>
+   <Item Name="PB_FRISSIT" ItemType="Push Button" Label="Frissít" CanvasName="C" XPosition="460" YPosition="40" Width="80" Height="22">
+    <Trigger Name="WHEN-BUTTON-PRESSED" TriggerText="blokk_frissit;"/>
+   </Item>
+  </Block>
+  <Block Name="RENDELES" DatabaseDataBlock="true" QueryDataSourceType="Table" QueryDataSourceName="RENDELES" RecordsDisplayCount="1"
+         WhereClause="WHERE   (&amp;#10;RENDELES.STATUSZ IN ( SELECT KOD FROM STATUSZ_KODTAR )&amp;#10;)" OrderByClause="RENDELES.DATUM DESC">
+   <Item Name="ID" ItemType="Text Item" DataType="Number" ColumnName="ID" Prompt="Azonosító" CanvasName="C" XPosition="10" YPosition="80" Width="80" Height="20"/>
+   <Item Name="VEVO" ItemType="Text Item" DataType="Char" MaximumLength="30" ColumnName="VEVO" Prompt="Vevő" CanvasName="C" XPosition="100" YPosition="80" Width="100" Height="20">
+    <Trigger Name="POST-CHANGE" TriggerText="BEGIN&amp;#10;  SELECT nev INTO :RENDELES.VEVO_NEV FROM vevo WHERE kod = :RENDELES.VEVO;&amp;#10;EXCEPTION&amp;#10;  WHEN NO_DATA_FOUND THEN :RENDELES.VEVO_NEV := NULL;&amp;#10;END;"/>
+   </Item>
+   <Item Name="VEVO_NEV" ItemType="Display Item" DataType="Char" MaximumLength="80" DatabaseItem="false" Prompt="Név" CanvasName="C" XPosition="210" YPosition="80" Width="160" Height="20"/>
+   <Item Name="DATUM" ItemType="Text Item" DataType="Date" ColumnName="DATUM" Prompt="Dátum" CanvasName="C" XPosition="380" YPosition="80" Width="90" Height="20"/>
+   <Item Name="STATUSZ" ItemType="Text Item" DataType="Char" MaximumLength="1" ColumnName="STATUSZ" Prompt="Státusz" LOVName="LOV_STATUSZ" CanvasName="C" XPosition="480" YPosition="80" Width="40" Height="20"/>
+   <Item Name="OSSZEG" ItemType="Text Item" DataType="Number" ColumnName="OSSZEG" Prompt="Összeg" HighestAllowedValue="9999999999,99" CanvasName="C" XPosition="530" YPosition="80" Width="90" Height="20"/>
+   <Trigger Name="ON-INSERT" TriggerText="BEGIN&amp;#10;    SELECT rendeles_seq.NEXTVAL&amp;#10;      INTO :RENDELES.ID&amp;#10;      FROM DUAL;&amp;#10;&amp;#10;    INSERT INTO rendeles r&amp;#10;      ( r.id,&amp;#10;        r.vevo,&amp;#10;        r.datum,&amp;#10;        r.statusz,&amp;#10;        r.osszeg )&amp;#10;    VALUES&amp;#10;      ( :RENDELES.ID,&amp;#10;        :RENDELES.VEVO,&amp;#10;        :RENDELES.DATUM,&amp;#10;        :RENDELES.STATUSZ,&amp;#10;        :RENDELES.OSSZEG );&amp;#10;&amp;#10;    DECLARE&amp;#10;        v_max      rendeles.osszeg%TYPE;&amp;#10;    BEGIN&amp;#10;        SELECT MAX(r2.osszeg)&amp;#10;          INTO v_max&amp;#10;          FROM rendeles r2&amp;#10;         WHERE r2.vevo = :RENDELES.VEVO;&amp;#10;        IF v_max &gt; 1000000 THEN&amp;#10;           naplo_init(&apos;NAGY&apos;);&amp;#10;        END IF;&amp;#10;    END;&amp;#10;END;"/>
+   <Trigger Name="ON-UPDATE" TriggerText="BEGIN&amp;#10;    UPDATE rendeles r&amp;#10;       SET r.statusz = :RENDELES.STATUSZ,&amp;#10;           r.osszeg  = :RENDELES.OSSZEG&amp;#10;     WHERE r.id = :RENDELES.ID AND&amp;#10;           ( r.statusz || &apos;x&apos; != :RENDELES.STATUSZ || &apos;x&apos; OR&amp;#10;             r.osszeg  || &apos;x&apos; != :RENDELES.OSSZEG  || &apos;x&apos; );&amp;#10;END;"/>
+   <Trigger Name="ON-CHECK-DELETE-MASTER" TriggerText="DECLARE&amp;#10;  dummy CHAR(1);&amp;#10;&amp;#10;  CURSOR c_tetel IS&amp;#10;    SELECT 1 FROM rendeles_tetel t&amp;#10;    WHERE t.rendeles_id = :RENDELES.ID;&amp;#10;&amp;#10;BEGIN&amp;#10;&amp;#10;  OPEN c_tetel;&amp;#10;  FETCH c_tetel INTO dummy;&amp;#10;  IF ( c_tetel%FOUND ) THEN&amp;#10;    MESSAGE(&apos;A rendeléshez tételek tartoznak.&apos;);&amp;#10;    CLOSE c_tetel;&amp;#10;    RAISE FORM_TRIGGER_FAILURE;&amp;#10;  END IF;&amp;#10;  CLOSE c_tetel;&amp;#10;&amp;#10;END;"/>
+   <Trigger Name="KEY-EXEQRY" TriggerText="BEGIN&amp;#10;    ank_blokk.lekerdez;&amp;#10;END;"/>
+   <Trigger Name="KEY-CREREC" TriggerText="BEGIN&amp;#10;&amp;#10;    GO_ITEM(&apos;RENDELES.VEVO&apos;);&amp;#10;    uj_rekord;&amp;#10;END;"/>
+   <Trigger Name="WHEN-NEW-RECORD-INSTANCE" TriggerText="BEGIN&amp;#10;  qms$event_block(&apos;WHEN-NEW-RECORD-INSTANCE&apos;);&amp;#10;END;"/>
+   <Relation Name="RENDELES_TETEL" DetailDataBlock="TETEL" JoinCondition="RENDELES.ID = TETEL.RENDELES_ID" DeleteRecordBehavior="Non-Isolated"/>
+  </Block>
+  <Block Name="TETEL" DatabaseDataBlock="true" QueryDataSourceType="Table" QueryDataSourceName="RENDELES_TETEL" RecordsDisplayCount="5"
+         WhereClause="AKTIV = &apos;I&apos;" OrderByClause="CIKK">
+   <Item Name="ID" ItemType="Text Item" DataType="Number" ColumnName="ID" PrimaryKey="true" Prompt="Tétel" CanvasName="C" XPosition="10" YPosition="120" Width="60" Height="20"/>
+   <Item Name="RENDELES_ID" ItemType="Text Item" DataType="Number" ColumnName="RENDELES_ID" CopyValueFromItem="RENDELES.ID" Visible="false"/>
+   <Item Name="CIKK" ItemType="Text Item" DataType="Char" MaximumLength="20" ColumnName="CIKK" Prompt="Cikk" CanvasName="C" XPosition="80" YPosition="120" Width="100" Height="20"/>
+   <Item Name="MENNYISEG" ItemType="Text Item" DataType="Number" ColumnName="MENNYISEG" Prompt="Mennyiség" LowestAllowedValue="0" CanvasName="C" XPosition="190" YPosition="120" Width="60" Height="20">
+    <Trigger Name="WHEN-VALIDATE-ITEM" TriggerText="IF :TETEL.MENNYISEG &gt; 1000 THEN&amp;#10;  MESSAGE(&apos;Túl nagy mennyiség.&apos;);&amp;#10;  RAISE FORM_TRIGGER_FAILURE;&amp;#10;END IF;"/>
+   </Item>
+   <Item Name="AKTIV" ItemType="Text Item" DataType="Char" MaximumLength="1" ColumnName="AKTIV" InitialValue="I" Visible="false"/>
+   <Trigger Name="PRE-INSERT" TriggerText="SELECT tetel_seq.NEXTVAL INTO :TETEL.ID FROM dual;"/>
+  </Block>
+  <Block Name="PARTNER" DatabaseDataBlock="true" QueryDataSourceType="Table" QueryDataSourceName="PARTNER" RecordsDisplayCount="5"
+         WhereClause="WHERE PARTNER.NEV LIKE &apos;%&apos; || NVL(:CTRL.SZURO, &apos;%&apos;)&amp;#10; AND PARTNER.TIPUS = :GLOBAL.CG$APP&amp;#10; AND PARTNER.ERVENYES_TOL &lt;= TRUNC(SYSDATE)" OrderByClause="PARTNER.NEV">
+   <Item Name="KOD" ItemType="Text Item" DataType="Char" MaximumLength="10" ColumnName="KOD" PrimaryKey="true" Prompt="Kód" CanvasName="C" XPosition="10" YPosition="260" Width="80" Height="20"/>
+   <Item Name="NEV" ItemType="Text Item" DataType="Char" MaximumLength="80" ColumnName="NEV" Prompt="Név" CanvasName="C" XPosition="100" YPosition="260" Width="200" Height="20"/>
+  </Block>
+  <Canvas Name="C" CanvasType="Content" WindowName="W" Width="700" Height="400"/>
+  <Window Name="W" Title="Rendelések"/>
+  <Alert Name="KERDES" AlertStyle="Caution" Button1Label="Igen" Button2Label="Nem" DefaultAlertButton="Button 2"/>
+  <LOV Name="LOV_STATUSZ" RecordGroupName="RG_STATUSZ">
+   <LOVColumnMapping ColumnName="KOD" ReturnItem="RENDELES.STATUSZ"/>
+  </LOV>
+  <RecordGroup Name="RG_STATUSZ" RecordGroupQuery="SELECT kod, nev FROM statusz_kodtar ORDER BY kod"/>
+  <ProgramUnit Name="RENDELES_PKG" ProgramUnitType="Package Spec" ProgramUnitText="PACKAGE rendeles_pkg IS&amp;#10;  g_utolso NUMBER;&amp;#10;  PROCEDURE ujraszamol;&amp;#10;END rendeles_pkg;"/>
+  <ProgramUnit Name="RENDELES_PKG" ProgramUnitType="Package Body" ProgramUnitText="PACKAGE BODY rendeles_pkg IS&amp;#10;  PROCEDURE ujraszamol IS&amp;#10;    v_sum NUMBER;&amp;#10;  BEGIN&amp;#10;    SELECT SUM(mennyiseg) INTO v_sum FROM rendeles_tetel WHERE rendeles_id = :RENDELES.ID;&amp;#10;    :RENDELES.OSSZEG := v_sum;&amp;#10;    g_utolso := v_sum;&amp;#10;    MESSAGE(&apos;Újraszámolva: &apos; || v_sum);&amp;#10;  END ujraszamol;&amp;#10;END rendeles_pkg;"/>
+  <ProgramUnit Name="BLOKK_FRISSIT" ProgramUnitType="Procedure" ProgramUnitText="PROCEDURE blokk_frissit IS&amp;#10;BEGIN&amp;#10;  IF :SYSTEM.CURSOR_BLOCK = &apos;RENDELES&apos; THEN&amp;#10;    :CTRL.UTOLSO := :RENDELES.STATUSZ;&amp;#10;  END IF;&amp;#10;END;"/>
+ </FormModule>
+</Module>

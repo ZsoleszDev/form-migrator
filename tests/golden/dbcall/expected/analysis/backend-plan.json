@@ -1,0 +1,157 @@
+{
+  "version": 2,
+  "layout": "module-service-v2",
+  "module_class": "Dbcall",
+  "files": {
+    "CL": [
+      "CommonMigrateTools.java",
+      "DbcallConstants.java",
+      "DbcallDtos.java",
+      "DbcallRestClient.java",
+      "DbcallRestClientImpl.java"
+    ],
+    "DPS": [
+      "DbcallController.java",
+      "DbcallControllerImpl.java",
+      "DbcallService.java",
+      "DbcallServiceImpl.java"
+    ],
+    "WBS": [
+      "DbcallController.java",
+      "DbcallControllerImpl.java",
+      "DbcallService.java",
+      "DbcallServiceImpl.java"
+    ]
+  },
+  "dto_selection": [
+    {
+      "block": "B",
+      "dto": "BRow",
+      "reason": "CRUD contract; includes hidden keys and rule inputs",
+      "fields": [
+        "ID",
+        "KOD",
+        "NEV",
+        "DATUM"
+      ]
+    }
+  ],
+  "module_gate": {
+    "required": false
+  },
+  "endpoints": [
+    {
+      "method": "listB",
+      "http": "GET",
+      "constant": "DbcallConstants.B_LIST_PATH",
+      "implemented": true,
+      "block": "B",
+      "operation": "list",
+      "ready_after_module_review": false,
+      "blockers": []
+    },
+    {
+      "method": "createB",
+      "http": "POST",
+      "constant": "DbcallConstants.B_CREATE_PATH",
+      "implemented": true,
+      "block": "B",
+      "operation": "create",
+      "ready_after_module_review": false,
+      "blockers": []
+    },
+    {
+      "method": "updateB",
+      "http": "PUT",
+      "constant": "DbcallConstants.B_UPDATE_PATH",
+      "implemented": true,
+      "block": "B",
+      "operation": "update",
+      "ready_after_module_review": false,
+      "blockers": []
+    },
+    {
+      "method": "deleteB",
+      "http": "DELETE",
+      "constant": "DbcallConstants.B_DELETE_PATH",
+      "implemented": true,
+      "block": "B",
+      "operation": "delete",
+      "ready_after_module_review": false,
+      "blockers": []
+    },
+    {
+      "method": "commitForm",
+      "http": "POST",
+      "constant": "DbcallConstants.COMMIT_FORM_PATH",
+      "implemented": true,
+      "block": "@FORM",
+      "operation": "commit",
+      "ready_after_module_review": false,
+      "blockers": [],
+      "blocks": [
+        "B"
+      ]
+    }
+  ],
+  "skipped_blocks": [],
+  "skipped_actions": [],
+  "lovs": [],
+  "api": {
+    "constants_class": "DbcallConstants",
+    "base_path": "/api/forms/dbcall",
+    "paths": {
+      "B_LIST_PATH": "/b/getdata",
+      "B_CREATE_PATH": "/b/create",
+      "B_UPDATE_PATH": "/b/update",
+      "B_DELETE_PATH": "/b/delete",
+      "COMMIT_FORM_PATH": "/commit"
+    },
+    "blocks": {
+      "B": {
+        "fields": {
+          "ID": "id",
+          "KOD": "kod",
+          "NEV": "nev",
+          "DATUM": "datum"
+        },
+        "operations": {
+          "list": {
+            "constant": "B_LIST_PATH",
+            "http": "GET"
+          },
+          "create": {
+            "constant": "B_CREATE_PATH",
+            "http": "POST"
+          },
+          "update": {
+            "constant": "B_UPDATE_PATH",
+            "http": "PUT"
+          },
+          "delete": {
+            "constant": "B_DELETE_PATH",
+            "http": "DELETE"
+          }
+        }
+      }
+    },
+    "lovs": {},
+    "actions": {},
+    "commit": {
+      "constant": "COMMIT_FORM_PATH",
+      "blocks": {
+        "B": {
+          "request": "changesB",
+          "result": "rowsB",
+          "operations": [
+            "create",
+            "update",
+            "delete"
+          ]
+        }
+      }
+    }
+  },
+  "skipped_operations": [],
+  "regeneration": "ServiceImpl and ControllerImpl are CREATE_ONCE. Fresh candidates and changes: analysis/backend-regeneration/."
+}

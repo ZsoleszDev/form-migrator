@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "contract": "Supplied FormBlock.Structure API; no private import paths assumed",
+  "widgets": {
+    "text": {"type": "text"},
+    "textarea": {"type": "inputTextarea"},
+    "number": {"type": "inputNumber", "exact_decimal_type": "text"},
+    "date": {"type": "calendar", "props": {"showTime": false}},
+    "datetime": {"type": "calendar", "props": {"showTime": true}},
+    "password": {"type": "password"},
+    "checkbox": {"type": "checkBox", "props": {"binary": true}},
+    "select": {"type": "dropdown"},
+    "multiselect": {"type": "multiSelect"},
+    "radio": {"type": "radioButton"},
+    "autocomplete": {"type": "autocomplete"},
+    "button": {"type": "button"},
+    "display": {"type": "text", "props": {"readonly": true}},
+    "image": {"type": "templateRef", "adapter": "TODO: bind an approved image TemplateRef; no Optimus image API was supplied"},
+    "tree": {"type": "treeSelect", "adapter": "TODO: define tree data contract; Oracle Hierarchical Tree is unsupported"},
+    "unsupported": {"type": null}
+  }
+}

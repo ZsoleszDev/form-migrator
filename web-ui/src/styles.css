@@ -1,0 +1,4 @@
+@import "tailwindcss";
+@source "../../angular-frontend";
+:root { font-family: system-ui, sans-serif; color: var(--p-text-color); background: var(--p-content-background); }
+body { margin: 0; }

@@ -1,0 +1,4 @@
+{
+  "_leírás": "(Most direkt el vannak rejtve az importok)Egyszerű osztálynév -> teljes Java-név. Másold java-imports.json néven a migrátor gyökerébe (vagy add meg az útvonalát a java_import_map beállításban), és írd át a saját csomagneveitekre. A generátor minden generáláskor beolvassa; a generált backend-fájlokba ezekről a helyekről kerül az import. A hiányzó nevek listája generálás után: analysis/java-imports.json (without_import).",
+  "WFF": { "ts": "wf-package"}
+}

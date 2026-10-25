@@ -1,0 +1,38 @@
+import '@angular/compiler';
+import assert from 'node:assert/strict';
+import { FormGroup, FormControl, Validators } from '@angular/forms';
+import { UgyfelekComponent } from './compiled/customer.component.js';
+import { VasarloLekerdezoComponent } from './compiled/vasarlo-lekerdezo.component.js';
+
+const customer = new UgyfelekComponent();
+assert.equal(customer.apiBaseUrl, 'http://localhost:9555/gateway');
+assert.equal(customer.endpoints.customer.list, 'http://localhost:9555/gateway/api/forms/ugyfelek/customer/getdata');
+assert.equal(customer.formStructure.find(i => i.formControlName === 'active').type, 'checkBox');
+assert.equal(customer.formStructure.find(i => i.formControlName === 'active').startValue, true);
+assert.equal(customer.formStructure.find(i => i.formControlName === 'status').type, 'dropdown');
+
+const component = new VasarloLekerdezoComponent();
+const first = new FormGroup({name: new FormControl('', Validators.required), fromDate: new FormControl(null), toDate: new FormControl(null)});
+component.onFormGroupGenerated(first);
+assert.equal(component.formGroup, first);
+assert.equal(component.formGroup.invalid, true);
+const chosenDate = new Date(2026, 8, 16, 10, 25, 45);
+first.patchValue({name: 'Teszt vásárló', fromDate: chosenDate});
+first.markAsDirty();
+const regenerated = new FormGroup({name: new FormControl('', Validators.required), fromDate: new FormControl(null), toDate: new FormControl(null)});
+component.onFormGroupGenerated(regenerated);
+assert.equal(regenerated.get('name').value, 'Teszt vásárló');
+assert.equal(regenerated.get('fromDate').value, chosenDate);
+assert.equal(regenerated.dirty, true);
+assert.equal(regenerated.valid, true);
+let action;
+component.actionRequested.subscribe(value => action = value);
+const search = component.formStructure.find(item => item.type === 'button');
+assert.equal(search.labelText, 'Lekérdezés');
+search.onClick();
+assert.deepEqual(action, {block:'FILTER', action:'SEARCH', value:{name:'Teszt vásárló', fromDate: chosenDate, toDate:null}});
+assert.equal(component.formStructure.filter(item => item.type === 'button').length, 1);
+assert.equal(component.formStructure.filter(item => item.type === 'calendar').length, 2);
+assert.deepEqual(component.resultsColumns.map(column => column.field), ['id','name','createdAt']);
+assert.deepEqual(component.resultsRows, []);
+console.log('OK: direct FormBlock values, re-emission, source button event, environment URL and table data contract');

@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "description": "Oracle Designer / Headstart keretrendszer-objektumok. Szerkeszthető; saját példány: framework_catalog. Egy blokk csak akkor maradhat ki, ha adatforrás nélküli. A spacer_items minták (ITEM vagy BLOKK.ITEM, * és ? helyettesítővel) csak elrendezési térközt jelölő mezők: a képernyőn üres elem lesz belőlük, adatkötés nélkül. A forms_runtime_calls rutinjai (RUTIN vagy CSOMAG.RUTIN minta, * és ? helyettesítővel) csak az Oracle Forms futtatókörnyezetben működnek, és a webes felület kiváltja őket: nem kerülnek adatbázis-hívásba, a csak ilyen hívásból álló trigger nem kap végpontot. Adatbázisban is létező csomagot ne sorolj ide. A message_calls rutinjai (RUTIN vagy CSOMAG.RUTIN: a szövegargumentum sorszáma) csak üzenetet mutatnak: a migrált kódban MESSAGE(szöveg) lesz belőlük; a message_functions függvényei (pl. MSGGETTEXT) a megadott argumentumuk szövegét adják; a failure_calls rutinjai RAISE FORM_TRIGGER_FAILURE-ként futnak. Naplózó vagy mást is végző eljárást ne sorolj ide.",
+  "call_prefixes": ["qms$", "cgnv$", "cgap$", "cghp$", "cglv$", "cgly$", "cgte$", "hsd$"],
+  "blocks": {
+    "CALENDAR": "Headstart naptár-segédablak: a dátummezők natív naptárvezérlője váltja ki.",
+    "QMS$TRANS_ERRORS": "Headstart tranzakciós hibakonzol: a fogadó alkalmazás hibakezelése váltja ki."
+  },
+  "date_picker_calls": ["qms$calendar.key_listval"],
+  "empty_hint_templates": ["Adja meg a(z) értékét", "Enter value for"],
+  "spacer_items": ["L_URES", "L_URES_*"],
+  "message_calls": {"QMS$FORMS_ERRORS.PUSH": 1, "WUZENET": 1},
+  "message_functions": {"QMS$FORMS_ERRORS.MSGGETTEXT": 2},
+  "failure_calls": ["QMS$FORMS_ERRORS.RAISE_FAILURE"],
+  "forms_runtime_calls": {
+    "CALENDAR.*": "A naptár-segédablak Forms-oldali eseménykezelője: csak az Oracle Forms futtatókörnyezetben működik, az adatbázisban nincs ilyen rutin. A dátummezők natív naptárvezérlője váltja ki."
+  }
+}

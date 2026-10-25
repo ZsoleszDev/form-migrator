@@ -1,0 +1,469 @@
+<!doctype html>
+<html lang="hu">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI-munkasor és napló</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1f2933; --muted: #5f6b7a; --line: #dfe3e8;
+    --accent: #0f766e; --accent-soft: #e6f4f1; --warn: #9a5b00; --warn-soft: #fff4e0;
+    --bad: #b42318; --bad-soft: #fdecea; --ok: #1d7a3e; --ok-soft: #e7f6ec; --code: #f2f4f7;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111418; --panel: #191d23; --text: #e6e9ee; --muted: #9aa5b1; --line: #2c333d;
+      --accent: #4fd1c5; --accent-soft: #15302d; --warn: #f5b94b; --warn-soft: #33270f;
+      --bad: #f08a80; --bad-soft: #3a1b18; --ok: #6fd391; --ok-soft: #16301f; --code: #12161b;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { padding: 18px 20px 10px; }
+  h1 { margin: 0; font-size: 20px; }
+  header p { margin: 4px 0 0; color: var(--muted); }
+  main { padding: 0 20px 24px; display: grid; gap: 16px; grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); }
+  @media (max-width: 860px) { main { grid-template-columns: minmax(0, 1fr); padding: 0 12px 20px; } header { padding: 14px 12px 8px; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; min-width: 0; }
+  .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; grid-column: 1 / -1; }
+  label { display: flex; flex-direction: column; gap: 4px; font-weight: 600; font-size: 13px; min-width: 0; }
+  select, button { font: inherit; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); padding: 7px 10px; }
+  select { min-width: 220px; max-width: 100%; }
+  button { cursor: pointer; font-weight: 600; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--panel); }
+  button:disabled { opacity: .55; cursor: default; }
+  button.small { padding: 3px 8px; font-size: 12px; font-weight: 500; }
+  .list { display: flex; flex-direction: column; gap: 6px; max-height: 75vh; overflow: auto; }
+  .item { text-align: left; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--panel); display: grid; gap: 2px; font-weight: 400; }
+  .item[aria-current="true"] { border-color: var(--accent); background: var(--accent-soft); }
+  .item .title { font-weight: 600; overflow-wrap: anywhere; }
+  .meta { color: var(--muted); font-size: 12px; }
+  .badge { display: inline-block; border-radius: 999px; padding: 1px 8px; font-size: 12px; font-weight: 600; background: var(--code); color: var(--muted); }
+  .badge.ok { background: var(--ok-soft); color: var(--ok); }
+  .badge.bad { background: var(--bad-soft); color: var(--bad); }
+  .badge.warn { background: var(--warn-soft); color: var(--warn); }
+  .badge.run { background: var(--accent-soft); color: var(--accent); }
+  h2 { font-size: 16px; margin: 0 0 8px; }
+  h3 { font-size: 14px; margin: 14px 0 6px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px 16px; margin-bottom: 8px; }
+  .grid div { min-width: 0; overflow-wrap: anywhere; }
+  .grid b { display: block; font-size: 12px; color: var(--muted); font-weight: 600; }
+  details { border: 1px solid var(--line); border-radius: 8px; margin: 8px 0; background: var(--panel); }
+  summary { cursor: pointer; padding: 8px 10px; font-weight: 600; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  summary .meta { font-weight: 400; }
+  details > .body { padding: 0 10px 10px; }
+  pre { margin: 0; background: var(--code); border: 1px solid var(--line); border-radius: 8px; padding: 10px; overflow: auto; max-height: 60vh; white-space: pre; font: 12px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; }
+  .wrap pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .attempt { border-left: 3px solid var(--line); padding-left: 12px; margin: 14px 0; }
+  .attempt.good { border-left-color: var(--ok); }
+  .attempt.rejected { border-left-color: var(--bad); }
+  ul.msgs { margin: 6px 0; padding-left: 20px; }
+  ul.msgs li.bad { color: var(--bad); }
+  ul.msgs li.warn { color: var(--warn); }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  th, td { border-bottom: 1px solid var(--line); padding: 4px 6px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+  .scroll { overflow-x: auto; }
+  .notice { padding: 8px 10px; border-radius: 8px; margin: 8px 0; }
+  .notice.bad { background: var(--bad-soft); color: var(--bad); }
+  .notice.warn { background: var(--warn-soft); color: var(--warn); }
+  .notice.info { background: var(--accent-soft); color: var(--text); }
+  .empty { color: var(--muted); padding: 8px 0; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  /* 4.35: the queue of the local model, live */
+  .queue { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 12px; }
+  .queue .head { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
+  .queue .head h2 { margin: 0; flex: 1 1 12rem; }
+  .switch { flex-direction: row; align-items: center; gap: 6px; font-weight: 500; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 130px), 1fr)); gap: 8px; }
+  .stat { background: var(--code); border-radius: 8px; padding: 8px 10px; min-width: 0; }
+  .stat b { display: block; font-size: 18px; font-variant-numeric: tabular-nums; }
+  .stat span { font-size: 12px; color: var(--muted); }
+  .live { border: 1px solid var(--accent); background: var(--accent-soft); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+  .live pre { max-height: 40vh; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--panel); }
+  .dot { width: 9px; height: 9px; border-radius: 99px; background: var(--accent); display: inline-block; animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .25; } }
+  @media (prefers-reduced-motion: reduce) { .dot { animation: none; } }
+  .bar { height: 4px; border-radius: 4px; background: var(--line); overflow: hidden; position: relative; }
+  .bar i { position: absolute; inset: 0 auto 0 0; width: 30%; background: var(--accent); animation: slide 1.4s ease-in-out infinite; }
+  @keyframes slide { from { left: -30%; } to { left: 100%; } }
+  .tasks { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); gap: 6px; }
+  .task { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; display: grid; gap: 2px; min-width: 0; }
+  .task .title { font-weight: 600; overflow-wrap: anywhere; }
+  .cols { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); }
+  ol.runs, ul.runs { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>AI-munkasor és napló — Java asszisztens</h1>
+  <p>Mit csinál most a helyi modell (mióta, milyen gyorsan, mit írt eddig), mi vár sorra, és pontosan mit küldött a migrátor,
+    mit válaszolt a modell, mit vett át belőle a migrátor.</p>
+</header>
+<main>
+  <section class="panel queue" aria-label="AI-munkasor" id="queue"></section>
+  <div class="panel controls">
+    <label>Generált modul <select id="job" aria-label="Generált modul"></select></label>
+    <label>Végpont <select id="task" aria-label="Végpont"><option value="">Minden végpont</option></select></label>
+    <button id="refresh" type="button">Frissítés</button>
+    <button id="preview" type="button" class="primary">Küldendő prompt előnézete</button>
+    <span id="status" class="meta" aria-live="polite"></span>
+  </div>
+  <section class="panel" aria-label="AI-hívások">
+    <h2>AI-hívások</h2>
+    <div id="list" class="list"></div>
+  </section>
+  <section class="panel" aria-live="polite">
+    <div id="detail"><p class="empty">Válassz egy AI-hívást a listából, vagy kérj prompt-előnézetet.</p></div>
+  </section>
+</main>
+<script>
+(() => {
+  const params = new URLSearchParams(location.search);
+  const state = {job: params.get('job') || '', task: params.get('task') || '', exchange: params.get('exchange') || '', timer: 0};
+  const $ = id => document.getElementById(id);
+
+  function el(tag, attrs, ...children) {
+    const node = document.createElement(tag);
+    for (const [key, value] of Object.entries(attrs || {})) {
+      if (value === undefined || value === null || value === false) continue;
+      if (key === 'class') node.className = value;
+      else if (key === 'text') node.textContent = value;
+      else if (key.startsWith('on')) node.addEventListener(key.slice(2), value);
+      else node.setAttribute(key, value === true ? '' : String(value));
+    }
+    for (const child of children.flat()) {
+      if (child === null || child === undefined || child === false) continue;
+      node.append(child instanceof Node ? child : document.createTextNode(String(child)));
+    }
+    return node;
+  }
+  function render(target, ...children) {
+    // Like replaceChildren, but nested lists are flattened and empty parts skipped (as in el()).
+    target.replaceChildren(...children.flat(Infinity).filter(child => child !== null && child !== undefined && child !== false));
+  }
+  async function api(path, options) {
+    const response = await fetch(path, options);
+    let body = null;
+    try { body = await response.json(); } catch { /* not JSON */ }
+    if (!response.ok) throw new Error((body && typeof body.detail === 'string' && body.detail) || ('HTTP ' + response.status));
+    return body;
+  }
+  function setStatus(text) { $('status').textContent = text || ''; }
+  function time(value) { return value ? new Date(value).toLocaleString('hu-HU') : '—'; }
+  function badge(status) {
+    const map = {completed: ['Kész', 'ok'], failed: ['Sikertelen', 'bad'], running: ['Fut…', 'run'], cancelled: ['Leállítva', ''],
+      queued: ['Sorban', 'run'], applied: ['Beillesztve', 'ok'],
+      proposal: ['Javaslat', 'ok'], needs_context: ['Adatot kér', 'warn'], rejected: ['Elutasítva', 'bad']};
+    const [label, kind] = map[status] || [status || '—', ''];
+    return el('span', {class: 'badge ' + kind, text: label});
+  }
+  function copyButton(text) {
+    return el('button', {type: 'button', class: 'small', onclick: async event => {
+      try { await navigator.clipboard.writeText(text || ''); event.target.textContent = 'Másolva'; }
+      catch { event.target.textContent = 'Nem másolható'; }
+      setTimeout(() => { event.target.textContent = 'Másolás'; }, 1500);
+    }}, 'Másolás');
+  }
+  function textBlock(title, text, open, meta, wrap) {
+    return el('details', {open: open ? true : null},
+      el('summary', {}, title, meta ? el('span', {class: 'meta', text: meta}) : null, copyButton(text)),
+      el('div', {class: 'body' + (wrap ? ' wrap' : '')}, el('pre', {tabindex: '0', text: text || '(üres)'})));
+  }
+  function messages(items, kind) {
+    if (!items || !items.length) return null;
+    return el('ul', {class: 'msgs'}, items.map(item => el('li', {class: kind, text: item})));
+  }
+  function updateUrl() {
+    const url = new URL(location.href);
+    for (const key of ['job', 'task', 'exchange']) {
+      if (state[key]) url.searchParams.set(key, state[key]); else url.searchParams.delete(key);
+    }
+    history.replaceState(null, '', url);
+  }
+
+  async function loadJobs() {
+    const data = await api('/api/jobs');
+    const jobs = (data.jobs || []).filter(job => job.status === 'completed');
+    const select = $('job');
+    select.replaceChildren(...jobs.map(job => el('option', {value: job.id, text: (job.module || job.filename || job.id) + ' · ' + (job.filename || '')})));
+    if (!jobs.length) {
+      select.append(el('option', {value: '', text: 'Nincs kész modul'}));
+      state.job = '';
+      return;
+    }
+    if (!jobs.some(job => job.id === state.job)) state.job = jobs[0].id;
+    select.value = state.job;
+  }
+  async function loadTasks() {
+    const select = $('task');
+    select.replaceChildren(el('option', {value: '', text: 'Minden végpont'}));
+    if (!state.job) return;
+    try {
+      const index = await api('/api/jobs/' + encodeURIComponent(state.job) + '/assistant');
+      for (const task of index.tasks || []) select.append(el('option', {value: task.id, text: task.method + ' — ' + task.owner}));
+    } catch (error) { setStatus(error.message); }
+    if (![...select.options].some(option => option.value === state.task)) state.task = '';
+    select.value = state.task;
+  }
+  async function loadList() {
+    const list = $('list');
+    if (!state.job) { list.replaceChildren(el('p', {class: 'empty', text: 'Előbb generálj egy modult.'})); return; }
+    const query = state.task ? '?task_id=' + encodeURIComponent(state.task) : '';
+    const data = await api('/api/jobs/' + encodeURIComponent(state.job) + '/assistant/exchanges' + query);
+    const items = data.exchanges || [];
+    if (!items.length) {
+      list.replaceChildren(el('p', {class: 'empty', text: 'Még nem volt AI-hívás ennél a modulnál.'}));
+      return items;
+    }
+    list.replaceChildren(...items.map(item => el('button', {type: 'button', class: 'item', 'aria-current': item.id === state.exchange ? 'true' : 'false',
+      onclick: () => showExchange(item.id)},
+      el('span', {class: 'title', text: item.method || '—'}),
+      el('span', {class: 'row'}, badge(item.status), item.proposal_status ? badge(item.proposal_status) : null,
+        el('span', {class: 'meta', text: (item.cached ? 'gyorsítótár' : item.attempts + ' hívás') + ' · ' + time(item.started)})),
+      item.error ? el('span', {class: 'meta', text: item.error}) : null)));
+    return items;
+  }
+
+  function extractionView(extraction) {
+    if (!extraction) return null;
+    const rows = (extraction.blocks || []).map(block => el('tr', {},
+      el('td', {text: block.index}), el('td', {text: block.label || '—'}), el('td', {text: block.kind || '—'}),
+      el('td', {text: block.target || ''}), el('td', {text: block.lines}), el('td', {text: block.used ? 'átvéve' : 'nem'}),
+      el('td', {text: block.note || ''})));
+    return el('div', {},
+      el('h3', {}, 'Mit vett át a migrátor ', badge(extraction.status), extraction.truncated ? el('span', {class: 'badge warn', text: 'megszakadt válasz'}) : null),
+      rows.length ? el('div', {class: 'scroll'}, el('table', {},
+        el('thead', {}, el('tr', {}, ['#', 'Címke', 'Típus', 'Cél', 'Sor', 'Átvéve', 'Megjegyzés'].map(h => el('th', {text: h})))),
+        el('tbody', {}, rows))) : el('p', {class: 'empty', text: 'Nem volt kódblokk a válaszban.'}),
+      messages(extraction.problems, 'bad'), messages(extraction.missing && extraction.missing.length ? ['Az AI szerint hiányzik: ' + extraction.missing.join('; ')] : [], 'warn'),
+      messages(extraction.warnings, 'warn'), messages(extraction.notes, ''));
+  }
+
+  function attemptView(attempt) {
+    const extraction = attempt.extraction;
+    const good = extraction && extraction.status && extraction.status !== 'rejected';
+    const facts = [attempt.n ? attempt.n + '. hívás' : 'Gyorsítótár', attempt.seconds != null ? attempt.seconds + ' mp' : null,
+      attempt.prompt_tokens != null ? 'bemenet ' + attempt.prompt_tokens + ' token' : null,
+      attempt.output_tokens != null ? 'kimenet ' + attempt.output_tokens + ' token' : null,
+      attempt.first_token_seconds != null ? 'első token ' + attempt.first_token_seconds + ' mp után' : null,
+      attempt.tokens_per_second ? attempt.tokens_per_second + ' token/mp' : null,
+      attempt.done_reason ? 'vége: ' + attempt.done_reason : null].filter(Boolean).join(' · ');
+    return el('div', {class: 'attempt ' + (attempt.error || (extraction && !good) ? 'rejected' : good ? 'good' : '')},
+      el('h3', {text: facts}),
+      attempt.note ? el('p', {class: 'meta', text: attempt.note}) : null,
+      attempt.correction ? textBlock('Javítási kérés a modellnek (az előző válasza után)', attempt.correction, false, null, true) : null,
+      attempt.error ? el('div', {class: 'notice bad', text: attempt.error}) : null,
+      attempt.raw !== null && attempt.raw !== undefined ? textBlock('Az AI nyers válasza', attempt.raw, true, (attempt.raw || '').length + ' karakter') : null,
+      attempt.thinking ? textBlock('Gondolkodási szöveg', attempt.thinking, false, null, true) : null,
+      extractionView(extraction));
+  }
+
+  async function showExchange(id, quiet) {
+    if (!id || !state.job) return;
+    clearTimeout(state.timer);
+    state.exchange = id; updateUrl();
+    for (const node of document.querySelectorAll('.item')) node.setAttribute('aria-current', 'false');
+    let log;
+    try { log = await api('/api/jobs/' + encodeURIComponent(state.job) + '/assistant/exchanges/' + encodeURIComponent(id)); }
+    catch (error) { $('detail').replaceChildren(el('div', {class: 'notice bad', text: error.message})); return; }
+    const prompt = log.prompt || {};
+    const opts = log.options || {};
+    render($('detail'),
+      el('div', {class: 'row'}, el('h2', {text: log.method + ' — AI-hívás'}), badge(log.status), log.result ? badge(log.result.status) : null),
+      el('div', {class: 'grid'},
+        el('div', {}, el('b', {text: 'Modell'}), log.model),
+        el('div', {}, el('b', {text: 'Végpont'}), log.url),
+        el('div', {}, el('b', {text: 'Indítva / vége'}), time(log.started) + ' / ' + time(log.finished)),
+        el('div', {}, el('b', {text: 'Kontextus / kimeneti keret'}), (opts.num_ctx || '—') + ' / ' + (opts.num_predict || '—') + ' token'),
+        el('div', {}, el('b', {text: 'Elküldött prompt'}), (prompt.bytes || 0) + ' byte, becslés ~' + (prompt.estimated_input_tokens || '—') + ' token'),
+        el('div', {}, el('b', {text: 'Repositoryk a promptban'}), (prompt.repositories || []).join(', ') || 'nincs'),
+        el('div', {}, el('b', {text: 'Javaslat'}), log.result && log.result.proposal_id ? log.result.proposal_id : '—'),
+        el('div', {}, el('b', {text: 'Azonosító'}), log.id)),
+      log.error ? el('div', {class: 'notice bad', text: log.error}) : null,
+      (prompt.omitted_tables || []).length ? el('div', {class: 'notice info', text: 'Nem küldött táblák (a metódus nem hivatkozik rájuk): ' + prompt.omitted_tables.join(', ')}) : null,
+      el('h3', {text: 'Elküldött kérés'}),
+      textBlock('Rendszerprompt (system)', prompt.system, false, null, true),
+      textBlock('Felhasználói prompt (user) — a kiválasztott metódussal', prompt.user, true, (prompt.user || '').length + ' karakter'),
+      log.live ? el('div', {class: 'live'}, el('div', {class: 'row'}, el('span', {class: 'dot'}),
+          el('b', {text: 'Élő állapot: ' + phaseText(log.live.phase) + ' · ' + log.live.elapsed + ' mp · '
+            + (log.live.thinking_tokens + log.live.content_tokens) + ' token' + (log.live.tokens_per_second ? ' · ' + log.live.tokens_per_second + ' token/mp' : '')})),
+        log.live.tail ? el('pre', {tabindex: '0', text: log.live.tail}) : null) : null,
+      el('h3', {text: 'Válaszok'}),
+      (log.attempts || []).length ? (log.attempts || []).map(attemptView) : el('p', {class: 'empty', text: log.status === 'running' ? 'A modell még dolgozik…' : 'Nem történt AI-hívás.'}));
+    if (!quiet) await loadList().catch(() => null);
+    if (log.status === 'running') state.timer = setTimeout(() => showExchange(id, true).then(() => loadList().catch(() => null)), 1500);
+  }
+
+  async function previewPrompt() {
+    if (!state.job) return;
+    const task = state.task || ($('task').options[1] && $('task').options[1].value);
+    if (!task) { setStatus('Nincs átírandó végpont ebben a modulban.'); return; }
+    let saved = {};
+    try { saved = JSON.parse(localStorage.getItem('frm-assistant-options-v2:' + location.origin + '/api') || localStorage.getItem('frm-assistant-options-v2:/api') || '{}'); } catch { saved = {}; }
+    const body = {task_id: task, num_ctx: Number.isInteger(saved.num_ctx) ? saved.num_ctx : 16384,
+      num_predict: Number.isInteger(saved.num_predict) ? saved.num_predict : 4096, data_access: 'jpa'};
+    setStatus('Előnézet készül…');
+    try {
+      const preview = await api('/api/jobs/' + encodeURIComponent(state.job) + '/assistant/prompt',
+        {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Frm-Client': 'local-ui'}, body: JSON.stringify(body)});
+      clearTimeout(state.timer);
+      state.exchange = ''; updateUrl();
+      render($('detail'),
+        el('div', {class: 'row'}, el('h2', {text: preview.method + ' — küldendő prompt (előnézet)'}), el('span', {class: 'badge run', text: 'nem lett elküldve'})),
+        el('div', {class: 'grid'},
+          el('div', {}, el('b', {text: 'Méret'}), preview.bytes + ' byte'),
+          el('div', {}, el('b', {text: 'Becsült bemenet'}), '~' + preview.estimated_input_tokens + ' token'),
+          el('div', {}, el('b', {text: 'Szükséges kontextus'}), preview.required_tokens + ' / ' + preview.num_ctx + ' token'),
+          el('div', {}, el('b', {text: 'Helyben maradó teljes feladatcsomag'}), preview.original_bytes + ' byte (nem kerül elküldésre)'),
+          el('div', {}, el('b', {text: 'Repositoryk'}), (preview.repositories || []).join(', ') || 'nincs')),
+        messages(preview.warnings, 'warn'),
+        (preview.omitted_tables || []).length ? el('div', {class: 'notice info', text: 'Nem küldött táblák (a metódus nem hivatkozik rájuk): ' + preview.omitted_tables.join(', ')}) : null,
+        textBlock('Rendszerprompt (system)', preview.system, false, null, true),
+        textBlock('Felhasználói prompt (user)', preview.user, true, preview.user.length + ' karakter'));
+      setStatus('');
+    } catch (error) { setStatus(''); $('detail').replaceChildren(el('div', {class: 'notice bad', text: error.message})); }
+  }
+
+  async function refresh() {
+    setStatus('Betöltés…');
+    try {
+      await loadTasks();
+      await loadList();
+      if (state.exchange) await showExchange(state.exchange, true);
+      setStatus('');
+    } catch (error) { setStatus(error.message); }
+  }
+
+  // ---------------------------------------------------------------- the queue, live
+  const PHASES = {connecting: 'kapcsolódás', prompt: 'a modell olvassa a kérést', thinking: 'gondolkodik', writing: 'kódot ír', done: 'kész, ellenőrzés'};
+  function phaseText(phase) { return PHASES[phase] || phase || '—'; }
+  const live = {queue: null, index: null, skew: 0, timer: 0, ticker: 0, busy: false, lastTail: ''};
+  function clock(seconds) {
+    const total = Math.max(0, Math.round(seconds)); const m = Math.floor(total / 60); const s = total % 60;
+    return m >= 60 ? Math.floor(m / 60) + ':' + String(m % 60).padStart(2, '0') + ':' + String(s).padStart(2, '0') : m + ':' + String(s).padStart(2, '0');
+  }
+  function elapsed(run) {
+    const started = run.started ? Date.parse(run.started) : NaN;
+    return Number.isNaN(started) ? ((run.progress || {}).elapsed || 0) : (Date.now() - started) / 1000 - live.skew;
+  }
+  async function post(path, body) {
+    return api(path, {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Frm-Client': 'local-ui'}, body: JSON.stringify(body || {})});
+  }
+  async function act(action) {
+    if (live.busy) return;
+    live.busy = true;
+    try { await action(); } catch (error) { setStatus(error.message); }
+    finally { live.busy = false; await pollQueue(); }
+  }
+  function stat(value, label) { return el('div', {class: 'stat'}, el('b', {text: value}), el('span', {text: label})); }
+  function runFinished(run) {
+    if (run.status === 'completed' && run.applied) return badge('applied');
+    if (run.status === 'completed' && run.proposal_status === 'needs_context') return badge('needs_context');
+    if (run.status === 'completed') return el('span', {class: 'badge', text: run.apply_error ? 'Javaslat, nem illeszthető be' : 'Átnézendő javaslat'});
+    return badge(run.status);
+  }
+  function duration(run) {
+    const a = Date.parse(run.started || ''), b = Date.parse(run.finished || '');
+    return Number.isNaN(a) || Number.isNaN(b) ? '—' : clock((b - a) / 1000);
+  }
+  function taskState(task, q) {
+    if (task.done) return ['Kész', 'ok'];
+    if (q && q.active && q.active.task_id === task.id && q.active.job_id === state.job) return ['Fut', 'run'];
+    if (q && q.queued.some(r => r.task_id === task.id && r.job_id === state.job)) return ['Sorban', 'run'];
+    if ((task.pending_tables || []).length) return ['Táblára vár', 'warn'];
+    const last = q && q.finished.find(r => r.task_id === task.id && r.job_id === state.job);
+    if (last && last.status === 'failed') return ['Sikertelen', 'bad'];
+    if (last && last.status === 'completed' && !last.applied) return ['Átnézendő', ''];
+    return ['Indítható', ''];
+  }
+  function renderQueue() {
+    const q = live.queue;
+    const target = $('queue');
+    if (!q) { render(target, el('h2', {text: 'AI-munkasor'}), el('p', {class: 'empty', text: 'Betöltés…'})); return; }
+    const settings = q.settings || {};
+    const toggle = (key, text) => el('label', {class: 'switch'}, el('input', {type: 'checkbox', checked: settings[key] ? true : null,
+      onchange: event => act(() => post('/api/assistant/settings', {url: settings.url, model: settings.model, num_ctx: settings.num_ctx,
+        num_predict: settings.num_predict, timeout: settings.timeout, auto_run: settings.auto_run, auto_apply: settings.auto_apply,
+        [key]: event.target.checked}))}), text);
+    const summary = live.index && live.index.auto;
+    const run = q.active;
+    const p = (run && run.progress) || null;
+    const tokens = p ? p.thinking_tokens + p.content_tokens : 0;
+    const budget = p && run.options && run.options.num_predict ? Math.min(100, Math.round(100 * tokens / run.options.num_predict)) + ' %' : '—';
+    const tasks = ((live.index && live.index.tasks) || []).concat((live.index && live.index.done_tasks) || []);
+    render(target,
+      el('div', {class: 'head'}, el('h2', {text: 'AI-munkasor'}),
+        toggle('auto_run', 'Indítás migrálás és táblamentés után'), toggle('auto_apply', 'Sikeres javaslat automatikus beillesztése')),
+      !settings.url ? el('div', {class: 'notice warn', text: 'Nincs mentett AI-kapcsolat: a migrátor felületén mentsd az Ollama-címet és a modellt (AI-kapcsolat mentése).'}) : null,
+      summary ? el('div', {class: 'stats'}, stat(summary.done + ' / ' + summary.total, 'kész (beillesztve)'), stat(String(summary.in_queue), 'sorban vagy fut'),
+        stat(String(summary.ready), 'indítható'), stat(String(summary.waiting_for_tables), 'táblaszerkezetre vár'), stat(String(summary.failed), 'sikertelen')) : null,
+      el('div', {class: 'row'},
+        state.job ? el('button', {type: 'button', class: 'primary', disabled: live.busy ? true : null,
+          onclick: () => act(() => post('/api/jobs/' + encodeURIComponent(state.job) + '/assistant/auto', {force: false}))}, 'Indítható triggerek futtatása') : null,
+        state.job ? el('button', {type: 'button', disabled: live.busy ? true : null,
+          onclick: () => act(() => post('/api/jobs/' + encodeURIComponent(state.job) + '/assistant/auto', {force: true}))}, 'Újrapróbálás (sikertelenek is)') : null,
+        run || q.queued.length ? el('button', {type: 'button', onclick: () => act(() => post('/api/assistant/cancel', {clear_queue: true}))}, 'Sor leállítása') : null),
+      run ? el('div', {class: 'live', 'aria-live': 'polite'},
+        el('div', {class: 'row'}, el('span', {class: 'dot'}), el('b', {text: run.method}),
+          el('span', {class: 'meta', text: (run.owner || '') + (run.event ? ' / ' + run.event : '') + ' · ' + (run.auto ? 'automatikus' : 'kézi') + ' · ' + ((run.options || {}).model || '')}),
+          el('span', {class: 'badge run', text: phaseText(p && p.phase)}),
+          el('button', {type: 'button', class: 'small', onclick: () => act(() => post('/api/assistant/cancel', {run_id: run.id}))}, 'Leállítás'),
+          run.exchange_id ? el('button', {type: 'button', class: 'small', onclick: () => { if (run.job_id !== state.job) return; showExchange(run.exchange_id); }}, 'Kérés megnyitása') : null),
+        el('div', {class: 'bar'}, el('i')),
+        el('div', {class: 'stats'}, stat(clock(elapsed(run)), 'eltelt idő'),
+          stat(p && p.first_token_seconds != null ? clock(p.first_token_seconds) : (p && p.phase === 'prompt' ? 'folyamatban' : '—'), 'prompt feldolgozása / első token'),
+          stat(String(tokens), 'generált token' + (p && p.thinking_tokens ? ' (gondolkodás ' + p.thinking_tokens + ')' : '')),
+          stat(p && p.tokens_per_second ? String(p.tokens_per_second) : '—', 'token / mp'), stat(budget, 'kimeneti keret felhasználva')),
+        p && p.tail ? el('pre', {id: 'live-tail', tabindex: '0', text: p.tail})
+          : el('p', {class: 'meta', text: 'CPU-n a kérés beolvasása a válasz előtt percekig is tarthat; az első token után itt látszik a válasz.'}),
+        p && p.thinking_tail ? textBlock('Gondolkodási szöveg (utolsó részlet)', p.thinking_tail, false, null, true) : null) : null,
+      el('div', {class: 'cols'},
+        el('div', {}, el('h3', {text: 'Sorban (' + q.queued.length + ')'}), q.queued.length
+          ? el('ol', {class: 'runs'}, q.queued.map(r => el('li', {}, r.method + ' ', el('span', {class: 'meta', text: (r.owner || '') + ' · ' + (r.auto ? 'automatikus' : 'kézi')}))))
+          : el('p', {class: 'empty', text: 'Üres.'})),
+        el('div', {}, el('h3', {text: 'Befejezett futások'}), q.finished.length
+          ? el('ul', {class: 'runs'}, q.finished.slice(0, 12).map(r => el('li', {}, el('span', {class: 'row'}, r.method, runFinished(r),
+              el('span', {class: 'meta', text: duration(r)}),
+              r.exchange_id && r.job_id === state.job ? el('button', {type: 'button', class: 'small', onclick: () => showExchange(r.exchange_id)}, 'Napló') : null),
+            r.error || r.apply_error ? el('div', {class: 'meta', text: (r.error || r.apply_error).slice(0, 240)}) : null)))
+          : el('p', {class: 'empty', text: 'Még nincs.'}))),
+      tasks.length ? el('details', {open: true}, el('summary', {}, 'Triggerek ebben a modulban (' + tasks.length + ')'),
+        el('div', {class: 'body tasks'}, tasks.map(task => { const [label, kind] = taskState(task, q);
+          return el('div', {class: 'task'}, el('span', {class: 'row'}, el('span', {class: 'title', text: task.method}), el('span', {class: 'badge ' + kind, text: label})),
+            el('span', {class: 'meta', text: (task.owner || '') + (task.event ? ' / ' + task.event : '') + ((task.pending_tables || []).length ? ' · táblák: ' + task.pending_tables.join(', ') : '')})); }))) : null);
+    const tail = document.getElementById('live-tail');
+    if (tail && p && p.tail !== live.lastTail) { tail.scrollTop = tail.scrollHeight; live.lastTail = p.tail; }
+  }
+  async function pollQueue() {
+    clearTimeout(live.timer);
+    let active = false;
+    try {
+      const before = live.queue && live.queue.active ? live.queue.active.id : null;
+      const finishedBefore = new Set(((live.queue && live.queue.finished) || []).map(r => r.id));
+      live.queue = await api('/api/assistant/queue');
+      live.skew = Date.now() / 1000 - live.queue.server_time;
+      active = Boolean(live.queue.active || live.queue.queued.length);
+      const changed = (live.queue.active ? live.queue.active.id : null) !== before || live.queue.finished.some(r => !finishedBefore.has(r.id));
+      if (state.job && (changed || !live.index)) {
+        try { live.index = await api('/api/jobs/' + encodeURIComponent(state.job) + '/assistant'); } catch { live.index = null; }
+        if (changed && finishedBefore.size) loadList().catch(() => null);
+      }
+      renderQueue();
+    } catch (error) { setStatus(error.message); }
+    live.timer = setTimeout(pollQueue, active ? 1000 : 5000);
+  }
+  live.ticker = setInterval(() => { if (live.queue && live.queue.active) {
+    const first = document.querySelector('#queue .live .stat b'); if (first) first.textContent = clock(elapsed(live.queue.active)); } }, 1000);
+
+  $('job').addEventListener('change', event => { state.job = event.target.value; state.task = ''; state.exchange = ''; updateUrl(); live.index = null; refresh(); pollQueue(); });
+  $('task').addEventListener('change', event => { state.task = event.target.value; updateUrl(); loadList().catch(error => setStatus(error.message)); });
+  $('refresh').addEventListener('click', refresh);
+  $('preview').addEventListener('click', previewPrompt);
+  renderQueue();
+  loadJobs().then(() => { pollQueue(); return refresh(); }).catch(error => setStatus('A migrátor API-ja nem érhető el: ' + error.message));
+})();
+</script>
+</body>
+</html>

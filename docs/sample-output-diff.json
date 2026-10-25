@@ -1,0 +1,192 @@
+[
+  {
+    "sample": "customer",
+    "java_files_compared": 14,
+    "java_unchanged": false,
+    "java_changes_accepted": true,
+    "added": [
+      "BACKEND_TASKS.md",
+      "analysis/backend-handoff.json",
+      "analysis/backend-schema.example.json"
+    ],
+    "removed": [],
+    "modified": [
+      "analysis/effective-config.json",
+      "analysis/form.ir.json",
+      "analysis/summary.json",
+      "backend/DPS/UgyfelekServiceImpl.java",
+      "generated-files.json",
+      "migration-report.md"
+    ]
+  },
+  {
+    "sample": "review",
+    "java_files_compared": 14,
+    "java_unchanged": false,
+    "java_changes_accepted": true,
+    "added": [
+      "BACKEND_TASKS.md",
+      "analysis/backend-handoff.json",
+      "analysis/backend-schema.example.json"
+    ],
+    "removed": [],
+    "modified": [
+      "analysis/effective-config.json",
+      "analysis/form.ir.json",
+      "analysis/issues-summary.json",
+      "analysis/issues.json",
+      "analysis/summary.json",
+      "backend/DPS/AtultetendoModulServiceImpl.java",
+      "generated-files.json",
+      "migration-report.md"
+    ]
+  },
+  {
+    "sample": "vasarloLekerdezo",
+    "java_files_compared": 14,
+    "java_unchanged": false,
+    "java_changes_accepted": true,
+    "added": [
+      "BACKEND_TASKS.md",
+      "analysis/backend-handoff.json",
+      "analysis/backend-schema.example.json"
+    ],
+    "removed": [],
+    "modified": [
+      "analysis/effective-config.json",
+      "analysis/form.ir.json",
+      "analysis/summary.json",
+      "backend/DPS/VasarloLekerdezoServiceImpl.java",
+      "generated-files.json",
+      "migration-report.md"
+    ]
+  },
+  {
+    "sample": "multi-input",
+    "java_files_compared": 14,
+    "java_unchanged": false,
+    "java_changes_accepted": true,
+    "added": [
+      "BACKEND_TASKS.md",
+      "analysis/backend-handoff.json",
+      "analysis/backend-schema.example.json"
+    ],
+    "removed": [],
+    "modified": [
+      "analysis/effective-config.json",
+      "analysis/form.ir.json",
+      "analysis/summary.json",
+      "backend/DPS/UgyfelekServiceImpl.java",
+      "generated-files.json",
+      "migration-report.md"
+    ]
+  },
+  {
+    "sample": "inherited-checkbox",
+    "java_files_compared": 14,
+    "java_unchanged": true,
+    "java_changes_accepted": false,
+    "added": [
+      "BACKEND_TASKS.md",
+      "analysis/backend-handoff.json",
+      "analysis/backend-schema.example.json"
+    ],
+    "removed": [],
+    "modified": [
+      "analysis/effective-config.json",
+      "analysis/form.ir.json",
+      "analysis/summary.json",
+      "generated-files.json",
+      "migration-report.md"
+    ]
+  },
+  {
+    "sample": "ui-features",
+    "java_files_compared": 14,
+    "java_unchanged": false,
+    "java_changes_accepted": true,
+    "added": [
+      "BACKEND_TASKS.md",
+      "analysis/backend-handoff.json",
+      "analysis/backend-schema.example.json"
+    ],
+    "removed": [],
+    "modified": [
+      "analysis/effective-config.json",
+      "analysis/form.ir.json",
+      "analysis/summary.json",
+      "backend/DPS/FeluletiElemekServiceImpl.java",
+      "generated-files.json",
+      "migration-report.md"
+    ]
+  },
+  {
+    "sample": "backend-query",
+    "java_files_compared": 0,
+    "java_unchanged": false,
+    "java_changes_accepted": false,
+    "added": [
+      "BACKEND_TASKS.md",
+      "INTEGRATION.md",
+      "analysis/action-plan.json",
+      "analysis/ai-advice.json",
+      "analysis/attribute-inventory.json",
+      "analysis/backend-handoff.json",
+      "analysis/backend-plan.json",
+      "analysis/backend-schema.example.json",
+      "analysis/discovery/form-explorer.html",
+      "analysis/discovery/form-map.json",
+      "analysis/discovery/form-map.md",
+      "analysis/discovery/sources/o13-1ea78fc93de3.sql",
+      "analysis/discovery/sources/o17-28310387f6ac.sql",
+      "analysis/effective-config.json",
+      "analysis/effective-source.xml",
+      "analysis/external-code.json",
+      "analysis/form.ir.json",
+      "analysis/inheritance.json",
+      "analysis/inputs.json",
+      "analysis/issues-summary.json",
+      "analysis/issues.json",
+      "analysis/object-inventory.json",
+      "analysis/olb-catalog.json",
+      "analysis/original-triggers/0000-1ea78fc93de3.sql",
+      "analysis/source.xml",
+      "analysis/summary.json",
+      "analysis/ui-model.json",
+      "backend/CL/QueryDemoConstants.java",
+      "backend/CL/QueryDemoDtos.java",
+      "backend/CL/QueryDemoRestClient.java",
+      "backend/CL/QueryDemoRestClientImpl.java",
+      "backend/DPS/QueryDemoController.java",
+      "backend/DPS/QueryDemoControllerBase.java",
+      "backend/DPS/QueryDemoControllerImpl.java",
+      "backend/DPS/QueryDemoService.java",
+      "backend/DPS/QueryDemoServiceImpl.java",
+      "backend/WBS/QueryDemoController.java",
+      "backend/WBS/QueryDemoControllerBase.java",
+      "backend/WBS/QueryDemoControllerImpl.java",
+      "backend/WBS/QueryDemoService.java",
+      "backend/WBS/QueryDemoServiceImpl.java",
+      "frontend/backendKeresesiMinta/action-endpoints.ts",
+      "frontend/backendKeresesiMinta/actions.ts",
+      "frontend/backendKeresesiMinta/blocks/filters.component.ts",
+      "frontend/backendKeresesiMinta/blocks/filters/form-structure.ts",
+      "frontend/backendKeresesiMinta/blocks/header.component.ts",
+      "frontend/backendKeresesiMinta/blocks/header/form-structure.ts",
+      "frontend/backendKeresesiMinta/blocks/lines.component.ts",
+      "frontend/backendKeresesiMinta/blocks/lines/form-structure.ts",
+      "frontend/backendKeresesiMinta/component.html",
+      "frontend/backendKeresesiMinta/component.scss",
+      "frontend/backendKeresesiMinta/component.ts",
+      "frontend/backendKeresesiMinta/endpoints.ts",
+      "frontend/backendKeresesiMinta/form-structure.ts",
+      "frontend/backendKeresesiMinta/i18n/backendKeresesiMinta.hu.json",
+      "frontend/backendKeresesiMinta/model.ts",
+      "frontend/backendKeresesiMinta/surfaces.ts",
+      "generated-files.json",
+      "migration-report.md"
+    ],
+    "removed": [],
+    "modified": []
+  }
+]

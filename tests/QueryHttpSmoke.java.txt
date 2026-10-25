@@ -1,0 +1,116 @@
+import hu.company.features.querydemo.cl.QueryDemoConstants;
+import hu.company.features.querydemo.cl.QueryDemoDtos.*;
+import hu.company.features.querydemo.cl.QueryDemoRestClient;
+import hu.company.features.querydemo.dps.QueryDemoServiceImpl;
+import java.math.BigDecimal;
+import java.lang.reflect.Proxy;
+import java.lang.reflect.InvocationTargetException;
+import java.sql.ResultSet;
+import java.net.InetSocketAddress;
+import java.net.URI;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
+import com.sun.net.httpserver.HttpServer;
+import jakarta.validation.Validator;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
+import org.springframework.jdbc.core.RowMapper;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.jdbc.core.namedparam.SqlParameterSource;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
+import org.springframework.web.client.RestClient;
+import org.springframework.web.server.ResponseStatusException;
+import org.springframework.aop.framework.ProxyFactory;
+import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
+import org.springframework.transaction.interceptor.TransactionInterceptor;
+import org.springframework.transaction.support.AbstractPlatformTransactionManager;
+import org.springframework.transaction.support.DefaultTransactionStatus;
+import org.springframework.transaction.TransactionDefinition;
+
+/** Real MVC/JSON/HTTP/transactions; JDBC boundary asserts SQL and bind values. No Oracle connection. */
+public class QueryHttpSmoke {
+    static void check(boolean condition, String text) { HttpLayersSmoke.check(condition, text); }
+    public static void main(String[] args) throws Exception {
+        var jdbcCalls = new AtomicInteger();
+        String hostile = "x' OR 1=1 --";
+        var jdbc = new NamedParameterJdbcTemplate(new DriverManagerDataSource()) {
+            @Override public <T> List<T> query(String sql, SqlParameterSource p, RowMapper<T> mapping) {
+                jdbcCalls.incrementAndGet();
+                check(sql.contains("FROM T_LINES WHERE ") && sql.contains("HEADER_ID = :q2"), "Detail query lost master scope: " + sql);
+                check(sql.contains("AMOUNT >= :q0") && sql.contains("CODE LIKE NVL(:q1, '%')"), "Query criteria missing");
+                check(sql.contains("ORDER BY AMOUNT DESC, ID ASC NULLS LAST"), "Original sort changed");
+                check(!sql.contains(hostile), "Client value interpolated into SQL");
+                check(new BigDecimal("3.125").equals(p.getValue("q0")), "Decimal criterion lost precision");
+                check(hostile.equals(p.getValue("q1")), "String criterion was modified");
+                if (p.getValue("q2") == null) return List.of();
+                check(new BigDecimal("9007199254740993").equals(p.getValue("q2")), "Master key lost precision");
+                Object[] values = {new BigDecimal("2"), p.getValue("q2"), "abc", new BigDecimal("5.25")};
+                var rs = (ResultSet) Proxy.newProxyInstance(ResultSet.class.getClassLoader(), new Class<?>[]{ResultSet.class},
+                    (proxy,method,params) -> values[(Integer)params[0]-1]);
+                try { return List.of(mapping.mapRow(rs,0)); } catch (java.sql.SQLException error) { throw new AssertionError(error); }
+            }
+        };
+        var validator = (Validator) Proxy.newProxyInstance(Validator.class.getClassLoader(),new Class<?>[]{Validator.class},
+            (proxy,method,values) -> { if (method.getName().equals("validate")) return Set.of(); throw new UnsupportedOperationException(); });
+        var accessCalls = new AtomicInteger();
+        QueryDemoRestClient.Access access = (block,operation) -> { check(block.equals("LINES"), "Wrong block"); accessCalls.incrementAndGet(); };
+        var raw = new QueryDemoServiceImpl(jdbc,validator,access);
+        var transactions = new AtomicInteger();
+        var tx = new AbstractPlatformTransactionManager() {
+            @Override protected Object doGetTransaction() { return new Object(); }
+            @Override protected void doBegin(Object obj,TransactionDefinition def) { check(def.isReadOnly(),"Search not read-only"); transactions.incrementAndGet(); }
+            @Override protected void doCommit(DefaultTransactionStatus status) {}
+            @Override protected void doRollback(DefaultTransactionStatus status) {}
+        };
+        var proxy = new ProxyFactory(raw); proxy.setProxyTargetClass(true);
+        proxy.addAdvice(new TransactionInterceptor(tx,new AnnotationTransactionAttributeSource()));
+        var dps = HttpLayersSmoke.mvc(new hu.company.features.querydemo.dps.QueryDemoControllerImpl(
+            (hu.company.features.querydemo.dps.QueryDemoService)proxy.getProxy()));
+        var server = HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+        server.createContext("/internal",exchange -> {
+            try {
+                var req = MockMvcRequestBuilders.request(HttpMethod.valueOf(exchange.getRequestMethod()),
+                    URI.create(exchange.getRequestURI().toString().substring("/internal".length())));
+                byte[] incoming = exchange.getRequestBody().readAllBytes();
+                if (incoming.length>0) req.contentType("application/json").content(incoming);
+                var response = dps.perform(req).andReturn().getResponse(); byte[] bytes = response.getContentAsByteArray();
+                exchange.getResponseHeaders().set("Content-Type","application/json");
+                exchange.sendResponseHeaders(response.getStatus(),bytes.length==0 ? -1 : bytes.length);
+                exchange.getResponseBody().write(bytes);
+            } catch(Exception error) { throw new RuntimeException(error); } finally { exchange.close(); }
+        });
+        server.start();
+        try {
+            var mapper=HttpLayersSmoke.mapper;
+            var builder=RestClient.builder().messageConverters(c -> {c.clear(); c.add(new MappingJackson2HttpMessageConverter(mapper));});
+            var wbs=HttpLayersSmoke.mvc(new hu.company.features.querydemo.wbs.QueryDemoControllerImpl(
+                new hu.company.features.querydemo.wbs.QueryDemoServiceImpl(builder,access,"http://127.0.0.1:"+server.getAddress().getPort()+"/internal")));
+            var criteria=mapper.createObjectNode().put("filtersMinAmount","3.125").put("filtersPrefix",hostile).put("headerId","9007199254740993");
+            var body=mapper.createObjectNode().put("offset",0).put("limit",20);body.set("criteria",criteria);
+            String path=QueryDemoConstants.BASE_PATH+QueryDemoConstants.LINES_SEARCH_PATH;
+            var rows=HttpLayersSmoke.request(wbs,HttpMethod.POST,path,body,200).get("rows");
+            check(rows.size()==1 && rows.get(0).get("headerId").asText().equals("9007199254740993"),"Typed search transport");
+            check(rows.get(0).get("label").asText().equals("ABC"),"Local POST-QUERY procedure did not run");
+            criteria.putNull("headerId");
+            check(HttpLayersSmoke.request(wbs,HttpMethod.POST,path,body,200).get("rows").isEmpty(),"Missing master must not return unrelated rows");
+            HttpLayersSmoke.request(wbs,HttpMethod.GET,QueryDemoConstants.BASE_PATH+QueryDemoConstants.LINES_LIST_PATH,null,501);
+            body.put("limit",201);HttpLayersSmoke.request(wbs,HttpMethod.POST,path,body,422);
+            body.put("limit",20).putNull("criteria");HttpLayersSmoke.request(wbs,HttpMethod.POST,path,body,422);
+            check(jdbcCalls.get()==2,"Invalid/unscoped calls reached JDBC");
+            check(accessCalls.get()==10,"Read/search must check WBS and DPS access");
+            check(transactions.get()==5,"Search bypassed Spring proxy transaction");
+            // Exercise emitted exact numeric range checks independently of the DML guard.
+            var field=QueryDemoServiceImpl.class.getDeclaredField("linesData");field.setAccessible(true);Object data=field.get(raw);
+            var validate=data.getClass().getDeclaredMethod("validate",LinesRow.class);validate.setAccessible(true);
+            for(String amount:new String[]{"1.24","1000000.51"}) {
+                var row=new LinesRow();row.amount=new BigDecimal(amount);
+                try {validate.invoke(data,row);throw new AssertionError("Numeric bound ignored");}
+                catch(InvocationTargetException error) {check(error.getCause() instanceof ResponseStatusException && ((ResponseStatusException)error.getCause()).getStatusCode().value()==422,"Wrong numeric bound rejection");}
+            }
+            var edge=new LinesRow();edge.amount=new BigDecimal("1.25");validate.invoke(data,edge);
+            System.out.println("OK: typed search HTTP, exact NUMBER binds, master scope, immutable SQL, local helper, numeric bounds, read-only proxies, 501/422 guards");
+        } finally {server.stop(0);}
+    }
+}

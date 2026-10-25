@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "newProjectRoot": "projects",
+  "projects": {
+    "migrator": {
+      "projectType": "application",
+      "root": "",
+      "sourceRoot": "src",
+      "architect": {
+        "build": {
+          "builder": "@angular/build:application",
+          "options": {
+            "browser": "src/main.ts",
+            "index": "src/index.html",
+            "tsConfig": "tsconfig.app.json",
+            "styles": [
+              "src/styles.css"
+            ],
+            "outputPath": "../web-dist",
+            "assets": []
+          },
+          "configurations": {
+            "production": {
+              "outputHashing": "all",
+              "optimization": true,
+              "sourceMap": false,
+              "budgets": [
+                {
+                  "type": "initial",
+                  "maximumWarning": "4MB",
+                  "maximumError": "6MB"
+                }
+              ]
+            },
+            "development": {
+              "optimization": false,
+              "sourceMap": true
+            }
+          },
+          "defaultConfiguration": "production"
+        },
+        "serve": {
+          "builder": "@angular/build:dev-server",
+          "configurations": {
+            "production": {
+              "buildTarget": "migrator:build:production"
+            },
+            "development": {
+              "buildTarget": "migrator:build:development"
+            }
+          },
+          "defaultConfiguration": "development"
+        }
+      }
+    }
+  }
+}

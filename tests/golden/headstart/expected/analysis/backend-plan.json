@@ -1,0 +1,238 @@
+{
+  "version": 2,
+  "layout": "module-service-v2",
+  "module_class": "Teszt",
+  "files": {
+    "CL": [
+      "CommonMigrateTools.java",
+      "TesztConstants.java",
+      "TesztDtos.java",
+      "TesztRestClient.java",
+      "TesztRestClientImpl.java"
+    ],
+    "DPS": [
+      "TesztController.java",
+      "TesztControllerImpl.java",
+      "TesztService.java",
+      "TesztServiceImpl.java"
+    ],
+    "WBS": [
+      "TesztController.java",
+      "TesztControllerImpl.java",
+      "TesztService.java",
+      "TesztServiceImpl.java"
+    ]
+  },
+  "dto_selection": [
+    {
+      "block": "V_ELEK_ADLAP",
+      "dto": null,
+      "reason": "No CRUD contract. Control values stay in ActionRequest.blocks when an action needs them.",
+      "fields": []
+    },
+    {
+      "block": "AIT",
+      "dto": "AitRow",
+      "reason": "CRUD contract; includes hidden keys and rule inputs",
+      "fields": [
+        "AIT_KULCS",
+        "AIT_TIPUS",
+        "AIT_STATUS",
+        "AIT_MEGJ",
+        "L_URES_3"
+      ]
+    },
+    {
+      "block": "CGNV$W01_1",
+      "dto": null,
+      "reason": "No CRUD contract. Control values stay in ActionRequest.blocks when an action needs them.",
+      "fields": []
+    },
+    {
+      "block": "CALENDAR",
+      "dto": null,
+      "reason": "Keretrendszer-blokk (frm_forms/data/framework-catalog.json): Headstart naptár-segédablak: a dátummezők natív naptárvezérlője váltja ki. DatabaseDataBlock=true, de nincs QueryDataSourceName/DMLDataTargetName: nincs mit lekérdezni vagy menteni, ezért nem készül backend-végpont. Valódi táblánál add meg a schema.json blocks.CALENDAR.table értékét.",
+      "fields": []
+    },
+    {
+      "block": "QMS$TRANS_ERRORS",
+      "dto": null,
+      "reason": "Keretrendszer-blokk (frm_forms/data/framework-catalog.json): Headstart tranzakciós hibakonzol: a fogadó alkalmazás hibakezelése váltja ki. DatabaseDataBlock=true, de nincs QueryDataSourceName/DMLDataTargetName: nincs mit lekérdezni vagy menteni, ezért nem készül backend-végpont. Valódi táblánál add meg a schema.json blocks.QMS$TRANS_ERRORS.table értékét.",
+      "fields": []
+    }
+  ],
+  "module_gate": {
+    "switch": "MODULE_REVIEWED",
+    "required": true,
+    "reasons": [
+      "Migrációs váz: az összes adatbázis-művelet tiltott az ellenőrzött implementációig."
+    ],
+    "codes": [
+      "SCAFFOLD_REVIEW_REQUIRED"
+    ]
+  },
+  "endpoints": [
+    {
+      "method": "updateAit",
+      "http": "PUT",
+      "constant": "TesztConstants.AIT_UPDATE_PATH",
+      "implemented": false,
+      "block": "AIT",
+      "operation": "update",
+      "ready_after_module_review": false,
+      "blockers": [
+        "A WHERE olvasási SQL-re lefordítva; írás előtt a rekordszűrést és szervercontextet külön ellenőrizni kell.",
+        "AIT:POST-QUERY: POST-QUERY nem írhat adatbázismezőt ebben a snapshot-alapú adapterben. Átfuttatás az adatbázisban sem lehetséges: A trigger ebben az eseményben nem visszaírható mezőt ír: AIT.AIT_MEGJ (lekérdezett adatbázismező, kulcs vagy nem módosítható oszlop).",
+        "Írás nincs engedélyezve a schema.json-ban (writable: true)."
+      ]
+    },
+    {
+      "method": "searchAit",
+      "http": "POST",
+      "constant": "TesztConstants.AIT_SEARCH_PATH",
+      "implemented": false,
+      "block": "AIT",
+      "operation": "search",
+      "ready_after_module_review": false,
+      "blockers": [
+        "AIT:POST-QUERY: POST-QUERY nem írhat adatbázismezőt ebben a snapshot-alapú adapterben. Átfuttatás az adatbázisban sem lehetséges: A trigger ebben az eseményben nem visszaírható mezőt ír: AIT.AIT_MEGJ (lekérdezett adatbázismező, kulcs vagy nem módosítható oszlop)."
+      ]
+    },
+    {
+      "method": "lovInptip",
+      "http": "POST",
+      "constant": "TesztConstants.LOV_INPTIP_PATH",
+      "implemented": false,
+      "block": "V_ELEK_ADLAP",
+      "operation": "lov",
+      "lov": "INPTIP",
+      "ready_after_module_review": true,
+      "blockers": []
+    },
+    {
+      "method": "commitForm",
+      "http": "POST",
+      "constant": "TesztConstants.COMMIT_FORM_PATH",
+      "implemented": false,
+      "block": "@FORM",
+      "operation": "commit",
+      "ready_after_module_review": true,
+      "blockers": [],
+      "blocks": [
+        "AIT"
+      ]
+    }
+  ],
+  "skipped_blocks": [
+    {
+      "block": "CALENDAR",
+      "reason": "Keretrendszer-blokk (frm_forms/data/framework-catalog.json): Headstart naptár-segédablak: a dátummezők natív naptárvezérlője váltja ki. DatabaseDataBlock=true, de nincs QueryDataSourceName/DMLDataTargetName: nincs mit lekérdezni vagy menteni, ezért nem készül backend-végpont. Valódi táblánál add meg a schema.json blocks.CALENDAR.table értékét."
+    },
+    {
+      "block": "QMS$TRANS_ERRORS",
+      "reason": "Keretrendszer-blokk (frm_forms/data/framework-catalog.json): Headstart tranzakciós hibakonzol: a fogadó alkalmazás hibakezelése váltja ki. DatabaseDataBlock=true, de nincs QueryDataSourceName/DMLDataTargetName: nincs mit lekérdezni vagy menteni, ezért nem készül backend-végpont. Valódi táblánál add meg a schema.json blocks.QMS$TRANS_ERRORS.table értékét."
+    }
+  ],
+  "skipped_actions": [
+    {
+      "owner": "CGNV$W01_1.PB_RESZLETEK",
+      "event": "WHEN-BUTTON-PRESSED",
+      "trigger_id": "o32",
+      "category": "frontend",
+      "reason": "Felismert Forms-felületművelet; a frontend/host adapter feladata.",
+      "source_sha256": "e9a4f9392210c5d001119c0ae580c610880698a09fd0e8cdaacdfac0204f1041",
+      "source_file": "analysis/discovery/sources/o32-e9a4f9392210.sql"
+    }
+  ],
+  "lovs": [
+    {
+      "name": "INPTIP",
+      "record_group": "RG_INPTIP",
+      "users": [
+        "V_ELEK_ADLAP.UBI_INPTIP_KOD"
+      ],
+      "display_column": "KOD",
+      "binds": [],
+      "blockers": []
+    }
+  ],
+  "api": {
+    "constants_class": "TesztConstants",
+    "base_path": "/api/forms/teszt",
+    "paths": {
+      "AIT_UPDATE_PATH": "/ait/update",
+      "AIT_SEARCH_PATH": "/ait/query/search",
+      "LOV_INPTIP_PATH": "/lov/inptip",
+      "COMMIT_FORM_PATH": "/commit"
+    },
+    "blocks": {
+      "AIT": {
+        "fields": {
+          "AIT_KULCS": "aitKulcs",
+          "AIT_TIPUS": "aitTipus",
+          "AIT_STATUS": "aitStatus",
+          "AIT_MEGJ": "aitMegj",
+          "L_URES_3": "lUres3"
+        },
+        "operations": {
+          "update": {
+            "constant": "AIT_UPDATE_PATH",
+            "http": "PUT"
+          },
+          "search": {
+            "constant": "AIT_SEARCH_PATH",
+            "http": "POST",
+            "criteria": [
+              {
+                "source": "V_ELEK_ADLAP.UBI_INPTIP_KOD",
+                "field": "vElekAdlapUbiInptipKod"
+              }
+            ]
+          }
+        },
+        "ui_disabled": {
+          "delete": "AIT:KEY-DELREC"
+        }
+      }
+    },
+    "lovs": {
+      "INPTIP": {
+        "constant": "LOV_INPTIP_PATH",
+        "display_column": "KOD",
+        "binds": [],
+        "ready": true
+      }
+    },
+    "actions": {},
+    "commit": {
+      "constant": "COMMIT_FORM_PATH",
+      "blocks": {
+        "AIT": {
+          "request": "changesAit",
+          "result": "rowsAit",
+          "operations": [
+            "update"
+          ]
+        }
+      }
+    }
+  },
+  "skipped_operations": [
+    {
+      "block": "AIT",
+      "operation": "list",
+      "reason": "A WHERE Forms-mezőre hivatkozik: paraméter nélküli lista nem készül, a searchAit váltja ki."
+    },
+    {
+      "block": "AIT",
+      "operation": "create",
+      "reason": "InsertAllowed=false: a Forms-blokk nem enged beszúrást."
+    },
+    {
+      "block": "AIT",
+      "operation": "delete",
+      "reason": "DeleteAllowed=false: a Forms-blokk nem enged törlést."
+    }
+  ],
+  "regeneration": "ServiceImpl and ControllerImpl are CREATE_ONCE. Fresh candidates and changes: analysis/backend-regeneration/."
+}

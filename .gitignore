@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+.angular/
+out-tsc/
+local-data/
+.frm-ai-cache/
+build/
+*.egg-info/
