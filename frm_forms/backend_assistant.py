@@ -479,13 +479,15 @@ def validate_response(value: object) -> dict:
     return value
 
 
-def common_tools(output: Path) -> str | None:
-    """Import of the shared PlsqlValues helper when the module has CommonMigrateTools."""
+def common_tool_imports(output: Path) -> dict[str, str]:
+    """Simple name -> import of the CommonMigrateTools helpers (SqlValues, DbCalls ...) the module has."""
     path = safe_file(output, "backend/CL/CommonMigrateTools.java")
-    if not path.is_file(): return None
+    if not path.is_file(): return {}
     text = path.read_text(encoding="utf-8")
     package = re.search(r"^\s*package\s+([\w.]+)\s*;", text, re.M)
-    return package.group(1) + ".CommonMigrateTools.PlsqlValues" if package and "class PlsqlValues" in text else None
+    if not package: return {}
+    return {name: package.group(1) + ".CommonMigrateTools." + name
+            for name in re.findall(r"^    public static final class (\w+)", text, re.M)}
 
 
 def render_candidate(service: str, packet: dict, response: dict) -> str:
@@ -546,6 +548,8 @@ def finish_candidate(result: str, service: str, packet: dict, response: dict) ->
         result = result[:last] + "\n    // Java asszisztens: " + packet["id"] + "\n" + helpers + "\n" + result[last:]
     mapping = dict(java_tidy_known())
     mapping.update(packet.get("formatting_imports") or {})
+    # SqlValues.concat / nvl (the prompt's Oracle semantics), DbCalls of the database routine methods ...
+    mapping.update(packet.get("common_tool_imports") or {})
     if packet.get("plsql_values_import"):
         mapping["PlsqlValues"] = packet["plsql_values_import"]
     return ensure_imports(result, mapping)
@@ -678,7 +682,8 @@ def prepare(output: Path, task_id: str, options: Options) -> dict:
         raise MigrationError("Előbb add meg a hiányzó táblaszerkezetet az Adatbázistáblák panelen: " + ", ".join(packet["pending_tables"]))
     service = safe_file(output, packet["target"]).read_text(encoding="utf-8")
     packet["service_package_source"] = service[:service.find("public class") if "public class" in service else 1000]
-    packet["plsql_values_import"] = common_tools(output)
+    packet["common_tool_imports"] = common_tool_imports(output)
+    packet["plsql_values_import"] = packet["common_tool_imports"].get("PlsqlValues")
     from . import assistant_context, jpa_assistant
     persistence = jpa_assistant.plan(packet, output) if options.data_access == "jpa" else []
     helpers, notes = data_models(packet) if options.data_access == "jdbc" else ({}, [])
@@ -1119,7 +1124,8 @@ def apply_proposal(output: Path, proposal_id: str, reviewed: bool = False) -> di
     response = validate_response(record["response"])
     source = safe_file(output, packet["target"]).read_text(encoding="utf-8")
     packet["service_package_source"] = source[:source.find("public class") if "public class" in source else 1000]
-    packet["plsql_values_import"] = common_tools(output)
+    packet["common_tool_imports"] = common_tool_imports(output)
+    packet["plsql_values_import"] = packet["common_tool_imports"].get("PlsqlValues")
     # Reconstruct rather than trusting paths or editable files from a model ZIP.
     expected_files = {packet["target"]: render_candidate(source, packet, response)}
     if record.get("data_access") == "jpa":
