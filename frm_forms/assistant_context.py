@@ -45,6 +45,9 @@ JPA_RULE = ("Database access only through the repositories listed below. Write t
             "   The repository fields are already injected into the service.")
 NO_TABLE_RULE = ("No database table is available to this method. If the logic needs database access (a table or\n"
                  "   a sequence), write MISSING: and name it.")
+# The database routines the Forms code calls (db_routines): the migrator adds their typed methods to the service.
+ROUTINE_RULE = ("\n   The database routines of the Forms code run in Oracle through the generated methods listed below:\n"
+                "   call those methods (the only allowed PL/SQL calls); never re-implement or skip a routine.")
 JDBC_RULE = ("Database access: use the service's existing `jdbc` field (NamedParameterJdbcTemplate) with named,\n"
              "   bound parameters{jdbc_helpers}; never concatenate values into SQL.")
 PLSQL_VALUES = ("\n   Helpers: PlsqlValues.text(request.blocks(), \"BLOCK\", \"ITEM\"), PlsqlValues.number(...) returns\n"
@@ -185,11 +188,12 @@ HOOK_HINTS = [
 
 
 def rules(data_access: str = "jpa", has_tables: bool = True, plsql_values: bool = True, jdbc_helpers: bool = False,
-          action_api: bool = True) -> str:
+          action_api: bool = True, routines: bool = False) -> str:
     if data_access == "jpa":
         data_rule = JPA_RULE if has_tables else NO_TABLE_RULE
     else:
         data_rule = JDBC_RULE.replace("{jdbc_helpers}", " and the generated helpers below where they fit" if jdbc_helpers else "")
+    data_rule += ROUTINE_RULE if routines else ""
     # Plain replacement: the rules quote Java code with literal braces.
     text = RULES.replace("{data_rule}", data_rule).replace("{helpers}", PLSQL_VALUES if plsql_values else "")
     if not action_api:
@@ -201,6 +205,7 @@ def rules(data_access: str = "jpa", has_tables: bool = True, plsql_values: bool 
 def hook_rules(packet: dict, data_access: str, has_tables: bool) -> str:
     hook = packet.get("hook") or {}
     data_rule = (JPA_RULE if has_tables else NO_TABLE_RULE) if data_access == "jpa" else JDBC_RULE.replace("{jdbc_helpers}", "")
+    data_rule += ROUTINE_RULE if packet.get("db_routines") else ""
     if hook.get("kind") == "commit":
         return COMMIT_RULES.replace("{data_rule}", data_rule).replace("{event}", hook.get("event", ""))
     event = hook.get("event", "")
@@ -347,7 +352,7 @@ def build(packet: dict, persistence: list[dict], helpers: dict, options, *, plsq
         hint_kind = "hook" if hook_kind == "record" else "commit"
     else:
         parts = ["Rewrite this Java method so that it implements the original Oracle Forms code in plain Java.",
-                 rules(data_access, bool(used), plsql_values, bool(helpers), action_api)]
+                 rules(data_access, bool(used), plsql_values, bool(helpers), action_api, bool(packet.get("db_routines")))]
         if query_api:
             target = (packet.get("endpoint") or {}).get("query_block") or "target"
             block = next((b for b in packet.get("blocks", []) if b.get("name") == target), {})
@@ -362,6 +367,13 @@ def build(packet: dict, persistence: list[dict], helpers: dict, options, *, plsq
     found = hints(forms_code(packet, method), hint_kind)
     if found:
         parts.append("Forms -> Java for this code:\n" + "\n".join("- " + line for line in found))
+    routines = packet.get("db_routines") or []
+    if routines:
+        parts.append("Database routine methods (generated; call them, do not write them):\n"
+                     + "\n".join("- " + r["describe"] for r in routines))
+    if packet.get("unavailable_routines"):
+        parts.append("Called database routines without a method: " + "; ".join(packet["unavailable_routines"])
+                     + ". If the logic needs one, write MISSING: and name it; never re-implement a database routine.")
     if used:
         lines = ["Repositories:"]
         for p in used:
