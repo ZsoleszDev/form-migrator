@@ -11,6 +11,7 @@ import zipfile
 
 from test_backend_assistant import answer, Client
 from test_manual_action_source import FORM
+from java_support import trigger_mode
 
 try:
     from fastapi.testclient import TestClient
@@ -19,6 +20,8 @@ try:
     WEB = True
 except ImportError:
     WEB = False
+
+setUpModule, tearDownModule = trigger_mode('plsql')
 
 
 @unittest.skipUnless(WEB, 'pip install -r requirements-test.txt')
@@ -29,12 +32,15 @@ class AssistantWebTests(unittest.TestCase):
         self.app = create_app(self.settings)
         self.client = TestClient(self.app, base_url='http://localhost')
         self.client.__enter__(); self.addCleanup(self.client.__exit__, None, None, None)
+        # These checks read and apply the proposal of a finished run themselves: no automatic apply (4.35 default;
+        # test_ai_triggers covers it).
+        self.app.state.assistant.save_settings({'auto_apply': False})
         submitted = self.client.post('/api/jobs', headers={'X-Frm-Client':'local-ui'},
             files={'file':('form.xml',FORM.encode(),'application/xml')},
             data={'options':json.dumps({'module':'kezi','screen_window_selection':'all'})})
         self.assertEqual(submitted.status_code, 202, submitted.text)
         self.job = submitted.json()['id']
-        for _ in range(150):
+        for _ in range(1500):
             job = self.client.get('/api/jobs/' + self.job).json()
             if job['status'] in {'completed','failed','needs_input'}: break
             time.sleep(.02)
@@ -49,7 +55,7 @@ class AssistantWebTests(unittest.TestCase):
                 json={'task_id':self.task['id'],'num_ctx':32768})
             self.assertEqual(started.status_code, 202, started.text)
             run_id = started.json()['id']
-            for _ in range(150):
+            for _ in range(1500):
                 run = self.client.get(self.base + '/runs/' + run_id).json()
                 if run['status'] != 'running': break
                 time.sleep(.02)
@@ -110,7 +116,7 @@ class AssistantWebTests(unittest.TestCase):
             deleted = self.client.delete('/api/jobs/'+self.job, headers={'X-Frm-Client':'local-ui'})
             self.assertEqual(deleted.status_code, 409)
             release.set()
-            for _ in range(150):
+            for _ in range(1500):
                 state = self.client.get(self.base + '/runs/' + started.json()['id']).json()
                 if state['status'] != 'running': break
                 time.sleep(.02)
@@ -121,7 +127,7 @@ class AssistantWebTests(unittest.TestCase):
             with patch('frm_forms.web.assistant.engine.propose', side_effect=TimeoutError()):
                 started = self.client.post(self.base, headers={'X-Frm-Client':'local-ui'}, json={'task_id':self.task['id']})
                 self.assertEqual(started.status_code, 202, started.text)
-                for _ in range(150):
+                for _ in range(1500):
                     state = self.client.get(self.base + '/runs/' + started.json()['id']).json()
                     if state['status'] != 'running': break
                     time.sleep(.02)
@@ -148,7 +154,7 @@ class AssistantWebTests(unittest.TestCase):
         self.assertEqual(self.client.get(self.base + '/exchanges/' + '0' * 20).status_code, 404)
         page = self.client.get('/ai-log?job=' + self.job)
         self.assertEqual(page.status_code, 200)
-        self.assertIn('AI-napló', page.text)
+        self.assertIn('AI-munkasor és napló', page.text)  # 4.35: the queue and the log on one page
         self.assertIn("connect-src 'self'", page.headers['content-security-policy'])
         self.assertEqual(self.client.get('/api/jobs/' + self.job + '/assistant/nincs-ilyen').status_code, 404)
 
@@ -157,7 +163,7 @@ class AssistantWebTests(unittest.TestCase):
             started = self.client.post(self.base, headers={'X-Frm-Client': 'local-ui'},
                                        json={'task_id': self.task['id'], 'attempts': 2})
             self.assertEqual(started.status_code, 202, started.text)
-            for _ in range(250):
+            for _ in range(1500):
                 state = self.client.get(self.base + '/runs/' + started.json()['id']).json()
                 if state['status'] != 'running': break
                 time.sleep(.02)

@@ -15,9 +15,12 @@ from unittest.mock import patch
 from frm_forms import backend_assistant as engine, jpa_assistant as jpa, schema_workbench as schema
 from frm_forms.cli import main
 from frm_forms.common import MigrationError, read_json
-from java_support import COMPANY_IMPORTS, write_stubs
+from java_support import COMPANY_IMPORTS, trigger_mode, write_stubs
 from test_backend_assistant import Client, answer
 from test_schema_workbench import FORM, columns
+
+setUpModule, tearDownModule = trigger_mode('plsql')
+
 
 ENTITY = "LookupAppAccountEntity"
 REPOSITORY = "LookupAppAccountRepository"

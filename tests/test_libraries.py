@@ -1,5 +1,5 @@
 """4.14: attached PL/SQL libraries (.pld) - the units the form reaches compile like its own program units."""
-import java_support  # noqa: F401  (legacy trigger mode for these engine tests)
+from java_support import trigger_mode
 import contextlib
 import io
 import json
@@ -12,6 +12,9 @@ from frm_forms.cli import main
 from frm_forms.common import MigrationError
 from frm_forms.framework import load
 from frm_forms.libraries import attach, decode, library_name, load_libraries, parse_pld
+
+setUpModule, tearDownModule = trigger_mode('plsql')
+
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / 'tests/fixtures/felmeres_replika_fmb.xml'

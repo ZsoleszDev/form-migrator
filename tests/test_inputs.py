@@ -14,6 +14,9 @@ from frm_forms.cli import main
 from frm_forms.inputs import InputIssues, load_inputs
 from frm_forms.inheritance import resolve_inputs
 from frm_forms.xmlmodel import props, tag
+from java_support import trigger_mode
+
+setUpModule, tearDownModule = trigger_mode('plsql')
 
 
 ROOT = Path(__file__).resolve().parents[1]

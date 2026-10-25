@@ -12,11 +12,14 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from java_support import COMPANY_IMPORTS
+from java_support import COMPANY_IMPORTS, trigger_mode
 from frm_forms import forms_emulation as emu
 from frm_forms.cli import main
 from frm_forms.plsql_passthrough import Rewriter, prepare, sql_expression
 from frm_forms.plsql_structure import prune
+
+setUpModule, tearDownModule = trigger_mode('plsql')
+
 
 ROOT = Path(__file__).resolve().parents[1]
 REPLICA = ROOT / 'tests' / 'fixtures' / 'felmeres_replika_fmb.xml'

@@ -7,6 +7,9 @@ import zipfile
 
 import test_schema_workbench_web as fixture
 from frm_forms.common import read_json
+from java_support import trigger_mode
+
+setUpModule, tearDownModule = trigger_mode('ai')
 
 
 @unittest.skipUnless(fixture.WEB, 'web dependencies required')

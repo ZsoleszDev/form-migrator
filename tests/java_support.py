@@ -8,10 +8,29 @@ import os
 
 os.environ.setdefault('FRM_JAVA_IMPORT_MAP', '-')  # tests never read a developer's own java-imports.json
 os.environ.setdefault('FRM_JAVA_VARIABLE_MAP', '-')  # nor a developer's own java-variables.json
-# The engine tests below were written for the deterministic trigger translation (4.34 default: plsql).
-# The 4.35 default, backend_trigger_mode=ai (frames + commented Forms code for the Java assistant),
-# is tested explicitly with its own config (test_ai_triggers.py).
-os.environ.setdefault('FRM_BACKEND_TRIGGER_MODE', 'plsql')
+
+
+def trigger_mode(mode: str):
+    """setUpModule, tearDownModule of a test module written for one backend_trigger_mode.
+
+    Most engine tests were written for the deterministic trigger translation (4.34 default: plsql); a few check the
+    4.35 default (ai) through the module's tasks. The mode is set only while the module's tests run: setting it when
+    this file is imported leaked it into every module of a discover run, so a result depended on the import order.
+    Usage: setUpModule, tearDownModule = trigger_mode('plsql')
+    """
+    saved = []
+
+    def set_up():
+        saved.append(os.environ.get('FRM_BACKEND_TRIGGER_MODE'))
+        os.environ['FRM_BACKEND_TRIGGER_MODE'] = mode
+
+    def tear_down():
+        previous = saved.pop()
+        if previous is None:
+            os.environ.pop('FRM_BACKEND_TRIGGER_MODE', None)
+        else:
+            os.environ['FRM_BACKEND_TRIGGER_MODE'] = previous
+    return set_up, tear_down
 
 
 # Imports of the company classes above, for generator configs in compile tests.

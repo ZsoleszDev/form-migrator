@@ -6,9 +6,12 @@ import unittest
 import xml.etree.ElementTree as ET
 
 import test_forms_runtime as runtime
-from java_support import write_stubs
+from java_support import trigger_mode, write_stubs
 from frm_forms.plsql import Unsupported
 from frm_forms.plsql_passthrough import prepare
+
+setUpModule, tearDownModule = trigger_mode('plsql')
+
 
 fixture = runtime.fixture
 

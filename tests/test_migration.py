@@ -13,6 +13,10 @@ from frm_forms.generate import initial_values
 from frm_forms.plsql import flatten, parse, Unsupported
 from frm_forms.rules import analyze, finalize_capabilities
 from frm_forms.xmlmodel import parse_xml
+from java_support import trigger_mode
+
+setUpModule, tearDownModule = trigger_mode('plsql')
+
 
 ROOT = Path(__file__).resolve().parents[1]
 

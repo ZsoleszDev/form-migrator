@@ -1,5 +1,5 @@
 """Headstart calendar buttons need no endpoint; CALL_FORM buttons become Angular Router navigation."""
-import java_support  # noqa: F401  (legacy trigger mode for these engine tests)
+from java_support import trigger_mode
 import contextlib
 import io
 import json
@@ -9,6 +9,9 @@ import tempfile
 import unittest
 
 from frm_forms.cli import main
+
+setUpModule, tearDownModule = trigger_mode('plsql')
+
 
 os.environ.setdefault('FRM_JAVA_IMPORT_MAP', '-')  # tests never read a developer's own java-imports.json
 os.environ.setdefault('FRM_JAVA_VARIABLE_MAP', '-')  # nor a developer's own java-variables.json

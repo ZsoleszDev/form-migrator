@@ -8,6 +8,8 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
+from java_support import trigger_mode
+
 try:
     from fastapi.testclient import TestClient
     from frm_forms.web.app import create_app
@@ -15,6 +17,9 @@ try:
     WEB_AVAILABLE = True
 except ImportError:
     WEB_AVAILABLE = False
+
+setUpModule, tearDownModule = trigger_mode('plsql')
+
 
 ROOT = Path(__file__).resolve().parents[1]
 ORIGIN = 'http://localhost:4200'

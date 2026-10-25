@@ -12,9 +12,11 @@ from unittest.mock import patch
 from frm_forms.cli import main
 from frm_forms.web.assistant import AssistantManager, AssistantRequest, PromptRequest
 from frm_forms.web.jobs import JobError
-from java_support import COMPANY_IMPORTS
+from java_support import COMPANY_IMPORTS, trigger_mode
 from test_backend_assistant import MARKDOWN, Client
 from test_manual_action_source import FORM
+
+setUpModule, tearDownModule = trigger_mode('plsql')
 
 
 class FakeJobs:

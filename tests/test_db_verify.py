@@ -13,10 +13,13 @@ import tempfile
 import unittest
 from unittest import mock
 
-from java_support import COMPANY_IMPORTS
+from java_support import COMPANY_IMPORTS, trigger_mode
 from frm_forms import db_verify
 from frm_forms.cli import main
 from frm_forms.common import MigrationError
+
+setUpModule, tearDownModule = trigger_mode('plsql')
+
 
 ROOT = Path(__file__).resolve().parents[1]
 REPLICA = ROOT / 'tests' / 'fixtures' / 'felmeres_replika_fmb.xml'

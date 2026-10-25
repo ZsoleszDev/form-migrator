@@ -16,7 +16,7 @@ import subprocess
 import tempfile
 import unittest
 
-from java_support import COMPANY_IMPORTS, write_stubs
+from java_support import COMPANY_IMPORTS, trigger_mode, write_stubs
 from screen_support import component
 from frm_forms.cli import main
 from frm_forms import commit_points as cp
@@ -24,6 +24,9 @@ from frm_forms.plsql import Unsupported
 from frm_forms.plsql_passthrough import prepare
 from frm_forms.plsql_structure import parse
 from frm_forms.survey import mid_code_steps
+
+setUpModule, tearDownModule = trigger_mode('plsql')
+
 
 ROOT = Path(__file__).resolve().parents[1]
 REPLICA = ROOT / 'tests' / 'fixtures' / 'felmeres_replika_fmb.xml'
@@ -139,7 +142,9 @@ class ReplicaTests(unittest.TestCase):
         method = screen[screen.index('  protected onPbFrissitClick(): void {'):]
         method = method[:method.index('\n  }\n')]
         self.assertIn('this.actionOnctrlpbfrissit({', method)
-        self.assertIn("TETEL: { CIKK: this.tetelSelection?.['cikk'] }", method)  # a table's value: its selected row
+        # a table's value: its selected row (between the frm-input markers of the input bindings, 4.30)
+        self.assertIn("TETEL: { CIKK: /* frm-input:", method)
+        self.assertIn("(this.migrationInputText(this.tetelSelection?.['cikk'] ?? null))", method)
         self.assertNotIn('RESUME', method)
 
     def test_generated_java_compiles(self):
