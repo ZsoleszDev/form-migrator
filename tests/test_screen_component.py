@@ -185,6 +185,12 @@ class ScreenComponentTests(unittest.TestCase):
                 handler = screen[start:screen.index('\n  }\n', start) + 4]
                 self.assertLess(len(handler.splitlines()), 60, out.name)
                 screen = screen.replace(handler, '').replace('this.applyActionResult(', 'this.handler(')
+            # A query that left rows out (PageResult.hasMore) says so instead of a silent cut: one plain method.
+            if 'protected migrationMoreRows(' in screen:
+                start = screen.index('  // A lekérdezés egyszerre legfeljebb')
+                helper = screen[start:screen.index('\n  }\n', start) + 4]
+                self.assertLess(len(helper.splitlines()), 8, out.name)
+                screen = screen.replace(helper, '')
             for absent in ('private text(', 'private data<', 'private blocks(', 'private parameters(', 'showResult', 'showBlocks',
                            'setItemState', 'stateValue', 'private value(', 'private readonly items', 'originals', 'newRecord',
                            'deleteRecord', 'interface Page', 'ActionResult', 'this.toast', 'DestroyRef', 'takeUntilDestroyed', 'suggest(',

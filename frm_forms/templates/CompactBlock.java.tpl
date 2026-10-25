@@ -9,10 +9,12 @@
             guard("read");
             if (offset < 0 || offset > 1000000 || limit < 1 || limit > 200)
                 throw bad("offset: 0..1000000, limit: 1..200 szükséges.");
-            var rows = selectPage(offset, limit);
+            var rows = selectPage(offset, limit + 1);  // one row more: did the page leave rows out?
+            var more = rows.size() > limit;
+            if (more) rows = rows.subList(0, limit);
             var context = new RuleContext();
             for (var row : rows) postQuery(row, context);
-            return new PageResult<>(rows, context.messages());
+            return new PageResult<>(rows, context.messages(), more);
         }
     
 @@END_LIST@@

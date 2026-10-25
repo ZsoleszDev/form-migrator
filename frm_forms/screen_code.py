@@ -275,6 +275,8 @@ class ScreenCode:
             show.append('// TODO: a válasz RestResponseDto-borítékban jön: a rows a boríték adatmezőjében van.')
         if block in self.table_blocks:
             show.append(f'this.{self.table_name(block)}Rows = res.rows ?? [];')
+            show.append(f'this.migrationMoreRows({sq(block)}, res);')  # PageResult.hasMore: never a silent cut
+            self.more_rows = True
         elif block in self.form_blocks:
             for region in self.form_blocks[block]:
                 pairs = [(key, self.api_fields.get(block, {}).get(owner.split('.', 1)[1], key))
@@ -492,6 +494,17 @@ class ScreenCode:
         if controls.get('canvases'):
             fields.append('  protected readonly canvasVisible: Record<string, boolean> = ' + record(controls['canvases']) + ';')
         return fields
+
+    def more_rows_methods(self) -> list[str]:
+        """migrationMoreRows: a query that left rows out (PageResult.hasMore) says so instead of a silent cut."""
+        if not getattr(self, 'more_rows', False):
+            return []
+        return [f'''  // A lekérdezés egyszerre legfeljebb {QUERY_LIMIT} sort kér; ha több van, szól (a Forms görgetéssel hozná a továbbiakat).
+  protected migrationMoreRows(block: string, res: {{ hasMore?: boolean }} | null): void {{
+    if (res?.hasMore) {{
+      this.toast.warning('Lekérdezés', block + ': több rekord van, mint amennyi megjelent; szűkítsd a feltételt.', false, this.toastLife.warning);
+    }}
+  }}''']
 
     @staticmethod
     def input_helper() -> str:

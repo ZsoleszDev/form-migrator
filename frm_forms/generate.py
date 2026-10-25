@@ -307,12 +307,14 @@ def block_values(model, b):
             var errors = new ArrayList<String>();
 {criteria_checks}
             if (!errors.isEmpty()) throw bad("Hibás keresési feltételek: " + String.join("; ", errors));
-            var p = new MapSqlParameterSource().addValue("offset", request.offset()).addValue("limit", request.limit());
+            var p = new MapSqlParameterSource().addValue("offset", request.offset()).addValue("limit", request.limit() + 1);
 {bind_params}
             var rows = jdbc.query({vals['SELECT_PAGE']}, p, (rs, rowNum) -> map(rs));
+            var more = rows.size() > request.limit();  // one row more was asked: did the page leave rows out?
+            if (more) rows = rows.subList(0, request.limit());
             var context = new RuleContext();
             for (var row : rows) postQuery(row, context);
-            return new PageResult<>(rows, context.messages());
+            return new PageResult<>(rows, context.messages(), more);
         }}'''
 
     return vals

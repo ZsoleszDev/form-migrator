@@ -446,6 +446,7 @@ def generate(resolution, ui, output, config, module, discovery):
         methods.append(group_method)
     methods += code.methods
     methods += code.result_methods()
+    methods += code.more_rows_methods()
     fields = code.class_fields(tab_fields, labels, toast_symbol, form_type, structures)
     if code.input_rows:
         methods.append(code.input_helper())

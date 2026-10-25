@@ -257,7 +257,8 @@ public class JavaQuerySmoke {
         check(jdbc.sql.contains("WHERE (COL6='00' and ((:col1 = 'XY_42_LAP'") && jdbc.sql.endsWith(
             "COL8 = :col5 and COL9='B56') ORDER BY COL6 OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY"), jdbc.sql);
         check("XY_42_LAP".equals(jdbc.params.getValue("col1")) && "U1".equals(jdbc.params.getValue("col5"))
-              && Integer.valueOf(200).equals(jdbc.params.getValue("limit")), "binds");
+              && Integer.valueOf(201).equals(jdbc.params.getValue("limit")), "binds");  // one row more: hasMore
+        check(!result.hasMore(), "hasMore");
         check(result.rows().size() == 1 && "XY_34".equals(result.rows().get(0).col7) && "Betöltve".equals(result.rows().get(0).info), "rows");
         var all = Map.of("COL1", "Y901", "COL2", "1", "COL3", "1", "COL4", "1", "COL5", "U1");
         service.onT1PbLekerdezes(new UserDto(), new QueryActionRequest(Map.of("T1", all), Map.of(), 0, 200));

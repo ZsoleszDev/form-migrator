@@ -813,7 +813,8 @@ def generate(model, output: Path, config, module, package, discovery, actions):
     wrappers = ''
     if blocks:
         wrappers += (value_class('RowResult<T>', [('T', 'row'), ('List<String>', 'messages')])
-                     + value_class('PageResult<T>', [('List<T>', 'rows'), ('List<String>', 'messages')])
+                     # hasMore: the page left rows out (the list asks one row more); (rows, messages) still compiles
+                     + value_class('PageResult<T>', [('List<T>', 'rows'), ('List<String>', 'messages'), ('boolean', 'hasMore')], (2,))
                      + value_class('UpdateRequest<T>', [('T', 'original'), ('T', 'value')]))
     if any(o['op']=='search' for o in ops):
         wrappers += value_class('SearchRequest<T>', [('T', 'criteria'), ('int', 'offset'), ('int', 'limit')])
