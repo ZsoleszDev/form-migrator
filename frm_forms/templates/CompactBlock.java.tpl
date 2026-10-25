@@ -111,7 +111,13 @@
 @@BEGIN_WRITE@@
         public @@CLASS@@Row loadRow(@@CLASS@@Row key, boolean lock) {
             @@KEY_CHECK@@
-            var rows = jdbc.query(@@SELECT_KEY@@ + (lock ? " FOR UPDATE" : ""), params(key), (rs, rowNum) -> map(rs));
+            List<@@CLASS@@Row> rows;
+            try {
+                // NOWAIT, like the Forms lock: a record another session holds is HTTP 409 (FormsErrors), never a wait.
+                rows = jdbc.query(@@SELECT_KEY@@ + (lock ? " FOR UPDATE NOWAIT" : ""), params(key), (rs, rowNum) -> map(rs));
+            } catch (DataAccessException e) {
+                throw FormsErrors.translate(e);
+            }
             if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "A rekord nem található.");
             if (rows.size() != 1) throw new ResponseStatusException(HttpStatus.CONFLICT, "A megadott kulcs nem egyedi.");
             return rows.get(0);

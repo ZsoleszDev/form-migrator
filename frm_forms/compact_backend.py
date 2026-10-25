@@ -615,7 +615,7 @@ def crud_evidence(op, model, discovery, values):
         if b['sequence']:
             lines.append('Azonosító: SELECT '+b['sequence']+'.NEXTVAL FROM DUAL')
     else:
-        lines.append('Rekord betöltése és zárolása: '+json.loads(values['SELECT_KEY'])+' FOR UPDATE')
+        lines.append('Rekord betöltése és zárolása: '+json.loads(values['SELECT_KEY'])+' FOR UPDATE NOWAIT')
         if verb == 'delete':
             lines.append('Generált SQL: '+json.loads(values['DELETE_SQL']))
         else:

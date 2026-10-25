@@ -79,7 +79,7 @@ def reports(model: dict, output: Path, module: str, package: str, config: dict) 
         "- Egy REST-mentés egy blokk egyetlen rekordját kezeli egy Spring-tranzakcióban. Több blokk COMMIT_FORM viselkedése nem támogatott.",
         "- WHEN-VALIDATE-ITEM: minden támogatott item-trigger lefut mentéskor, XML-sorrendben; utána WHEN-VALIDATE-RECORD, majd PRE-INSERT/PRE-UPDATE. Nincs Forms-fókuszváltási állapotgép.",
         "- PRE-DELETE a zárolt aktuális rekordon, POST-QUERY a betöltött rekordon fut. POST-QUERY adatbázisoszlopot író változata blokkolva van a snapshot sértetlensége miatt.",
-        "- A mentési snapshot az összes leképezett DB-oszlopot összehasonlítja, SELECT FOR UPDATE után. DB oldali version oszlop nélkül az ABA-változás (visszaállított érték) nem érzékelhető.",
+        "- A mentési snapshot az összes leképezett DB-oszlopot összehasonlítja, SELECT FOR UPDATE NOWAIT után (a más munkamenet által zárolt rekord HTTP 409, nincs várakozás). DB oldali version oszlop nélkül az ABA-változás (visszaállított érték) nem érzékelhető.",
         "- BigDecimal, Oracle üres sztring = NULL, háromértékű logika és rövidzár támogatott. NLS, CHAR padding, locale szerinti rendezés, numerikus túlcsordulás és teljes Oracle NUMBER kerekítés nem emulált. Osztás: 38 számjegyű MathContext.",
         "- DATE a napszakot is megőrzi, LocalDateTime formában. TIMESTAMP időzónával, LOB, LONG, RAW és speciális típusok adaptert igényelnek.",
         "- A meglévő DB triggerek, constraint-ek, defaultok és package-ek továbbra is a DB-ben maradnak; az eszköz nem csatlakozik az adatbázishoz és nem ellenőrzi őket.",
