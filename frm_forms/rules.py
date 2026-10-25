@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from decimal import Decimal
-from .common import MigrationError, identifier, jstr, model_cache
+from .common import MigrationError, identifier, jstr, model_cache, nls_decimal
 from .plsql import Unsupported, adapter_error, parse, flatten
 from .forms_context import NORMAL_MODE, normal_mode_expression
 from . import framework, forms_runtime
@@ -486,12 +486,8 @@ def apply_metadata(model: dict, metadata: dict) -> None:
 
 def decimal_literal(raw: str) -> str:
     """A Forms number bound as a plain decimal: '12.5', and the decimal comma of a Hungarian NLS ('12,5')."""
-    raw = str(raw or '').strip()
-    if re.fullmatch(r'[+-]?\d+(?:\.\d+)?', raw):
-        return raw
-    if re.fullmatch(r'[+-]?\d+,\d+', raw):
-        return raw.replace(',', '.')
-    return ''
+    raw = nls_decimal(raw or '')
+    return raw if re.fullmatch(r'[+-]?\d+(?:\.\d+)?', raw) else ''
 
 
 def item_semantics(model: dict, catalog: dict, live: bool) -> None:
