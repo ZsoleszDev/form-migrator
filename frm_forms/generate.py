@@ -266,7 +266,13 @@ def block_values(model, b):
                     raise MigrationError("Dátum típusú statikus lista adaptert igényel.")
                 checks.append(f"!SqlValues.same(row.{item['field']}, {literal})")
             domains.append(f"        if (row.{item['field']} != null && " + " && ".join(checks) + f") throw bad({jstr(item['field'] + ': nem megengedett érték.')});")
+    # The item checks run before the triggers (Forms); again only when a trigger in between could write the record.
+    events = {t["event"] for t in converted_backend_triggers(model, b)}
+    validation = events & {"POST-CHANGE", "WHEN-VALIDATE-ITEM", "WHEN-VALIDATE-RECORD"}
+    revalidate = "\n            validate(row);  // what the triggers wrote"
     vals = {"CLASS": cls, "BLOCK_NAME": jstr(b["name"]),
+            "INSERT_REVALIDATE": revalidate if validation or "PRE-INSERT" in events else "",
+            "UPDATE_REVALIDATE": revalidate if validation or "PRE-UPDATE" in events else "",
             "SELECT_PAGE": jstr(filtered_select + " ORDER BY " + order + " OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY"), "SELECT_KEY": jstr(select + " WHERE " + where),
             "KEY_CHECK": "if (" + (" || ".join("SqlValues.isNull(key." + i["field"] + ")" for i in pk) or "true") + ') throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "Hiányzó elsődleges kulcs.");',
             "INSERT_SQL": jstr(insert_sql), "INSERT_BODY": insert_body(b, table, inserts, insert_sql, valid_sql), "UPDATE_BODY": ("int count = jdbc.update(" + jstr(update_sql) + ', params(row));\n        if (count != 1) throw new ResponseStatusException(HttpStatus.CONFLICT, "Sikertelen módosítás.");') if updates and valid_sql else 'throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED, "Nincs módosítható oszlop.");',

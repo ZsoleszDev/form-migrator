@@ -24,11 +24,11 @@
             requireRow(row);
             normalize(row);
     @@CREATE_CHECKS@@
+            validate(row);  // Forms: the item's own checks (Required, length, range) before its triggers
             var context = new RuleContext();
             validateRules(row, context);
             preInsert(row, context);
-            normalize(row);
-            validate(row);
+            normalize(row);@@INSERT_REVALIDATE@@
             @@INSERT_CALL@@
             postInsert(row, context);
             var saved = @@CREATED_ROW@@;
@@ -45,11 +45,11 @@
             var current = loadRow(original, true);
             assertUnchanged(original, current);
     @@UPDATE_CHECKS@@
+            validate(row);  // Forms: the item's own checks (Required, length, range) before its triggers
             var context = new RuleContext();
             validateRules(row, context);
             preUpdate(row, context);
-            normalize(row);
-            validate(row);
+            normalize(row);@@UPDATE_REVALIDATE@@
     @@KEY_IMMUTABLE@@
             @@UPDATE_CALL@@
             postUpdate(row, context);
