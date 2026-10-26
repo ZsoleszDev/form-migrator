@@ -280,6 +280,11 @@ def generate(resolution, ui, output, config, module, discovery):
     from . import input_bindings
     api = input_bindings.enrich_api(screen_api.load_api(output), discovery, output)
     wiring = screen_api.wiring(plan, ui, api, key, forms, tables)
+    # The start-up code's constants and item properties: the screen's opening state (startup.triage).
+    state = (api or {}).get('startup') or screen_api.load_startup(output)
+    if state:
+        from . import startup
+        plan['startup'] = dict(startup.screen_state(forms + tables, state), server=bool((api or {}).get('init')))
     # Forms CALL_FORM/OPEN_FORM/NEW_FORM buttons -> Angular Router, with the parameter list.
     navigations = screen_navigations(resolution, forms, config) if buttons else {}
     manual_navs = manual_navigations(resolution, navigations) if buttons else {}
@@ -289,6 +294,10 @@ def generate(resolution, ui, output, config, module, discovery):
     from .screen_code import ScreenCode
     code = ScreenCode(plan, forms, tables, wiring, config, navigations, manual_navs, button_sources(resolution))
     code.build()
+    if plan.get('startup'):
+        plan['startup']['queries'] = code.startup_queries_run
+        plan['startup']['manual'] += [{'statement': 'GO_BLOCK(' + b + '); EXECUTE_QUERY;', 'reason': reason}
+                                      for b, reason in code.startup_queries_manual]
     if wiring:
         wiring['called'] = sorted(code.called)
     plan['backend_calls'] = screen_api.summary(wiring)
@@ -446,6 +455,8 @@ def generate(resolution, ui, output, config, module, discovery):
         methods.append(group_method)
     methods += code.methods
     methods += code.result_methods()
+    methods += code.more_rows_methods()
+    methods += code.changes_methods()
     fields = code.class_fields(tab_fields, labels, toast_symbol, form_type, structures)
     if code.input_rows:
         methods.append(code.input_helper())
@@ -520,6 +531,28 @@ def field_lengths_template(plan):
             'fields': fields}
 
 
+def startup_notes(state, cell):
+    """MIGRATION_NOTES.md: where the start-up code went (startup.triage, startup.screen_state)."""
+    lines = ['', '## Indítás (Forms PRE-FORM, WHEN-NEW-FORM-INSTANCE)', '',
+             'A webes képernyőnek nincs „form indulása”: a kezdőállapotát a generált kód adja, a szerver csak az '
+             'indítókód adatbázist érintő részét futtatja.', '',
+             '- Szerver: ' + ('az `onFormInit` végpont (a konstruktor hívja); a törzsét a Java asszisztens írja, és csak az '
+                             'adatbázist érintő utasításokat kapja.' if state['server'] else
+                             'nincs indítási végpont: az indítókódban nincs adatbázismunka.')]
+    if state.get('queries'):
+        lines.append('- Indításkori lekérdezés (a konstruktor hívja): ' + ', '.join('`' + b + '`' for b in state['queries']) + '.')
+    if state['applied']:
+        lines += ['', '### A képernyő kezdőállapota', '', '| Mező | Beállítás |', '|---|---|']
+        lines += ['| `' + cell(a['owner']) + '` | ' + cell(a['what']) + ' |' for a in state['applied']]
+    if state['manual']:
+        lines += ['', '### Kézi teendő', '', '| Forms-kód | Teendő |', '|---|---|']
+        lines += ['| `' + cell(m['statement']) + '` | ' + cell(m['reason']) + ' |' for m in state['manual']]
+    if state['dropped']:
+        lines += ['', '### Kimaradt (nincs webes megfelelője)', '', '| Forms-kód | Ok |', '|---|---|']
+        lines += ['| `' + cell(d['statement']) + '` | ' + cell(d['reason']) + ' |' for d in state['dropped']]
+    return lines
+
+
 def notes(plan, discovery, config):
     from .discovery import source_view
     def cell(v):
@@ -579,6 +612,8 @@ def notes(plan, discovery, config):
                   '| Tulajdonos / esemény | Hívás | Window / canvas | Feloldás | Forrás / sor |', '|---|---|---|---|---|']
         lines += ['| ' + ' | '.join(map(cell, [r['owner'] + ' / ' + r['event'], r['call'], r['window'] + ' / ' + r['canvas'],
                                                r['status'], r['source_file'] + ':' + str(r['line'])])) + ' |' for r in plan['window_references']]
+    if plan.get('startup'):
+        lines += startup_notes(plan['startup'], cell)
     lines += ['', '## Elrendezés és felülbírálások', '',
               'Sorillesztési tolerancia: ' + str(plan['layout_settings']['row_tolerance']) + ' × a kisebb mezőmagasság; '
                                                                                              'a valódi sorok elkülönítéséhez függőleges és vízszintes átfedésvizsgálat is történik. '

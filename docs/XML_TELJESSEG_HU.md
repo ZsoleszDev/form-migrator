@@ -49,6 +49,6 @@ Fontos: `DUMP=ALL` nélkül a Forms2XML csak az alapértéktől eltérő tulajdo
 4. A céges projektben fordítás és a fő folyamatok kipróbálása (lekérdezés, új rekord, módosítás, törlés, gombok).
 
 A frontendben néhány lépés ma is kézi befejezést kér (ezek nem az XML hiányai):
-a mentés változáslistái (`save()` TODO), a lista-blokkok kezdeti betöltése, a LOV-javaslatok, a `KEY-COMMIT`
+a törlés a mentésben (a `save()` az új és módosított rekordot küldi), a lista-blokkok kezdeti betöltése, a LOV-javaslatok, a `KEY-COMMIT`
 logika a mentéshez kötve, és a `:GLOBAL` értékek tárolása a képernyők között. Részletek és javaslatok a
 4.35 ellenőrző dokumentumában: [VALIDATION_4_35.md](VALIDATION_4_35.md).

@@ -21,7 +21,7 @@ import unittest
 from java_support import COMPANY_IMPORTS
 from frm_forms.angular_screen import wf_table_source
 from frm_forms.cli import main
-from screen_support import ANGULAR_CLI_OPTIONS, component, ngc_check, screen_method, with_company_imports
+from screen_support import ANGULAR_CLI_OPTIONS, component, ngc_check, screen_field, screen_method, with_company_imports
 
 ROOT = Path(__file__).resolve().parents[1]
 REPLICA = ROOT / 'tests' / 'fixtures' / 'felmeres_replika_fmb.xml'
@@ -64,6 +64,20 @@ DIALOGS = '''<Module><FormModule Name="ABLAKOS" Title="Ablakos" FirstNavigationB
    <Trigger Name="WHEN-BUTTON-PRESSED" TriggerText="hide_window('EDIT');"/></Item>
  </Block>
 </FormModule></Module>'''
+
+# One saved record per screen: a checkbox and a date between the screen (true/false, Date) and the record (I/N, ISO text).
+TORZS = '''<Module><FormModule Name="TORZS" Title="Törzs"><Coordinate CoordinateSystem="Real" RealUnit="Pixel"/>
+ <Block Name="T" DatabaseDataBlock="true" QueryDataSourceName="TORZS" RecordsDisplayCount="1">
+  <Item Name="ID" ItemType="Text Item" DataType="Number" Prompt="Azonosító" CanvasName="C" ColumnName="ID" PrimaryKey="true"
+   XPosition="10" YPosition="10" Width="80" Height="20"/>
+  <Item Name="AKTIV" ItemType="Check Box" DataType="Char" Prompt="Aktív" CheckedValue="I" UncheckedValue="N" CanvasName="C"
+   ColumnName="AKTIV" XPosition="100" YPosition="10" Width="80" Height="20"/>
+  <Item Name="ERVENYES" ItemType="Text Item" DataType="Date" Prompt="Érvényes" CanvasName="C" ColumnName="ERVENYES"
+   XPosition="190" YPosition="10" Width="100" Height="20"/></Block>
+ <Block Name="CTRL" DatabaseDataBlock="false">
+  <Item Name="PB_KERES" ItemType="Push Button" Label="Keresés" CanvasName="C" XPosition="10" YPosition="40" Width="80" Height="20">
+   <Trigger Name="WHEN-BUTTON-PRESSED" TriggerText="go_block('T'); execute_query;"/></Item></Block>
+ <Canvas Name="C" CanvasType="Content" WindowName="W"/><Window Name="W" Title="Törzs"/></FormModule></Module>'''
 
 # A developer's own table: extra filters in the caption, an own row, the p-table inputs it wants.
 OWN_TABLE = '''import { Component } from '@angular/core';
@@ -114,12 +128,12 @@ class ScreenComponentTests(unittest.TestCase):
         cls.root = Path(cls.temp.name)
         cls.out = generate(cls.root, REPLICA, 'rendeles')
         outputs = {}
-        for module, xml in (('egyszeru', SIMPLE), ('listas', LISTAS), ('ablakos', DIALOGS)):
+        for module, xml in (('egyszeru', SIMPLE), ('listas', LISTAS), ('ablakos', DIALOGS), ('torzs', TORZS)):
             source = cls.root / (module + '_fmb.xml')
             source.write_text(xml, encoding='utf-8')
             outputs[module] = generate(cls.root, source, module, *(['--frontend-only'] if module == 'ablakos' else []))
-        cls.simple, cls.listas, cls.dialogs = outputs['egyszeru'], outputs['listas'], outputs['ablakos']
-        cls.outputs = (cls.out, cls.simple, cls.listas, cls.dialogs)
+        cls.simple, cls.listas, cls.dialogs, cls.torzs = outputs['egyszeru'], outputs['listas'], outputs['ablakos'], outputs['torzs']
+        cls.outputs = (cls.out, cls.simple, cls.listas, cls.dialogs, cls.torzs)
 
     @classmethod
     def tearDownClass(cls):
@@ -185,6 +199,18 @@ class ScreenComponentTests(unittest.TestCase):
                 handler = screen[start:screen.index('\n  }\n', start) + 4]
                 self.assertLess(len(handler.splitlines()), 60, out.name)
                 screen = screen.replace(handler, '').replace('this.applyActionResult(', 'this.handler(')
+            # A query that left rows out (PageResult.hasMore) says so instead of a silent cut: one plain method.
+            if 'protected migrationMoreRows(' in screen:
+                start = screen.index('  // A lekérdezés legfeljebb annyi rekordot kér')
+                helper = screen[start:screen.index('\n  }\n', start) + 4]
+                self.assertLess(len(helper.splitlines()), 9, out.name)
+                screen = screen.replace(helper, '')
+            # The save measures a block's record against the queried one: one plain method, no record buffer.
+            if 'protected migrationChanges(' in screen:
+                start = screen.index('  // Mentés: egy blokk rekordja a képernyőn')
+                helper = screen[start:screen.index('\n  }\n', start) + 4]
+                self.assertLess(len(helper.splitlines()), 22, out.name)
+                screen = screen.replace(helper, '')
             for absent in ('private text(', 'private data<', 'private blocks(', 'private parameters(', 'showResult', 'showBlocks',
                            'setItemState', 'stateValue', 'private value(', 'private readonly items', 'originals', 'newRecord',
                            'deleteRecord', 'interface Page', 'ActionResult', 'this.toast', 'DestroyRef', 'takeUntilDestroyed', 'suggest(',
@@ -199,7 +225,8 @@ class ScreenComponentTests(unittest.TestCase):
         self.assertNotIn('save()', listas)  # no form block to save
         replica = component(self.out)
         self.assertIn('<button pButton type="button" (click)="save()">Mentés</button>', replica)
-        self.assertLess(len(replica.splitlines()), 470)  # 4.35: + applyActionResult/migrationQuery (about 45 lines)
+        # 4.35: + applyActionResult/migrationQuery (about 45 lines); the save's change lists: + migrationChanges (about 20)
+        self.assertLess(len(replica.splitlines()), 500)
 
     def test_a_button_sends_its_request_with_the_screen_values(self):
         replica = component(self.out)
@@ -215,27 +242,43 @@ class ScreenComponentTests(unittest.TestCase):
         self.assertEqual(init_row['status'], 'lifecycle')
         self.assertNotIn('FRM:', replica)
         save = screen_method(self.out, 'save')
-        self.assertIn("this.commitForm({ changesRendeles: { inserted: [], updated: [], deleted: [] } }).subscribe();", save)
-        self.assertIn("// Az űrlap értékei: this.forms['rendeles']?.getRawValue().", save)
+        # The record of the form against the queried one; the saved record (its generated key) back on the screen.
+        self.assertIn("changesRendeles: this.migrationChanges('RENDELES', rendeles, this.forms['rendeles']?.dirty),", save)
+        self.assertIn("const row = res.rowsRendeles[0];\n        this.migrationLoaded['RENDELES'] = row;", save)
+        self.assertIn('this.applyActionResult(res);', save)  # the answer's messages and commands
+        self.assertIn("blocks: { RENDELES: { ID: /* frm-input:", save)  # the master key of a new TETEL record
+        self.assertNotIn('TODO', save)
 
     def test_the_button_requests_run_in_node(self):
         if not shutil.which('node'):
             self.skipTest('Node with TypeScript stripping required')
-        members = [screen_method(self.out, name) for name in ('onPbUjraszamolClick', 'onPbAlapClick', 'save', 'migrationInputText')]
+        members = [screen_method(self.out, name) for name in ('onPbUjraszamolClick', 'onPbAlapClick', 'save', 'migrationInputText',
+                                                               'migrationChanges')] + [screen_field(self.out, 'migrationLoaded')]
         self.assertNotIn(None, members)
         script = self.root / 'button-flow.ts'
         script.write_text('''import assert from 'node:assert/strict';
-class Group {
+class Group {  // the FormGroup as the code uses it: reset() sets every control (null when missing) and clears dirty
   values: Record<string, unknown> = {};
+  dirty = false;
   getRawValue() { return {...this.values}; }
+  reset(value: Record<string, unknown>) {
+    this.values = Object.fromEntries(Object.keys(this.values).map(key => [key, value?.[key] ?? null]));
+    this.dirty = false;
+  }
 }
-const sent: [string, unknown][] = [];
-const call = (name: string) => (body: unknown) => { sent.push([name, structuredClone(body)]); return {subscribe() {}}; };
+const sent: [string, any][] = [];
+let answer: unknown = null;  // the backend's answer to the next save
+const call = (name: string) => (body: unknown) => {
+  sent.push([name, structuredClone(body)]);
+  return {subscribe(next?: (res: unknown) => void) { if (name === 'commit' && next) { next(answer); } }};
+};
 class Screen {
   forms: Record<string, Group> = {rendeles: new Group(), ctrl: new Group()};
   actionOnctrlpbujraszamol = call('ujraszamol');
   actionOnctrlpbalap = call('alap');
   commitForm = call('commit');
+  applied: unknown[] = [];
+  applyActionResult(res: unknown) { this.applied.push(res); }
 __MEMBERS__
 }
 const screen = new Screen();
@@ -245,13 +288,97 @@ assert.deepEqual(sent[0], ['ujraszamol', {blocks: {RENDELES: {ID: '7', OSSZEG: '
 delete screen.forms.ctrl;  // a region not yet generated: its values are missing, the request still goes
 screen.onPbAlapClick();
 assert.deepEqual(sent[1], ['alap', {blocks: {CTRL: {EV: null}}, parameters: {'GLOBAL.EV': null}}]);
+// Nothing queried, nothing entered (the start values do not count): no record to save.
+screen.forms.rendeles.values = {id: null, vevo: null, vevoNev: null, datum: null, statusz: 'N', osszeg: null};
+answer = {rowsRendeles: [], messages: []};
 screen.save();
-assert.deepEqual(sent[2], ['commit', {changesRendeles: {inserted: [], updated: [], deleted: []}}]);
+assert.deepEqual(sent[2], ['commit', {blocks: {RENDELES: {ID: null}}, changesRendeles: {inserted: [], updated: [], deleted: []}}]);
+// The user enters a record: a new record (empty text: null, the date in local time); the saved one comes back.
+screen.forms.rendeles.values = {id: null, vevo: 'V1', vevoNev: '', datum: new Date(2024, 0, 31, 10, 30), statusz: 'N', osszeg: 1200};
+screen.forms.rendeles.dirty = true;
+const saved = {id: 7, vevo: 'V1', vevoNev: 'Vevő 1', datum: '2024-01-31T10:30:00', statusz: 'N', osszeg: 1200, rowid: 'AAAx'};
+answer = {rowsRendeles: [saved], messages: ['Mentve']};
+screen.save();
+assert.deepEqual(sent[3][1].changesRendeles, {inserted: [{id: null, vevo: 'V1', vevoNev: null, datum: '2024-01-31T10:30:00',
+  statusz: 'N', osszeg: 1200}], updated: [], deleted: []});
+assert.equal(screen.migrationLoaded['RENDELES'], saved);
+assert.equal((screen.forms.rendeles.values.datum as Date).getTime(), new Date(2024, 0, 31, 10, 30).getTime());
+assert.equal(screen.forms.rendeles.values.id, 7);
+assert.deepEqual(screen.applied.at(-1), answer);
+// Saved again unchanged: nothing to send (the Date on the screen is the saved text).
+screen.save();
+assert.deepEqual(sent[4], ['commit', {blocks: {RENDELES: {ID: '7'}}, changesRendeles: {inserted: [], updated: [], deleted: []}}]);
+// A change: the queried record as original (its ROWID too), the screen's values over it.
+screen.forms.rendeles.values = {...screen.forms.rendeles.values, osszeg: 1500};
+screen.save();
+assert.deepEqual(sent[5][1].changesRendeles, {inserted: [], updated: [{original: saved, value: {...saved, osszeg: 1500}}], deleted: []});
 console.log('typescript buttons OK');
 '''.replace('__MEMBERS__', '\n'.join(members)))
         run = subprocess.run(['node', '--experimental-strip-types', '--no-warnings', str(script)], capture_output=True, text=True)
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         self.assertIn('typescript buttons OK', run.stdout)
+
+    def test_a_saved_record_round_trips_between_the_screen_and_the_record(self):
+        if not shutil.which('node'):
+            self.skipTest('Node with TypeScript stripping required')
+        members = [screen_method(self.torzs, name) for name in ('onPbKeresClick', 'save', 'migrationChanges', 'migrationMoreRows')]
+        members.append(screen_field(self.torzs, 'migrationLoaded'))
+        self.assertNotIn(None, members)
+        self.assertIn('this.tList(0, 1).subscribe(res => {', members[0])  # the form shows one record: the query asks one
+        script = self.root / 'record-flow.ts'
+        script.write_text('''import assert from 'node:assert/strict';
+class Group {
+  values: Record<string, unknown> = {id: null, aktiv: true, ervenyes: null};  // a start value: checked
+  dirty = false;
+  getRawValue() { return {...this.values}; }
+  reset(value: Record<string, unknown>) {
+    this.values = Object.fromEntries(Object.keys(this.values).map(key => [key, value?.[key] ?? null]));
+    this.dirty = false;
+  }
+}
+const sent: any[] = [];
+const warnings: string[] = [];
+let answer: any = null;
+const call = (body?: unknown) => { sent.push(structuredClone(body)); return {subscribe(next: (res: unknown) => void) { next(answer); }}; };
+class Screen {
+  forms: Record<string, Group> = {t: new Group()};
+  toast = {warning: (title: string, text: string) => warnings.push(text)};
+  toastLife = {warning: 1};
+  tList = (offset: number, limit: number) => call({offset, limit});
+  commitForm = call;
+  applyActionResult(res: unknown) { void res; }
+__MEMBERS__
+}
+const screen = new Screen();
+// The query: the record's I/N and ISO date as the controls hold them; more matched than the form shows: a warning.
+answer = {rows: [{id: 5, aktiv: 'N', ervenyes: '2024-03-01T00:00:00'}], hasMore: true};
+screen.onPbKeresClick();
+assert.deepEqual(sent[0], {offset: 0, limit: 1});
+assert.equal(screen.forms.t.values.aktiv, false);
+assert.equal((screen.forms.t.values.ervenyes as Date).getTime(), new Date(2024, 2, 1).getTime());
+assert.deepEqual(warnings, ['T: több rekord van, mint amennyi megjelent; szűkítsd a feltételt.']);
+// Ticked: the record gets I; the unchanged date is not a change.
+screen.forms.t.values.aktiv = true;
+answer = {rowsT: []};
+screen.save();
+assert.deepEqual(sent[1].changesT, {inserted: [], updated: [{original: {id: 5, aktiv: 'N', ervenyes: '2024-03-01T00:00:00'},
+  value: {id: 5, aktiv: 'I', ervenyes: '2024-03-01T00:00:00'}}], deleted: []});
+// A date with milliseconds (the calendar's today): to the second, as the DTO reads it.
+screen.forms.t.values.ervenyes = new Date(2024, 2, 2, 8, 15, 30, 250);
+screen.save();
+assert.equal(sent[2].changesT.updated[0].value.ervenyes, '2024-03-02T08:15:30');
+// A query that finds nothing: an empty form, nothing to save.
+answer = {rows: [], hasMore: false};
+screen.onPbKeresClick();
+assert.deepEqual(screen.forms.t.values, {id: null, aktiv: null, ervenyes: null});
+answer = {rowsT: []};
+screen.save();
+assert.deepEqual(sent[4].changesT, {inserted: [], updated: [], deleted: []});
+console.log('record round trip OK');
+'''.replace('__MEMBERS__', '\n'.join(members)))
+        run = subprocess.run(['node', '--experimental-strip-types', '--no-warnings', str(script)], capture_output=True, text=True)
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertIn('record round trip OK', run.stdout)
 
     def test_no_wrapper_around_the_form_blocks(self):
         for out in self.outputs:

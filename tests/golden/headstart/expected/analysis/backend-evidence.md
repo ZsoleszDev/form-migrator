@@ -22,7 +22,7 @@ Generált művelet: HTTP 501, ellenőrzésig tiltott
 Tiltás oka: A WHERE olvasási SQL-re lefordítva; írás előtt a rekordszűrést és szervercontextet külön ellenőrizni kell.
 Tiltás oka: AIT:POST-QUERY: POST-QUERY nem írhat adatbázismezőt ebben a snapshot-alapú adapterben. Átfuttatás az adatbázisban sem lehetséges: A trigger ebben az eseményben nem visszaírható mezőt ír: AIT.AIT_MEGJ (lekérdezett adatbázismező, kulcs vagy nem módosítható oszlop).
 Tiltás oka: Írás nincs engedélyezve a schema.json-ban (writable: true).
-Rekord betöltése és zárolása: SELECT AIT_KULCS, AIT_TIPUS, AIT_STATUS, AIT_MEGJ FROM ANK_ADLAP_ITEMS WHERE AIT_KULCS = :aitKulcs FOR UPDATE
+Rekord betöltése és zárolása: SELECT AIT_KULCS, AIT_TIPUS, AIT_STATUS, AIT_MEGJ FROM ANK_ADLAP_ITEMS WHERE AIT_KULCS = :aitKulcs FOR UPDATE NOWAIT
 UPDATE oszlopok: AIT_TIPUS, AIT_STATUS, AIT_MEGJ
 
 TRIGGER AIT / POST-QUERY [review -> manual]

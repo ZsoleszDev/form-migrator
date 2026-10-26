@@ -9,6 +9,8 @@ import unittest
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from java_support import trigger_mode
+
 try:
     from fastapi.testclient import TestClient
     from frm_forms.web.app import create_app
@@ -16,6 +18,9 @@ try:
     WEB_AVAILABLE = True
 except ImportError:
     WEB_AVAILABLE = False
+
+setUpModule, tearDownModule = trigger_mode('plsql')
+
 
 ROOT = Path(__file__).resolve().parents[1]
 HEADERS = {'Origin': 'http://localhost:4200', 'X-Frm-Client': 'local-ui'}
@@ -52,7 +57,9 @@ class WebTests(unittest.TestCase):
 
     def test_window_selection_setting_and_dialog_upload(self):
         from test_screen_windows import simple_windows
-        response = self.submit(options={'module': 'windows', 'screen_primary_window': 'RIGHT'}, schema=False, source=simple_windows())
+        # screen_window_selection: 'ask' became the web default (the job asks which windows to generate)
+        response = self.submit(options={'module': 'windows', 'screen_primary_window': 'RIGHT', 'screen_window_selection': 'all'},
+                               schema=False, source=simple_windows())
         self.assertEqual(response.status_code, 202, response.text)
         job = self.wait_job(response.json()['id']); self.assertEqual(job['status'], 'completed', job)
         module = self.settings.data_dir / 'jobs' / job['id'] / 'module'
@@ -119,7 +126,8 @@ class WebTests(unittest.TestCase):
 
     def test_scaffold_upload_keeps_review_and_downloadable_map(self):
         from test_discovery_scaffold import fixture
-        response = self.submit(options={'module':'test','generation_mode':'scaffold'}, schema=False, source=fixture(True))
+        # backend_live: the web default makes the generated endpoints live at once; a scaffold is reviewed first here
+        response = self.submit(options={'module':'test','generation_mode':'scaffold','backend_live':False}, schema=False, source=fixture(True))
         self.assertEqual(response.status_code,202,response.text)
         job = self.wait_job(response.json()['id'])
         self.assertEqual(job['status'],'completed',job); self.assertTrue(job['review_required'])

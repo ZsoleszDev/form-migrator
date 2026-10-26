@@ -1,5 +1,5 @@
 """Portfolio run, Designer exception handlers, DB routine calls, data dictionary, LOV endpoints."""
-import java_support  # noqa: F401  (legacy trigger mode for these engine tests)
+from java_support import trigger_mode
 import contextlib
 import io
 import json
@@ -15,6 +15,9 @@ from frm_forms.plsql import Unsupported, flatten, parse
 from frm_forms.portfolio import normalize
 from frm_forms.rules import analyze, strip_framework
 from frm_forms.xmlmodel import parse_xml
+
+setUpModule, tearDownModule = trigger_mode('plsql')
+
 
 NL = '&amp;#10;'
 CATALOG = framework.load({})

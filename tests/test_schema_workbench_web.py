@@ -6,6 +6,7 @@ import time
 import unittest
 from unittest.mock import patch
 
+from java_support import trigger_mode
 from test_schema_workbench import FORM, columns
 
 try:
@@ -15,6 +16,9 @@ try:
     WEB = True
 except ImportError:
     WEB = False
+
+setUpModule, tearDownModule = trigger_mode('ai')
+
 
 HEADERS = {'X-Frm-Client': 'local-ui'}
 

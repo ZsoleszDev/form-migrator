@@ -149,7 +149,9 @@
             "delete"
           ]
         }
-      }
+      },
+      "reads": [],
+      "parameters": []
     }
   },
   "skipped_operations": [],

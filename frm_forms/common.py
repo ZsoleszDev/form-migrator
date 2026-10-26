@@ -162,6 +162,18 @@ def digest(text: str) -> str:
     return hashlib.sha256(text.replace("\r\n", "\n").strip().encode("utf-8")).hexdigest()
 
 
+# Forms2XML writes number properties (LowestAllowedValue, coordinates ...) in the NLS of the exporting
+# Forms Builder: a Hungarian one gives "9999999999,99". A comma between digits is the decimal point there;
+# nothing else (grouping, exponents) is guessed.
+DECIMAL_COMMA = re.compile(r"[+-]?\d+,\d+")
+
+
+def nls_decimal(raw) -> str:
+    """'12,5' -> '12.5' (the decimal comma of a Hungarian NLS export); any other text only stripped."""
+    text = str(raw if raw is not None else "").strip()
+    return text.replace(",", ".") if DECIMAL_COMMA.fullmatch(text) else text
+
+
 # Forms2XML escapes its own character references: a line break in TriggerText,
 # WhereClause or ProgramUnitText arrives as the literal text "&#10;" after XML
 # parsing. Only whitespace references are restored; anything else stays as is.

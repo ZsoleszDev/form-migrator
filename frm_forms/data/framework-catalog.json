@@ -13,6 +13,8 @@
   "message_functions": {"QMS$FORMS_ERRORS.MSGGETTEXT": 2},
   "failure_calls": ["QMS$FORMS_ERRORS.RAISE_FAILURE"],
   "forms_runtime_calls": {
-    "CALENDAR.*": "A naptár-segédablak Forms-oldali eseménykezelője: csak az Oracle Forms futtatókörnyezetben működik, az adatbázisban nincs ilyen rutin. A dátummezők natív naptárvezérlője váltja ki."
+    "CALENDAR.*": "A naptár-segédablak Forms-oldali eseménykezelője: csak az Oracle Forms futtatókörnyezetben működik, az adatbázisban nincs ilyen rutin. A dátummezők natív naptárvezérlője váltja ki.",
+    "ANK_CTRL.*": "Céges Forms-könyvtár a képernyő kezeléséhez (cím, súgósor és más felületi beállítás): csak az Oracle Forms futtatókörnyezetben működik. A webes képernyő saját fejléce és vezérlői váltják ki.",
+    "ANK_MENU.*": "Céges Forms-menükezelő: csak az Oracle Forms futtatókörnyezetben működik. A webes alkalmazás saját menüje váltja ki."
   }
 }

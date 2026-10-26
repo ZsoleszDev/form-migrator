@@ -45,6 +45,9 @@ JPA_RULE = ("Database access only through the repositories listed below. Write t
             "   The repository fields are already injected into the service.")
 NO_TABLE_RULE = ("No database table is available to this method. If the logic needs database access (a table or\n"
                  "   a sequence), write MISSING: and name it.")
+# The database routines the Forms code calls (db_routines): the migrator adds their typed methods to the service.
+ROUTINE_RULE = ("\n   The database routines of the Forms code run in Oracle through the generated methods listed below:\n"
+                "   call those methods (the only allowed PL/SQL calls); never re-implement or skip a routine.")
 JDBC_RULE = ("Database access: use the service's existing `jdbc` field (NamedParameterJdbcTemplate) with named,\n"
              "   bound parameters{jdbc_helpers}; never concatenate values into SQL.")
 PLSQL_VALUES = ("\n   Helpers: PlsqlValues.text(request.blocks(), \"BLOCK\", \"ITEM\"), PlsqlValues.number(...) returns\n"
@@ -141,9 +144,41 @@ COMMON_HINTS = [
     (r"\bCURSOR\b|\bFOR\s+\w+\s+IN\s*\(", 'CURSOR / FOR r IN (SELECT ...): a repository method that returns the list (or exists()/count()).'),
     (r"\bSELECT\b[\s\S]*?\bINTO\b", 'SELECT ... INTO: a repository method; no row = NO_DATA_FOUND (handle it where the Forms code does).'),
     (r"\b(?:UPDATE|INSERT\s+INTO|DELETE\s+FROM)\b", 'UPDATE / INSERT / DELETE of a table: a repository method (find + setters, persist, remove or CriteriaUpdate).'),
-    (r"\bTO_NUMBER\s*\(", 'TO_NUMBER(s): new BigDecimal(s.trim()) (null stays null).'),
-    (r"\bTO_CHAR\s*\(", 'TO_CHAR(n): n.toPlainString(); TO_CHAR(date, fmt): DateTimeFormatter.ofPattern(<the same pattern>).'),
+    (r"\bTO_NUMBER\s*\(", 'TO_NUMBER(s): new BigDecimal(s.trim()) (null stays null); the decimal character is the '
+                          'session\'s (a Hungarian session reads 1,5): replace it with . first.'),
+    (r"\bTO_CHAR\s*\(", 'TO_CHAR(n): n.toPlainString() (Oracle writes the session\'s decimal character and no leading '
+                        'zero: .5, a Hungarian session 1,5). An Oracle format model is never a Java pattern as it is '
+                        '(MI is mm, DD is dd, YYYY is yyyy): use the conversions listed here.'),
+    (r"\|\|", "a || b: SqlValues.concat(a, b), never a + b (Oracle skips NULL: 'a' || NULL = 'a', and an empty "
+              "result is NULL); a number or a date goes in through TO_CHAR."),
 ]
+
+
+def format_hints(code: str) -> list[str]:
+    """The exact java.time pattern of every TO_CHAR / TO_DATE call with a literal format model in the Forms code."""
+    from .oracle_formats import format_calls, has_time, is_number_format, java_pattern
+    lines = []
+    for function, model in format_calls(code):
+        quoted = "'" + model.replace("'", "''") + "'"
+        if function == "TO_CHAR" and is_number_format(model):
+            lines.append(f"TO_CHAR(n, {quoted}) is a number format model (9 and 0 are digits, G and D the group and "
+                         "decimal characters of the session: a Hungarian one writes 1 234,5): build it with DecimalFormat "
+                         "and explicit DecimalFormatSymbols.")
+            continue
+        pattern = java_pattern(model, parse=function != "TO_CHAR")
+        if pattern is None:
+            lines.append(f"{function}(x, {quoted}): no exact java.time pattern (month or day names, AM/PM, RR or week "
+                         "numbers depend on the Oracle NLS settings); write the closest DateTimeFormatter with an explicit "
+                         "Locale and name the format under NOTES.")
+        elif function == "TO_CHAR":
+            lines.append(f'TO_CHAR(d, {quoted}): d.format(DateTimeFormatter.ofPattern("{pattern}")) (null stays null).')
+        elif has_time(model) or function == "TO_TIMESTAMP":
+            lines.append(f'{function}(s, {quoted}): LocalDateTime.parse(s.trim(), DateTimeFormatter.ofPattern("{pattern}")) '
+                         '(null stays null).')
+        else:
+            lines.append(f'TO_DATE(s, {quoted}): LocalDate.parse(s.trim(), DateTimeFormatter.ofPattern("{pattern}"))'
+                         '.atStartOfDay() (null stays null).')
+    return lines
 HOOK_HINTS = [
     (r"\bMESSAGE\s*\(", 'MESSAGE(x): context.message(x).'),
     (r"\bFORM_TRIGGER_FAILURE\b", 'RAISE FORM_TRIGGER_FAILURE: context.abort().'),
@@ -153,11 +188,12 @@ HOOK_HINTS = [
 
 
 def rules(data_access: str = "jpa", has_tables: bool = True, plsql_values: bool = True, jdbc_helpers: bool = False,
-          action_api: bool = True) -> str:
+          action_api: bool = True, routines: bool = False) -> str:
     if data_access == "jpa":
         data_rule = JPA_RULE if has_tables else NO_TABLE_RULE
     else:
         data_rule = JDBC_RULE.replace("{jdbc_helpers}", " and the generated helpers below where they fit" if jdbc_helpers else "")
+    data_rule += ROUTINE_RULE if routines else ""
     # Plain replacement: the rules quote Java code with literal braces.
     text = RULES.replace("{data_rule}", data_rule).replace("{helpers}", PLSQL_VALUES if plsql_values else "")
     if not action_api:
@@ -169,6 +205,7 @@ def rules(data_access: str = "jpa", has_tables: bool = True, plsql_values: bool 
 def hook_rules(packet: dict, data_access: str, has_tables: bool) -> str:
     hook = packet.get("hook") or {}
     data_rule = (JPA_RULE if has_tables else NO_TABLE_RULE) if data_access == "jpa" else JDBC_RULE.replace("{jdbc_helpers}", "")
+    data_rule += ROUTINE_RULE if packet.get("db_routines") else ""
     if hook.get("kind") == "commit":
         return COMMIT_RULES.replace("{data_rule}", data_rule).replace("{event}", hook.get("event", ""))
     event = hook.get("event", "")
@@ -178,26 +215,44 @@ def hook_rules(packet: dict, data_access: str, has_tables: bool) -> str:
 
 
 def original_code(method: str) -> str:
-    """The commented Forms code of the method (the //region), uncommented, for the hints."""
+    """The commented Forms code of the method (the //region), uncommented.
+
+    The region of ai_triggers.region starts with the migrator's own notes ("üzenet: context.message(...)") and
+    has "// --- <heading>" lines between the sources: neither is Forms code, both are left out.
+    """
     lines = re.findall(r"^[ \t]*//(?![ \t]*(?:region|endregion)\b)[ \t]?(.*)$", method, re.M)
+    if any(line.startswith("--- ") for line in lines):
+        first = next(i for i, line in enumerate(lines) if line.startswith("--- "))
+        lines = [line for line in lines[first:] if not line.startswith("--- ")]
     return "\n".join(lines)
 
 
-def hints(method: str, kind: str) -> list[str]:
-    code = original_code(method)
+def forms_code(packet: dict, method: str) -> str:
+    """The Forms code the task translates, without PL/SQL comments: the trigger and the local units it calls.
+
+    The packet's sources are exactly the code its region shows. Commented-out PL/SQL (-- MESSAGE(...)) and the
+    region's notes never produce a hint or a field line.
+    """
+    from .ai_triggers import code_text
+    sources = [s.get("source") or "" for s in packet.get("sources") or [] if isinstance(s, dict)]
+    return "\n".join(code_text(source) for source in sources) if sources else code_text(original_code(method))
+
+
+def hints(code: str, kind: str) -> list[str]:
+    """Forms -> Java lines for the built-ins and references the Forms code (forms_code) uses."""
     chosen = (HOOK_HINTS if kind == "hook" else [] if kind == "commit" else ACTION_HINTS) + COMMON_HINTS
     found = []
     for pattern, text in chosen:
         if re.search(pattern, code, re.I) and text not in found:
             found.append(text)
-    return found
+    return found + format_hints(code)
 
 
 def record_fields(packet: dict, method: str) -> list[str]:
     """Forms item -> row.field for a record hook: the referenced items and the key (all, when few)."""
     hook = packet.get("hook") or {}
     fields = hook.get("fields") or []
-    code = original_code(method).upper()
+    code = forms_code(packet, method).upper()
     every = len(fields) <= 12
     lines = []
     for f in fields:
@@ -297,7 +352,7 @@ def build(packet: dict, persistence: list[dict], helpers: dict, options, *, plsq
         hint_kind = "hook" if hook_kind == "record" else "commit"
     else:
         parts = ["Rewrite this Java method so that it implements the original Oracle Forms code in plain Java.",
-                 rules(data_access, bool(used), plsql_values, bool(helpers), action_api)]
+                 rules(data_access, bool(used), plsql_values, bool(helpers), action_api, bool(packet.get("db_routines")))]
         if query_api:
             target = (packet.get("endpoint") or {}).get("query_block") or "target"
             block = next((b for b in packet.get("blocks", []) if b.get("name") == target), {})
@@ -309,9 +364,16 @@ def build(packet: dict, persistence: list[dict], helpers: dict, options, *, plsq
             if fields:
                 parts.append("Fields of " + (row_class.group(1) if row_class else "the row") + " (public, set them directly):\n" + "\n".join(fields))
         hint_kind = "action"
-    found = hints(method, hint_kind)
+    found = hints(forms_code(packet, method), hint_kind)
     if found:
         parts.append("Forms -> Java for this code:\n" + "\n".join("- " + line for line in found))
+    routines = packet.get("db_routines") or []
+    if routines:
+        parts.append("Database routine methods (generated; call them, do not write them):\n"
+                     + "\n".join("- " + r["describe"] for r in routines))
+    if packet.get("unavailable_routines"):
+        parts.append("Called database routines without a method: " + "; ".join(packet["unavailable_routines"])
+                     + ". If the logic needs one, write MISSING: and name it; never re-implement a database routine.")
     if used:
         lines = ["Repositories:"]
         for p in used:

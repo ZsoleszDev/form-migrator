@@ -661,14 +661,28 @@ export class RendelesComponent extends ServiceBase {
 
   // Mentés (Forms COMMIT_FORM): a változások egy kérésben; a backend egy tranzakcióban, Forms-sorrendben ment.
   protected save(): void {
-    // TODO: a blokkok változásai a DTO mezőivel: inserted: [új rekord], updated: [{ original, value }], deleted: [rekord].
-    this.commitForm({ changesRendeles: { inserted: [], updated: [], deleted: [] } }).subscribe();
+    const rendeles = this.forms['rendeles']?.getRawValue() ?? {};
+    this.commitForm({
+      changesRendeles: this.migrationChanges('RENDELES', rendeles, this.forms['rendeles']?.dirty),
+    }).subscribe(res => {
+      if (res.rowsRendeles?.length) {
+        const row = res.rowsRendeles[0];
+        this.migrationLoaded['RENDELES'] = row;
+        this.forms['rendeles']?.reset({ ...row, datum: row?.datum ? new Date(row.datum) : null });
+      }
+      this.applyActionResult(res);
+    });
   }
 }
 ```
 
 - **Konstruktor:** mindig van `constructor() { super(); }`, a mezők és a függvények között; ha a képernyőnek
   indítási végpontja van, a hívása is ide kerül.
+- **Indítás (AI-mód):** a PRE-FORM / WHEN-NEW-FORM-INSTANCE állandó értékadásai és konstans mezőtulajdonságai a
+  struktúrában vannak (`startValue`, `disabled`, `readonly`, `labelText`); az állandó `:GLOBAL` az az érték, amelyet a
+  képernyő a kéréseiben küld; a `GO_BLOCK` + `EXECUTE_QUERY` lekérdezést a konstruktor hívja, ha a feltétele nem a
+  képernyőről vagy paraméterből jön. Indítási végpont csak az adatbázist érintő kódhoz készül; a többi a
+  MIGRATION_NOTES.md „Indítás” szakaszában van.
 - **Sablon:** a struktúrákra szögletes zárójellel hivatkozik:
   `<ank-form-block [formStructure]="structures['ctrl']" (formGroupGenerated)="onFormGroupGenerated('ctrl', $event)" />`.
   A `structures` típusa `Record<string, …>`, és az Angular CLI alap tsconfigja (`noPropertyAccessFromIndexSignature`)
@@ -677,8 +691,14 @@ export class RendelesComponent extends ServiceBase {
 - **Metódusok:** a végpontok; `onFormGroupGenerated` (a régiók FormGroupjai a `forms`-ban); `on<Gomb>Click()`
   gombonként; `save()`, ha a képernyőnek van mentési végpontja és menthető űrlapblokkja; `onRowAction()`, ha egy
   táblázatnak sor végi gombjai vannak. Segédmetódus (`text`, `data`, `blocks`, `parameters`, `showResult` ...) nincs.
-- **Mentés:** a sablon tetején egy **Mentés** gomb (`save()`). A `save()` a mentési végpont kérését küldi, a
-  blokkok változásai üres listák: összeállításuk (a lekérdezett rekordhoz képest módosítás, új rekord, törlés)
-  fejlesztői feladat (TODO).
+- **Mentés:** a sablon tetején egy **Mentés** gomb (`save()`). A lekérdezés az űrlapblokk rekordját
+  (`limit: 1`, a többi találatról a `migrationMoreRows` szól) teljesen beírja az űrlapba (`reset`), és mentett blokknál
+  megjegyzi (`migrationLoaded`). A `save()` blokkonként az űrlap rekordját küldi (`migrationChanges`): lekérdezett
+  rekordnál módosításként, ha a képernyő eltér tőle (`updated: [{ original, value }]`, az `original` a backend
+  ütközésvizsgálatáé), lekérdezés nélkül új rekordként, ha a felhasználó beírt valamit (`inserted`). A jelölőnégyzet a
+  képernyőn `true/false`, a rekordban a Forms-érték (`I/N`); a dátum a képernyőn `Date`, a rekordban helyi ISO-szöveg;
+  az üres szöveg `null`. Mentés után a képernyő a mentett, újraolvasott rekordot mutatja (például a generált
+  kulccsal); a válasz üzenetei és utasításai az `applyActionResult`-ba mennek. Törlést a képernyő nem küld
+  (`deleted: []`): a Forms `DELETE_RECORD` megfelelője fejlesztői feladat.
 - **Kommentek:** csak a továbbfejlesztést segítő megjegyzések maradnak (TODO-importok, a gombok TODO-i, a nem
   fordított gomboknál az eredeti Forms-kód).

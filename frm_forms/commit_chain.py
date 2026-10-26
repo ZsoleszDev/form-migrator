@@ -83,6 +83,25 @@ def key_sources(model: dict, block: dict) -> list:
     return result
 
 
+def screen_reads(o: dict, model: dict, discovery: dict | None = None) -> tuple[list[str], list[str]]:
+    """The screen values commitForm reads, as the screen sends them: (BLOCK.ITEM, :GLOBAL/:PARAMETER/:SYSTEM).
+
+    The master key of a new detail record (key_sources) and the binds of PRE-COMMIT / POST-FORMS-COMMIT: the
+    original PL/SQL's, or for a Java assistant hook the trigger's own (discovery).
+    """
+    sources = [master['name'] + '.' + source['name'] for b in o['blocks'] for _, master, source in key_sources(model, b)
+               if READERS.get(source['type'])]
+    for event, plan in model.get('commit_plan', {}).items():
+        if plan.get('ai'):
+            sources += [b['name'] for c in (discovery or {}).get('code', [])
+                        if c['kind'] == 'trigger' and not c.get('block') and c.get('name') == event for b in c.get('binds', [])]
+        else:
+            sources += [b['source'] for b in plan['plan']['binds'] if not b.get('input')]
+    sources = [s for s in dict.fromkeys(s.upper() for s in sources) if '.' in s and s.split('.', 1)[0] != 'FRM']
+    context = [s for s in sources if s.split('.', 1)[0] in {'GLOBAL', 'PARAMETER', 'SYSTEM'}]
+    return [s for s in sources if s not in context], context
+
+
 def trigger_lines(event: str, prepared: dict, indent: str) -> list[str]:
     """PRE-COMMIT / POST-FORMS-COMMIT: the anonymous block with the screen values, outputs merged into the result."""
     from .plsql_passthrough import input_declarations, input_variable, sql_expression

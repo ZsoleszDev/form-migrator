@@ -198,8 +198,8 @@ class AiFramesTests(unittest.TestCase):
         click = click[:click.index("\n  }\n")]
         self.assertIn("this.actionOnctrlsearchbtn(", click)
         self.assertIn("FILTER:", click)
-        self.assertIn("limit: 200", click)
-        self.assertIn("this.forms['orders']?.patchValue(res.rows?.[0] ?? {});", click)
+        self.assertIn("limit: 1,", click)  # the form shows one record; hasMore says when more matched
+        self.assertIn("this.migrationLoaded['ORDERS'] = row;\n      this.forms['orders']?.reset(row ?? {});", click)
 
     def test_screen_carries_out_the_commands_of_an_answer(self):
         screen = (self.output / "frontend/orders/orders.component.ts").read_text(encoding="utf-8")
@@ -288,6 +288,21 @@ class HookAssistantTests(unittest.TestCase):
         self.assertIn("triggerPostQueryOrders", remaining)
         if shutil.which("java"):
             compile_module(self, self.output, Path(tempfile.mkdtemp(dir=self.root)))
+
+    def test_hook_hints_come_from_the_trigger_code_only(self):
+        # The region notes of every hook say "context.message(...)": that is no MESSAGE of the Forms code.
+        from frm_forms import schema_workbench as schema
+        text = {"data_type": "VARCHAR2", "length": 80, "length_semantics": "CHAR"}
+        for table, key, columns in (("APP_ORDERS", "ID", ("CODE", "NAME")), ("APP_PARTNERS", "CODE", ("NAME",))):
+            first = {"name": "ID", "data_type": "NUMBER"} if key == "ID" else {"name": key, **text}
+            rows = [{**first, "nullable": False}] + [{"name": c, **text, "nullable": True} for c in columns]
+            schema.save_table(self.output, table, rows, [key], schema.schema_sheet(self.output)["revision"])
+        self.tasks = {t["method"]: t for t in engine.prepare_workspace(self.output)["tasks"]}
+        hint = "- MESSAGE(x): context.message(x)."
+        validate = engine.preview(self.output, self.tasks["triggerWhenValidateItemCodeOrders"]["id"], self.options)["user"]
+        self.assertIn(hint, validate)
+        for method in ("triggerPostQueryOrders", "triggerPreInsertOrders"):
+            self.assertNotIn(hint, engine.preview(self.output, self.tasks[method]["id"], self.options)["user"], method)
 
     def test_sequence_key_hook_gets_its_own_table_repository_and_compiles(self):
         from frm_forms import schema_workbench as schema

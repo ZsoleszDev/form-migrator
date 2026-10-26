@@ -9,10 +9,12 @@
             guard("read");
             if (offset < 0 || offset > 1000000 || limit < 1 || limit > 200)
                 throw bad("offset: 0..1000000, limit: 1..200 szükséges.");
-            var rows = selectPage(offset, limit);
+            var rows = selectPage(offset, limit + 1);  // one row more: did the page leave rows out?
+            var more = rows.size() > limit;
+            if (more) rows = rows.subList(0, limit);
             var context = new RuleContext();
             for (var row : rows) postQuery(row, context);
-            return new PageResult<>(rows, context.messages());
+            return new PageResult<>(rows, context.messages(), more);
         }
     
 @@END_LIST@@
@@ -22,11 +24,11 @@
             requireRow(row);
             normalize(row);
     @@CREATE_CHECKS@@
+            validate(row);  // Forms: the item's own checks (Required, length, range) before its triggers
             var context = new RuleContext();
             validateRules(row, context);
             preInsert(row, context);
-            normalize(row);
-            validate(row);
+            normalize(row);@@INSERT_REVALIDATE@@
             @@INSERT_CALL@@
             postInsert(row, context);
             var saved = @@CREATED_ROW@@;
@@ -43,11 +45,11 @@
             var current = loadRow(original, true);
             assertUnchanged(original, current);
     @@UPDATE_CHECKS@@
+            validate(row);  // Forms: the item's own checks (Required, length, range) before its triggers
             var context = new RuleContext();
             validateRules(row, context);
             preUpdate(row, context);
-            normalize(row);
-            validate(row);
+            normalize(row);@@UPDATE_REVALIDATE@@
     @@KEY_IMMUTABLE@@
             @@UPDATE_CALL@@
             postUpdate(row, context);
@@ -111,7 +113,13 @@
 @@BEGIN_WRITE@@
         public @@CLASS@@Row loadRow(@@CLASS@@Row key, boolean lock) {
             @@KEY_CHECK@@
-            var rows = jdbc.query(@@SELECT_KEY@@ + (lock ? " FOR UPDATE" : ""), params(key), (rs, rowNum) -> map(rs));
+            List<@@CLASS@@Row> rows;
+            try {
+                // NOWAIT, like the Forms lock: a record another session holds is HTTP 409 (FormsErrors), never a wait.
+                rows = jdbc.query(@@SELECT_KEY@@ + (lock ? " FOR UPDATE NOWAIT" : ""), params(key), (rs, rowNum) -> map(rs));
+            } catch (DataAccessException e) {
+                throw FormsErrors.translate(e);
+            }
             if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "A rekord nem található.");
             if (rows.size() != 1) throw new ResponseStatusException(HttpStatus.CONFLICT, "A megadott kulcs nem egyedi.");
             return rows.get(0);

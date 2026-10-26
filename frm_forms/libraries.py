@@ -307,10 +307,13 @@ def attach(model: dict, libraries: list[dict], catalog: dict) -> dict:
         for unit_name, unit in by_name.get(name, {}).get('units', {}).items():
             if unit_name not in own and unit_name not in index:
                 index[unit_name] = (name, unit)
+    def catalogued(word):
+        # A routine, or a package whose every routine the catalog lists (PKG.*), e.g. a Forms-only UI library.
+        return framework_name(word, catalog) or (index[word][1]['kind'] == 'package' and framework_name(word + '.*', catalog))
     reached, pending = [], [t['source'] for t in model['triggers']] + [get(u, 'ProgramUnitText') for u in model['program_units']]
     while pending:
         for word in identifiers(pending.pop()):
-            if word in index and word not in reached and not framework_name(word, catalog):
+            if word in index and word not in reached and not catalogued(word):
                 reached.append(word)
                 pending.append(index[word][1]['text'])
     for unit_name in reached:

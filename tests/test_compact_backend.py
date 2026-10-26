@@ -10,7 +10,10 @@ import unittest
 import xml.etree.ElementTree as ET
 
 from frm_forms.cli import main
-from java_support import COMPANY_IMPORTS, write_stubs
+from java_support import COMPANY_IMPORTS, trigger_mode, write_stubs
+
+setUpModule, tearDownModule = trigger_mode('plsql')
+
 
 ROOT = Path(__file__).resolve().parents[1]
 

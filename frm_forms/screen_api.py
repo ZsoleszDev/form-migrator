@@ -33,6 +33,14 @@ def load_api(output: Path) -> dict | None:
     return api if api and api.get('paths') else None
 
 
+def load_startup(output: Path) -> dict | None:
+    """The start-up code's screen state (startup.triage), also of a module without endpoints."""
+    path = output / 'analysis' / 'backend-plan.json'
+    if not path.is_file():
+        return None
+    return (json.loads(path.read_text(encoding='utf-8')).get('api') or {}).get('startup')
+
+
 def method_name(constant: str, taken: set) -> str:
     base = name(re.sub(r'_PATH$', '', constant).lower(), 'camel') or 'call'
     base = base if base not in RESERVED else base + 'Call'
@@ -72,7 +80,9 @@ def wiring(plan: dict, ui: dict, api: dict | None, key: str, forms: list, tables
         kind = 'search' if 'search' in calls else 'list' if 'list' in calls else None
         if kind is None:
             continue
-        query = {'call': calls[kind]['method'], 'kind': kind, 'limit': QUERY_LIMIT}
+        # A table shows a page; a form one record (with hasMore, the screen says when the query found more).
+        query = {'call': calls[kind]['method'], 'kind': kind,
+                 'limit': QUERY_LIMIT if block in {s['block'] for s in tables} else 1}
         if kind == 'search':
             criteria = []
             for c in entry['operations']['search'].get('criteria', []):
@@ -113,7 +123,7 @@ def wiring(plan: dict, ui: dict, api: dict | None, key: str, forms: list, tables
         call = endpoint(spec['constant'], 'post', 'commit', '@FORM')['method']  # every CL endpoint has its method
         saved = {b: s for b, s in spec['blocks'].items() if b in {f['block'] for f in forms}}
         if saved:
-            commit = {'call': call, 'blocks': saved}
+            commit = {'call': call, 'blocks': saved, 'reads': spec.get('reads', []), 'parameters': spec.get('parameters', [])}
     query_actions = {owner: a['query_block'] for owner, a in api['actions'].items() if a.get('query_block')}
     return {'api': api, 'constants_class': api['constants_class'], 'envelope': api.get('response_envelope'),
             'endpoints': endpoints, 'queries': queries, 'lovs': lov_endpoints, 'actions': actions,
@@ -184,8 +194,13 @@ def notes(w: dict | None) -> list[str]:
         lines += ['', '## Mentés (Forms COMMIT_FORM)', '',
                   'A **Mentés** gomb (`save()`; a felismert `COMMIT_FORM` gomblépés is ezt hívja) a `' + w['commit']['call']
                   + '` végpontot hívja: a képernyő összes változása egy kérésben megy, a backend egy tranzakcióban, '
-                  'Forms-sorrendben menti. A kérésben a blokkok változásai (`inserted`, `updated: [{ original, value }]`, '
-                  '`deleted`) üresek: összeállításuk a képernyő értékeiből fejlesztői feladat (TODO a `save()`-ben).']
+                  'Forms-sorrendben menti. Blokkonként az űrlap rekordja megy: ha lekérdezett rekordot mutat (`migrationLoaded`), '
+                  'és a képernyő eltér tőle, módosításként (`updated: [{ original, value }]`, az `original` a backend '
+                  'ütközésvizsgálatáé); lekérdezés nélkül új rekordként (`inserted`), ha a felhasználó beírt valamit. '
+                  'Mentés után a képernyő a mentett, újraolvasott rekordot mutatja (például a generált kulccsal), így a következő '
+                  'mentés már módosítás. Törlést a képernyő nem küld (`deleted: []`): a Forms DELETE_RECORD megfelelője '
+                  'fejlesztői feladat. A kérés a mentési lánc által olvasott képernyőértékeket is viszi (`blocks`, '
+                  '`parameters`: új detail rekord master-kulcsa, PRE-COMMIT).']
     else:
         lines += ['', 'Mentés (create/update/delete): a metódusok elkészülnek, de a Forms COMMIT-szemantikája (több rekord, sorrend, '
                   'hibakezelés) miatt a mentést a fejlesztő köti be; a komponens nem ment automatikusan.']

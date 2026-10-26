@@ -11,6 +11,7 @@ import java.util.Objects;
 import java.util.Set;
 
 import hu.company.features.cl.CommonMigrateTools.FormsChecks;
+import hu.company.features.cl.CommonMigrateTools.FormsErrors;
 import hu.company.features.cl.CommonMigrateTools.LovQuery;
 import hu.company.features.cl.CommonMigrateTools.RuleContext;
 import hu.company.features.cl.CommonMigrateTools.SqlValues;
@@ -25,6 +26,7 @@ import hu.company.features.teszt.cl.TesztDtos.PageResult;
 import hu.company.features.teszt.cl.TesztDtos.RowResult;
 import hu.company.features.teszt.cl.TesztDtos.SearchRequest;
 import lombok.extern.slf4j.XSlf4j;
+import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -71,9 +73,9 @@ public class TesztServiceImpl extends ModuleServiceBase<DpsLogHelper> implements
             if (!SqlValues.same(current.aitKulcs, row.aitKulcs)) {
                 throw badAit("aitKulcs: nem módosítható.");
             }
+            validateAit(row); // Forms: the item's own checks (Required, length, range) before its triggers
             var context = new RuleContext();
             normalizeAit(row);
-            validateAit(row);
             if (!SqlValues.same(current.aitKulcs, row.aitKulcs)) {
                 throw badAit("aitKulcs: nem módosítható.");
             }
@@ -104,13 +106,17 @@ public class TesztServiceImpl extends ModuleServiceBase<DpsLogHelper> implements
             if (!errors.isEmpty()) {
                 throw badAit("Hibás keresési feltételek: " + String.join("; ", errors));
             }
-            var p = new MapSqlParameterSource().addValue("offset", request.offset()).addValue("limit", request.limit());
+            var p = new MapSqlParameterSource().addValue("offset", request.offset()).addValue("limit", request.limit() + 1);
             p.addValue("q0", SqlValues.normalize(criteria.vElekAdlapUbiInptipKod), Types.VARCHAR);
             var rows = jdbc.query("SELECT AIT_KULCS, AIT_TIPUS, AIT_STATUS, AIT_MEGJ FROM ANK_ADLAP_ITEMS WHERE "
                     + "((AIT_STATUS = 'F') AND (AIT_TIPUS = :q0)) ORDER BY AIT_KULCS DESC OFFSET :offset ROWS FETCH "
                     + "NEXT :limit ROWS ONLY", p, (rs, rowNum) -> mapAit(rs));
+            var more = rows.size() > request.limit(); // one row more was asked: did the page leave rows out?
+            if (more) {
+                rows = rows.subList(0, request.limit());
+            }
             var context = new RuleContext();
-            return new PageResult<>(rows, context.messages());
+            return new PageResult<>(rows, context.messages(), more);
         });
     }
 
@@ -218,8 +224,15 @@ public class TesztServiceImpl extends ModuleServiceBase<DpsLogHelper> implements
         if (SqlValues.isNull(key.aitKulcs)) {
             throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "Hiányzó elsődleges kulcs.");
         }
-        var rows = jdbc.query("SELECT AIT_KULCS, AIT_TIPUS, AIT_STATUS, AIT_MEGJ FROM ANK_ADLAP_ITEMS WHERE "
-                + "AIT_KULCS = :aitKulcs" + (lock ? " FOR UPDATE" : ""), paramsAit(key), (rs, rowNum) -> mapAit(rs));
+        List<AitRow> rows;
+        try {
+            // NOWAIT, like the Forms lock: a record another session holds is HTTP 409 (FormsErrors), never a wait.
+            rows = jdbc.query("SELECT AIT_KULCS, AIT_TIPUS, AIT_STATUS, AIT_MEGJ FROM ANK_ADLAP_ITEMS WHERE "
+                    + "AIT_KULCS = "
+                    + ":aitKulcs" + (lock ? " FOR UPDATE NOWAIT" : ""), paramsAit(key), (rs, rowNum) -> mapAit(rs));
+        } catch (DataAccessException e) {
+            throw FormsErrors.translate(e);
+        }
         if (rows.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "A rekord nem található.");
         }

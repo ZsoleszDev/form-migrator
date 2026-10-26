@@ -144,6 +144,28 @@ def hook_code(discovery: dict, hook: dict) -> list[str]:
     return found
 
 
+def startup_sources(sources: list[dict], reduced: dict) -> list[dict]:
+    """The start-up code as the Java assistant gets it: only its database work (startup.triage), and the local
+    units that work still calls. reduced: trigger id (FORM:EVENT) -> the PL/SQL left for the server."""
+    by_event = {trigger_id.split(":", 1)[-1]: text for trigger_id, text in reduced.items()}
+    triggers = [dict(s, source=by_event[s["name"]]) for s in sources if s["kind"] == "trigger" and s["name"] in by_event]
+    units = [s for s in sources if s["kind"] != "trigger"]
+    def mentions(text, name):
+        return re.search(r"(?<![\w$#.])" + re.escape(name) + r"(?![\w$#])", text, re.I) is not None
+    kept, texts = [], [s["source"] for s in triggers]
+    changed = True
+    while changed:  # the units the kept code calls, and the units those call
+        changed = False
+        for unit in units:
+            if unit not in kept and any(mentions(text, unit["name"]) for text in texts):
+                kept.append(unit)
+                texts.append(unit["source"])
+                changed = True
+    for entry in triggers:
+        entry["calls"] = [c for c in entry["calls"] if mentions(entry["source"], c["name"])]
+    return triggers + kept
+
+
 def hook_contract(hook: dict, ir: dict) -> dict:
     """What a hook's body may use: the record's fields (Forms item -> row.field) or the screen maps of commitForm."""
     if hook["hook_kind"] != "record":
@@ -181,6 +203,11 @@ def prepare_workspace(output: Path) -> dict:
     schema = schema_bundle[0]
     from . import java_imports
     formatting_imports = java_imports.load(effective["config"])
+    # The database routines of the code: typed methods from the reviewed signatures (db_routines).
+    from . import db_routines, framework
+    from .rules import procedure_signatures
+    procedures = procedure_signatures(schema.get("procedures", {}))
+    catalog = framework.load(effective["config"])
     from .input_bindings import sheet as input_sheet
     input_contract = input_sheet(output)
     tasks = []
@@ -231,6 +258,8 @@ def prepare_workspace(output: Path) -> dict:
                     "kind": codes[cid]["kind"], "sha256": codes[cid]["sha256"],
                     "source": codes[cid].get("source_view", codes[cid]["source"]),
                     "calls": codes[cid].get("calls", [])} for cid in reachable if cid in codes]
+        if endpoint.get("owner") == "@INIT" and (ir.get("init_plan") or {}).get("sources"):
+            sources = startup_sources(sources, ir["init_plan"]["sources"])
         task_id = digest(target + ":" + method)[:20]
         # A query button's target block (DEFAULT_WHERE + EXECUTE_QUERY) needs its table too.
         relevant_blocks = {endpoint.get("block"), endpoint.get("query_block"),
@@ -259,6 +288,12 @@ def prepare_workspace(output: Path) -> dict:
             elif file.name.startswith(cls) and "RestClient" not in file.name:
                 contracts[file.name] = file.read_text(encoding="utf-8")
         sheet = schema_sheet(output, sources, blocks, schema_bundle)
+        routines, unavailable = db_routines.plan(sources, procedures, catalog)
+        external = (action or {}).get("external_calls")
+        if external is None:
+            # A hook or the start-up code: its PKG.PROC calls (an undotted unknown name is mostly an Oracle built-in).
+            external = sorted({c["name"] for s in sources for c in s.get("calls", [])
+                               if c.get("kind") in {"external_candidate", "ambiguous_local_program_unit"}})
         packet = {"version": VERSION, "id": task_id, "module": effective["module"],
                   "target": target, "method": method, "endpoint": endpoint,
                   "kind": "hook" if hook else "implement" if manual or blocked else "rewrite_java",
@@ -277,7 +312,8 @@ def prepare_workspace(output: Path) -> dict:
                                if row["owner"] == endpoint.get("owner", endpoint.get("block"))],
                       "warnings": input_contract["warnings"]},
                   "source_module_sha256": ir.get("source_sha256"),
-                  "external_calls": (action or {}).get("external_calls", []),
+                  "external_calls": external,
+                  "db_routines": routines, "unavailable_routines": unavailable,
                   "module_gate": plan.get("module_gate", {}),
                   "table_requirements": sheet["tables"], "pending_tables": sheet["pending"], "schema_warnings": sheet["warnings"],
                   "notice": "A tiltás oka és a forrás megmarad; az AI-javaslat nem működésigazolás."}
@@ -479,13 +515,15 @@ def validate_response(value: object) -> dict:
     return value
 
 
-def common_tools(output: Path) -> str | None:
-    """Import of the shared PlsqlValues helper when the module has CommonMigrateTools."""
+def common_tool_imports(output: Path) -> dict[str, str]:
+    """Simple name -> import of the CommonMigrateTools helpers (SqlValues, DbCalls ...) the module has."""
     path = safe_file(output, "backend/CL/CommonMigrateTools.java")
-    if not path.is_file(): return None
+    if not path.is_file(): return {}
     text = path.read_text(encoding="utf-8")
     package = re.search(r"^\s*package\s+([\w.]+)\s*;", text, re.M)
-    return package.group(1) + ".CommonMigrateTools.PlsqlValues" if package and "class PlsqlValues" in text else None
+    if not package: return {}
+    return {name: package.group(1) + ".CommonMigrateTools." + name
+            for name in re.findall(r"^    public static final class (\w+)", text, re.M)}
 
 
 def render_candidate(service: str, packet: dict, response: dict) -> str:
@@ -544,11 +582,39 @@ def finish_candidate(result: str, service: str, packet: dict, response: dict) ->
         last = java_mask(result).rfind("}")
         helpers = "\n".join("    " + line if line else "" for line in response["private_methods"].strip().splitlines())
         result = result[:last] + "\n    // Java asszisztens: " + packet["id"] + "\n" + helpers + "\n" + result[last:]
+    result = add_routines(result, packet, response, helper_names)
     mapping = dict(java_tidy_known())
     mapping.update(packet.get("formatting_imports") or {})
+    # SqlValues.concat / nvl (the prompt's Oracle semantics), DbCalls of the database routine methods ...
+    mapping.update(packet.get("common_tool_imports") or {})
     if packet.get("plsql_values_import"):
         mapping["PlsqlValues"] = packet["plsql_values_import"]
     return ensure_imports(result, mapping)
+
+
+def add_routines(result: str, packet: dict, response: dict, helper_names: list[str]) -> str:
+    """The generated methods of the database routines the proposal calls (db_routines), each once per service.
+
+    The model calls them and never writes them; the service gets a NamedParameterJdbcTemplate when it has none.
+    """
+    routines = packet.get("db_routines") or []
+    clash = sorted(set(helper_names) & {r["method"] for r in routines})
+    if clash:
+        raise MigrationError("Az adatbázis-rutin metódusát a migrátor adja, a javaslat ne írja meg: " + ", ".join(clash))
+    code = java_mask(response["body"] + "\n" + response["private_methods"])
+    used = [r for r in routines if re.search(r"(?<![\w$.])" + re.escape(r["method"]) + r"\s*\(", code)]
+    missing = [r for r in used if r["header"] not in result]
+    if not missing:
+        return result
+    last = java_mask(result).rfind("}")
+    result = result[:last] + "\n" + "\n".join(r["source"] for r in missing) + result[last:]
+    if not re.search(r"\bNamedParameterJdbcTemplate\s+jdbc\s*[;=]", java_mask(result)):
+        match = re.search(r"\bpublic\s+class\s+\w+[^{]*\{", java_mask(result))
+        if not match: raise MigrationError("A DPS ServiceImpl osztálya nem található.")
+        field = ("\n    @org.springframework.beans.factory.annotation.Autowired\n"
+                 "    private NamedParameterJdbcTemplate jdbc;  // the database routine methods\n")
+        result = result[:match.end()] + field + result[match.end():]
+    return result
 
 
 # JDK types model-written code often uses without writing the import (in addition to the generator's list).
@@ -678,7 +744,8 @@ def prepare(output: Path, task_id: str, options: Options) -> dict:
         raise MigrationError("Előbb add meg a hiányzó táblaszerkezetet az Adatbázistáblák panelen: " + ", ".join(packet["pending_tables"]))
     service = safe_file(output, packet["target"]).read_text(encoding="utf-8")
     packet["service_package_source"] = service[:service.find("public class") if "public class" in service else 1000]
-    packet["plsql_values_import"] = common_tools(output)
+    packet["common_tool_imports"] = common_tool_imports(output)
+    packet["plsql_values_import"] = packet["common_tool_imports"].get("PlsqlValues")
     from . import assistant_context, jpa_assistant
     persistence = jpa_assistant.plan(packet, output) if options.data_access == "jpa" else []
     helpers, notes = data_models(packet) if options.data_access == "jdbc" else ({}, [])
@@ -893,7 +960,7 @@ def reply_context(prepared: dict, options: Options):
         repositories=[assistant_reply.Repository(p["repository"], p["variable"], p["entity"], p["existing_repository"])
                       for p in used],
         namespace=(packet.get("config") or {}).get("jpa_namespace") or "javax", mode=options.data_access,
-        allowed_imports=frozenset(allowed))
+        allowed_imports=frozenset(allowed), routines=frozenset(r["method"] for r in packet.get("db_routines") or []))
 
 
 def propose(output: Path, task_id: str, options: Options, cache: Path | None = None,
@@ -971,8 +1038,9 @@ def _propose(prepared, options, cache, request, log, assistant_reply, jpa_assist
     if response is None and options.cached_only:
         raise MigrationError("Ehhez a pontos forráshoz/beállításhoz nincs érvényes cache; hálózati hívás nem történt.")
     calls, parse_status, raw = 0, "not_run", ""
-    verified_procedures = {name.upper() for name in packet.get("schema", {}).get("procedures", {})}
-    unresolved = [call for call in packet.get("external_calls", []) if call.upper() not in verified_procedures]
+    from .db_routines import resolve
+    verified_procedures = {name.upper(): {} for name in packet.get("schema", {}).get("procedures", {})}
+    unresolved = [call for call in packet.get("external_calls", []) if resolve(call, verified_procedures) is None]
     messages, correction = list(request["messages"]), None
     while response is None and calls < options.attempts:
         calls += 1
@@ -1119,7 +1187,8 @@ def apply_proposal(output: Path, proposal_id: str, reviewed: bool = False) -> di
     response = validate_response(record["response"])
     source = safe_file(output, packet["target"]).read_text(encoding="utf-8")
     packet["service_package_source"] = source[:source.find("public class") if "public class" in source else 1000]
-    packet["plsql_values_import"] = common_tools(output)
+    packet["common_tool_imports"] = common_tool_imports(output)
+    packet["plsql_values_import"] = packet["common_tool_imports"].get("PlsqlValues")
     # Reconstruct rather than trusting paths or editable files from a model ZIP.
     expected_files = {packet["target"]: render_candidate(source, packet, response)}
     if record.get("data_access") == "jpa":

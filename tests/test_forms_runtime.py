@@ -9,7 +9,7 @@ import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 
-from java_support import COMPANY_IMPORTS, write_stubs
+from java_support import COMPANY_IMPORTS, trigger_mode, write_stubs
 from frm_forms.cli import main
 from frm_forms.common import MigrationError
 from frm_forms.dictionary import references
@@ -17,6 +17,9 @@ from frm_forms.discovery import build_map
 from frm_forms.framework import classify, forms_calls, load, runtime_call
 from frm_forms.plsql import Unsupported
 from frm_forms.plsql_passthrough import prepare, unit_library
+
+setUpModule, tearDownModule = trigger_mode('plsql')
+
 
 CALENDAR = load({})['runtime_calls']
 

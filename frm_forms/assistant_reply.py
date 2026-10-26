@@ -69,6 +69,7 @@ class Context:
     namespace: str = "javax"                      # javax/jakarta persistence
     mode: str = "jpa"                             # jpa | inline | jdbc
     allowed_imports: frozenset = frozenset()      # FQNs the developer already uses
+    routines: frozenset = frozenset()             # the generated database routine methods (db_routines)
 
 
 @dataclass
@@ -735,6 +736,10 @@ def finish(ctx: Context, reply: Reply, service, helpers, service_imports, repo_p
         member = first_method(text)
         if member is None: continue
         name = member.name
+        if name in ctx.routines:
+            reply.problem(f"Az AI megírta a(z) {name} adatbázis-rutin metódusát; azt a migrátor adja.",
+                          f"Do not write {name}: it is the generated method of a database routine. Call it.")
+            continue
         if name in existing_service:
             new = unique(ctx.method + pascal(name), existing_service | helper_names)
             reply.warn(f"A service-ben már van {name} metódus; az AI segédmetódusának új neve: {new}.")

@@ -7,7 +7,8 @@ The component extends the company ServiceBase and has:
 - onFormGroupGenerated: the FormGroup of every FormBlock region;
 - on<Item>Click() for every button: the HTTP request of the button, built simply from the form values (its backend
   action, the query of the block it queries), or its navigation, or a TODO with the original Forms code;
-- save() when the screen has a save (COMMIT_FORM) endpoint: the request with a TODO for the changes.
+- save() when the screen has a save (COMMIT_FORM) endpoint: per saved block the record of the form, measured against
+  the queried one (migrationLoaded): a new record when nothing was queried, a change when it differs.
 
 What the Forms runtime did beyond that (item states, LOV return values, alerts, :GLOBAL values, the record buffer,
 the Forms commands of the backend) is the developer's: the button has a TODO, MIGRATION_NOTES.md lists the rest.
@@ -27,7 +28,8 @@ NAVIGATION_STEPS = {'goItem', 'nextRecord', 'previousRecord', 'firstRecord', 'la
                     'nextItem', 'previousItem', 'listValues', 'enterQuery'}
 # Members of the component (and of ServiceBase) the endpoint methods must not shadow.
 RESERVED = {'migrationParameters', 'migrationInputText', 'constructor', 'url', 'http', 'toast', 'toastLife', 'labels', 'router', 'route', 'modName', 'forms', 'structures', 'onFormGroupGenerated',
-            'onRowAction', 'save', 'windowVisible', 'canvasVisible', 'activeContentCanvas', 'applyActionResult', 'migrationQuery'}
+            'onRowAction', 'save', 'windowVisible', 'canvasVisible', 'activeContentCanvas', 'applyActionResult', 'migrationQuery',
+            'migrationMoreRows', 'migrationLoaded', 'migrationChanges'}
 # Local names of a method: a region's values never take them.
 LOCALS = {'res', 'row', 'error', 'body'}
 LINE = 120  # a longer request is written one block per line
@@ -91,6 +93,13 @@ class ScreenCode:
         self.form_blocks = {}
         for section in forms:
             self.form_blocks.setdefault(section['block'], []).append(section['property'])
+        # The form blocks save() sends: their queried record is remembered (migrationLoaded).
+        self.saved_blocks = set((self.w.get('commit') or {}).get('blocks', ()))
+        # The start-up code's :GLOBAL constants (the value the screen sends) and initial queries (startup.triage).
+        startup = (self.w.get('api') or {}).get('startup') or {}
+        self.startup_globals = {k: v for k, v in startup.get('globals', {}).items() if v is not None}
+        self.startup_queries = list(startup.get('queries', []))
+        self.startup_queries_run, self.startup_queries_manual, self.startup_lines = [], [], []
         # Source expressions are independent of method-local variables, so an edited
         # binding cannot leave a now-unused local declaration in a button method.
         for owner, (region, key, item) in self.controls.items():
@@ -206,7 +215,8 @@ class ScreenCode:
     def input_value(self, endpoint, owner, source, location, transport='string', *, automatic=True, inferred=False, timing='event'):
         from .input_bindings import slot, selected_expression, marked
         choice = next((s for s in self.input_sources if s['owner'] == source), None)
-        default = (choice['text_expression'] if transport == 'string' else choice['expression']) if choice else 'null'
+        default = (choice['text_expression'] if transport == 'string' else choice['expression']) if choice else \
+            sq(self.startup_globals[source]) if source in self.startup_globals else 'null'  # set by the start-up code
         row = slot(endpoint, owner, source, location, default, transport, automatic=automatic, inferred=inferred)
         row['timing'] = timing
         previous = self.input_rows.get(row['id'])
@@ -238,8 +248,6 @@ class ScreenCode:
             elif e['kind'] == 'lov':
                 for bind in api['lovs'][e['target']].get('binds', []):
                     self.input_value(e['method'], e['target'], bind['source'], 'parameters.' + bind['source'], automatic=False)
-        if self.w.get('commit'):
-            self.input_warnings.append('A mentés inserted/updated/deleted rekordlistáinak összeállítása továbbra is kézi feladat.')
         if any(r['inferred'] for r in self.input_rows.values()):
             self.input_warnings.append('A kézi triggerek bemenetei statikus hivatkozásjelöltek: SQL INTO és IN/OUT irányok, dinamikus NAME_IN és üzleti hívások külön ellenőrzendők.')
         if any(r['source'].startswith(('GLOBAL.', 'SYSTEM.')) for r in self.input_rows.values()):
@@ -275,27 +283,57 @@ class ScreenCode:
             show.append('// TODO: a válasz RestResponseDto-borítékban jön: a rows a boríték adatmezőjében van.')
         if block in self.table_blocks:
             show.append(f'this.{self.table_name(block)}Rows = res.rows ?? [];')
+            show.append(f'this.migrationMoreRows({sq(block)}, res);')  # PageResult.hasMore: never a silent cut
+            self.more_rows = True
         elif block in self.form_blocks:
-            for region in self.form_blocks[block]:
-                pairs = [(key, self.api_fields.get(block, {}).get(owner.split('.', 1)[1], key))
-                         for owner, (r, key, _) in self.controls.items() if r == region]
-                if all(key == field for key, field in pairs):
-                    show.append(f'this.forms[{sq(region)}]?.patchValue(res.rows?.[0] ?? {{}});')
-                else:
-                    if 'const row = res.rows?.[0] ?? {};' not in show:
-                        show.append('const row = res.rows?.[0] ?? {};')
-                    show.append(f'this.forms[{sq(region)}]?.patchValue({{ ' + ', '.join(
-                        f'{ts_key(key)}: row{member(field)}' for key, field in pairs) + ' });')
+            # The form shows one record (asked with limit 1): exactly that one, an empty form when none was found.
+            show += ['const row = res.rows?.[0] ?? null;'] + self.show_record(block, 'row')
+            show.append(f'this.migrationMoreRows({sq(block)}, res);')
+            self.more_rows = True
         if not [line for line in show if not line.startswith('//')]:
             return [f'// TODO: a(z) {block} blokk nincs a képernyőn: az eredményt kézzel kell megjeleníteni.'] + request[:-1] + [request[-1] + '.subscribe();']
         return request[:-1] + [request[-1] + '.subscribe(res => {'] + ['  ' + line for line in show] + ['});']
+
+    def show_record(self, block: str, row: str) -> list[str]:
+        """The record (or null) into the block's form regions, as their controls hold it; a saved block remembers it.
+
+        Like the Forms block after a query: every control gets the record's value (reset), nothing of the previous one
+        stays. A checkbox holds true/false, a date field a Date (the record: the Forms value, local ISO text).
+        """
+        lines = [f'this.migrationLoaded[{sq(block)}] = {row};'] if block in self.saved_blocks else []
+        for region in self.form_blocks[block]:
+            controls = self.region_fields(block, region)
+            mapped = any(key != field for key, field, _ in controls)  # then every control by name, else the record itself
+            entries = []
+            for key, field, item in controls:
+                read = row + '?' + member(field)
+                if item['widget'] == 'checkbox':
+                    entries.append(f"{ts_key(key)}: {read} == null ? null : String({row}{member(field)}) === {sq(item.get('checked', ''))}")
+                elif item['widget'] in {'date', 'datetime'}:
+                    entries.append(f'{ts_key(key)}: {read} ? new Date({row}{member(field)}) : null')
+                elif mapped:
+                    entries.append(f'{ts_key(key)}: {read} ?? null')
+            entries = entries if mapped else ['...' + row] + entries if entries else []
+            line = f'this.forms[{sq(region)}]?.reset(' + ('{ ' + ', '.join(entries) + ' }' if entries else row + ' ?? {}') + ');'
+            lines += [line] if len(line) <= LINE else [f'this.forms[{sq(region)}]?.reset({{', *('  ' + e + ',' for e in entries), '});']
+        return lines
+
+    def region_fields(self, block: str, region: str) -> list[tuple[str, str, dict]]:
+        """(control key, DTO field, item) of the controls of a form region."""
+        return [(key, self.api_fields.get(block, {}).get(owner.split('.', 1)[1], key), item)
+                for owner, (r, key, item) in self.controls.items() if r == region]
+
+    def page(self, block: str) -> int:
+        """The rows a query of the block asks: a form the one record it shows, a table (or the developer) a page."""
+        return 1 if block in self.form_blocks and block not in self.table_blocks else QUERY_LIMIT
 
     def query(self, block: str, body: Body) -> list[str]:
         """The search of a block (Forms EXECUTE_QUERY), its criteria from the screen."""
         q = self.queries[block]
         self.called.add(q['call'])
         if q['kind'] == 'list':
-            return self.subscribe([f"this.{q['call']}()"], block)
+            page = self.page(block)
+            return self.subscribe([f"this.{q['call']}(" + ('' if page == QUERY_LIMIT else f'0, {page}') + ')'], block)
         criteria, todo = [], []
         for c in q.get('criteria', []):
             source = c.get('source') or c.get('context') or self.by_key.get((c['block'], c['key']), c['block'] + '.' + c['key'])
@@ -304,7 +342,7 @@ class ScreenCode:
             if missing:
                 todo.append(source)
         head = ['// TODO: a feltétel értéke: ' + ', '.join(todo) + '.'] if todo else []
-        entries = [('criteria', '{ ' + ', '.join(criteria) + ' }' if criteria else '{}'), ('offset', '0'), ('limit', str(QUERY_LIMIT))]
+        entries = [('criteria', '{ ' + ', '.join(criteria) + ' }' if criteria else '{}'), ('offset', '0'), ('limit', str(self.page(block)))]
         return head + self.subscribe(self.request(q['call'], entries), block)
 
     def action(self, owner: str, body: Body, init: bool = False) -> list[str]:
@@ -338,7 +376,7 @@ class ScreenCode:
                    ('parameters', '{ ' + ', '.join(parameter_values) + ' }' if parameters else '{}')]
         target = (self.w.get('query_actions') or {}).get(owner)
         if target:
-            entries += [('offset', '0'), ('limit', str(QUERY_LIMIT))]
+            entries += [('offset', '0'), ('limit', str(self.page(target)))]
             return head + self.subscribe(self.request(call, entries), target)
         # 4.35: the answer reaches the screen (applyActionResult): written items, messages, GO_BLOCK/EXECUTE_QUERY, alerts.
         self.result_handler = True
@@ -424,15 +462,54 @@ class ScreenCode:
         commit = self.w.get('commit')
         if not commit:
             return
-        self.called.add(commit['call'])
-        regions = [r for b in commit['blocks'] for r in self.form_blocks.get(b, [])]
-        entries = [(ts_key(spec['request']), '{ inserted: [], updated: [], deleted: [] }') for spec in commit['blocks'].values()]
-        request = self.request(commit['call'], entries)
-        lines = ['// TODO: a blokkok változásai a DTO mezőivel: inserted: [új rekord], updated: [{ original, value }], deleted: [rekord].',
-                 '// Az űrlap értékei: ' + ', '.join(f'this.forms[{sq(r)}]?.getRawValue()' for r in regions) + '.',
-                 *request[:-1], request[-1] + '.subscribe();']
+        call = commit['call']
+        self.called.add(call)
+        self.result_handler = True  # the answer's messages, commands and written items: applyActionResult
+        body, blocks, parameters, missing = Body(), {}, [], []
+        # What commitForm reads from the screen (a new detail record's master key, PRE-COMMIT): like a button's values.
+        for source in commit.get('reads', []):
+            value, absent = self.input_value(call, '@FORM', source, 'blocks.' + source)
+            missing += [source] if absent else []
+            block, item = source.split('.', 1)
+            blocks.setdefault(block, []).append(ts_key(item) + ': ' + value)
+        for source in commit.get('parameters', []):
+            value, absent = self.input_value(call, '@FORM', source, 'parameters.' + source)
+            missing += [source] if absent else []
+            parameters.append(sq(source) + ': ' + value)
+        entries = [('blocks', '{ ' + ', '.join(ts_key(b) + ': { ' + ', '.join(v) + ' }' for b, v in blocks.items()) + ' }')] if blocks else []
+        entries += [('parameters', '{ ' + ', '.join(parameters) + ' }')] if parameters else []
+        entries += [(ts_key(spec['request']), self.changes(block, body)) for block, spec in commit['blocks'].items()]
+        head = ['// TODO: nincs a képernyőn: ' + ', '.join(missing) + '.'] if missing else []
+        if parameters or missing:
+            head.append('// Bemeneti bekötések és kézi feladatok: analysis/input-bindings.json (Java asszisztens).')
+        if self.envelope:
+            head.append('// TODO: a válasz RestResponseDto-borítékban jön: a mentett rekordok a boríték adatmezőjében vannak.')
+        shown = []  # the saved records (re-read, with their generated keys): the screen shows them, a next save updates them
+        for block, spec in commit['blocks'].items():
+            rows = 'res' + member(spec['result'])
+            shown += [f'if ({rows}?.length) {{', f'  const row = {rows}[0];', *('  ' + l for l in self.show_record(block, 'row')), '}']
+        request = self.request(call, entries)
+        body.lines = head + request[:-1] + [request[-1] + '.subscribe(res => {'] + ['  ' + l for l in shown + ['this.applyActionResult(res);']] + ['});']
         self.methods.append('  // Mentés (Forms COMMIT_FORM): a változások egy kérésben; a backend egy tranzakcióban, Forms-sorrendben ment.\n'
-                            '  protected save(): void {\n' + '\n'.join('    ' + l for l in lines) + '\n  }')
+                            '  protected save(): void {\n' + body.text() + '\n  }')
+
+    def changes(self, block: str, body: Body) -> str:
+        """The changes of a saved block: its record from the regions' values (by DTO field), measured by migrationChanges."""
+        parts, entered = [], []
+        for region in self.form_blocks.get(block, []):
+            local = body.local(region)
+            entered.append(f'this.forms[{sq(region)}]?.dirty')
+            controls = self.region_fields(block, region)
+            mapped = any(key != field for key, field, _ in controls)
+            parts += [] if mapped else ['...' + local]
+            for key, field, item in controls:
+                read = local + member(key)
+                if item['widget'] == 'checkbox':  # true/false on the screen, the Forms value in the record
+                    parts.append(f"{ts_key(field)}: {read} == null ? null : {read} ? {sq(item.get('checked', ''))} : {sq(item.get('unchecked', ''))}")
+                elif mapped:
+                    parts.append(f'{ts_key(field)}: {read}')
+        values = parts[0][3:] if len(parts) == 1 and parts[0].startswith('...') else '{ ' + ', '.join(parts) + ' }'
+        return f"this.migrationChanges({sq(block)}, {values}, {' || '.join(entered) or 'false'})"
 
     # ---------------------------------------------------------------- assembly
 
@@ -440,6 +517,7 @@ class ScreenCode:
         for owner in self.click:
             self.button(owner)
         self.save()
+        self.startup_lines = self.startup_query_lines()
         self.input_inventory()
         row_actions = [o for s in self.tables for o in (i['owner'] for i in s['items'] if i['widget'] == 'button')]
         if row_actions:
@@ -468,6 +546,9 @@ class ScreenCode:
             from .ts_code import nested
             fields.append('  // A FormBlock-régiók FormGroupjai (onFormGroupGenerated).\n  protected readonly forms: Record<string, FormGroup> = {};')
             fields.append('  protected readonly structures: Record<string, ' + form_type + '[]> = ' + nested(structures) + ';')
+        if self.saved_blocks:
+            fields.append('  // A mentés (save) blokkonként ehhez a lekérdezett rekordhoz méri a képernyőt; ha nincs, új rekordot ment.\n'
+                          '  protected readonly migrationLoaded: Record<string, Record<string, unknown> | null> = {};')
         for section in self.tables:
             t = self.table_name(section['block'])
             columns = [i for i in section['items'] if i['widget'] not in {'button', 'image', 'unsupported', 'tree'} and not i.get('spacer')]
@@ -492,6 +573,43 @@ class ScreenCode:
         if controls.get('canvases'):
             fields.append('  protected readonly canvasVisible: Record<string, boolean> = ' + record(controls['canvases']) + ';')
         return fields
+
+    def more_rows_methods(self) -> list[str]:
+        """migrationMoreRows: a query that left rows out (PageResult.hasMore) says so instead of a silent cut."""
+        if not getattr(self, 'more_rows', False):
+            return []
+        return [f'''  // A lekérdezés legfeljebb annyi rekordot kér, amennyit a képernyő mutat (táblázat: {QUERY_LIMIT}, űrlap: 1); ha több
+  // van, szól (a Forms görgetéssel hozná a továbbiakat).
+  protected migrationMoreRows(block: string, res: {{ hasMore?: boolean }} | null): void {{
+    if (res?.hasMore) {{
+      this.toast.warning('Lekérdezés', block + ': több rekord van, mint amennyi megjelent; szűkítsd a feltételt.', false, this.toastLife.warning);
+    }}
+  }}''']
+
+    def changes_methods(self) -> list[str]:
+        """migrationChanges: the change list of one saved block (save) from its record on the screen."""
+        if not self.saved_blocks:
+            return []
+        return ['''  // Mentés: egy blokk rekordja a képernyőn, a lekérdezetthez mérve. Lekérdezett rekord nélkül új rekord, ha a
+  // felhasználó beírt valamit; különben módosítás, ha eltér. Törlést a képernyő nem küld. Az üres szöveg null, mint
+  // az Oracle-ben; a dátum helyi idő, másodpercre, ahogy a DTO olvassa (yyyy-MM-ddTHH:mm:ss, eltolás nélkül).
+  protected migrationChanges(block: string, values: Record<string, unknown>, entered?: boolean) {
+    const pad = (part: number) => String(part).padStart(2, '0');
+    const original = this.migrationLoaded[block] ?? null;
+    const value: Record<string, unknown> = { ...original };
+    for (const [field, raw] of Object.entries(values)) {
+      if (raw instanceof Date && Number.isNaN(raw.getTime())) { throw new Error('Érvénytelen dátum'); }
+      value[field] = raw instanceof Date
+        ? String(raw.getFullYear()).padStart(4, '0') + '-' + pad(raw.getMonth() + 1) + '-' + pad(raw.getDate())
+          + 'T' + pad(raw.getHours()) + ':' + pad(raw.getMinutes()) + ':' + pad(raw.getSeconds())
+        : raw === '' || raw === undefined ? null : raw;
+    }
+    if (!original) {
+      return { inserted: entered && Object.keys(values).some(field => value[field] !== null) ? [value] : [], updated: [], deleted: [] };
+    }
+    const changed = Object.keys(values).some(field => String(value[field] ?? '') !== String(original[field] ?? ''));
+    return { inserted: [], updated: changed ? [{ original, value }] : [], deleted: [] };
+  }''']
 
     @staticmethod
     def input_helper() -> str:
@@ -523,4 +641,21 @@ class ScreenCode:
             lines.append('    // Indításkor (Forms WHEN-NEW-FORM-INSTANCE): ' + init + '.')
             lines += ['    ' + l for l in self.action(init, Body(), init=True)]
             self.input_warnings.append('Az indítási kérés a konstruktorban fut: Angular input és FormGroup még nem áll rendelkezésre. Az indítás időzítése és adatátadása kézi feladat.')
+        lines += self.startup_lines
         return '  constructor() {\n' + '\n'.join(lines) + '\n  }'
+
+    def startup_query_lines(self) -> list[str]:
+        """The queries of the start-up code (GO_BLOCK + EXECUTE_QUERY) the constructor can run."""
+        lines = []
+        for block in self.startup_queries:
+            query = self.queries.get(block)
+            if query is None:
+                self.startup_queries_manual.append((block, 'a blokk lekérdezését a képernyő nem hívhatja (nincs a képernyőn, vagy a feltétele kívülről jön)'))
+            elif any(c.get('block') or (c.get('context') and c['context'] not in self.startup_globals) for c in query.get('criteria', [])):
+                # A criterion from a form control or a module parameter: they are not there yet in the constructor.
+                self.startup_queries_manual.append((block, 'a feltétele a képernyőről vagy paraméterből jön: a FormGroupok és az inputok elkészülte után kell hívni (ngAfterViewInit)'))
+            else:
+                lines.append('    // Indításkor (Forms GO_BLOCK + EXECUTE_QUERY): a(z) ' + block + ' blokk lekérdezése.')
+                lines += ['    ' + l for l in self.query(block, Body())]
+                self.startup_queries_run.append(block)
+        return lines
