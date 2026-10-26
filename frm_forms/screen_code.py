@@ -95,6 +95,11 @@ class ScreenCode:
             self.form_blocks.setdefault(section['block'], []).append(section['property'])
         # The form blocks save() sends: their queried record is remembered (migrationLoaded).
         self.saved_blocks = set((self.w.get('commit') or {}).get('blocks', ()))
+        # The start-up code's :GLOBAL constants (the value the screen sends) and initial queries (startup.triage).
+        startup = (self.w.get('api') or {}).get('startup') or {}
+        self.startup_globals = {k: v for k, v in startup.get('globals', {}).items() if v is not None}
+        self.startup_queries = list(startup.get('queries', []))
+        self.startup_queries_run, self.startup_queries_manual, self.startup_lines = [], [], []
         # Source expressions are independent of method-local variables, so an edited
         # binding cannot leave a now-unused local declaration in a button method.
         for owner, (region, key, item) in self.controls.items():
@@ -210,7 +215,8 @@ class ScreenCode:
     def input_value(self, endpoint, owner, source, location, transport='string', *, automatic=True, inferred=False, timing='event'):
         from .input_bindings import slot, selected_expression, marked
         choice = next((s for s in self.input_sources if s['owner'] == source), None)
-        default = (choice['text_expression'] if transport == 'string' else choice['expression']) if choice else 'null'
+        default = (choice['text_expression'] if transport == 'string' else choice['expression']) if choice else \
+            sq(self.startup_globals[source]) if source in self.startup_globals else 'null'  # set by the start-up code
         row = slot(endpoint, owner, source, location, default, transport, automatic=automatic, inferred=inferred)
         row['timing'] = timing
         previous = self.input_rows.get(row['id'])
@@ -511,6 +517,7 @@ class ScreenCode:
         for owner in self.click:
             self.button(owner)
         self.save()
+        self.startup_lines = self.startup_query_lines()
         self.input_inventory()
         row_actions = [o for s in self.tables for o in (i['owner'] for i in s['items'] if i['widget'] == 'button')]
         if row_actions:
@@ -634,4 +641,21 @@ class ScreenCode:
             lines.append('    // Indításkor (Forms WHEN-NEW-FORM-INSTANCE): ' + init + '.')
             lines += ['    ' + l for l in self.action(init, Body(), init=True)]
             self.input_warnings.append('Az indítási kérés a konstruktorban fut: Angular input és FormGroup még nem áll rendelkezésre. Az indítás időzítése és adatátadása kézi feladat.')
+        lines += self.startup_lines
         return '  constructor() {\n' + '\n'.join(lines) + '\n  }'
+
+    def startup_query_lines(self) -> list[str]:
+        """The queries of the start-up code (GO_BLOCK + EXECUTE_QUERY) the constructor can run."""
+        lines = []
+        for block in self.startup_queries:
+            query = self.queries.get(block)
+            if query is None:
+                self.startup_queries_manual.append((block, 'a blokk lekérdezését a képernyő nem hívhatja (nincs a képernyőn, vagy a feltétele kívülről jön)'))
+            elif any(c.get('block') or (c.get('context') and c['context'] not in self.startup_globals) for c in query.get('criteria', [])):
+                # A criterion from a form control or a module parameter: they are not there yet in the constructor.
+                self.startup_queries_manual.append((block, 'a feltétele a képernyőről vagy paraméterből jön: a FormGroupok és az inputok elkészülte után kell hívni (ngAfterViewInit)'))
+            else:
+                lines.append('    // Indításkor (Forms GO_BLOCK + EXECUTE_QUERY): a(z) ' + block + ' blokk lekérdezése.')
+                lines += ['    ' + l for l in self.query(block, Body())]
+                self.startup_queries_run.append(block)
+        return lines

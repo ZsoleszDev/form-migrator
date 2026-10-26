@@ -13,9 +13,16 @@ eredeti Forms-kódot adja, a törzset az AI írja.
 | --- | --- | --- |
 | `WHEN-BUTTON-PRESSED` (szerveroldali munka) | `public ActionResult on<Blokk><Gomb>(UserDto, ActionRequest)` | a gomb (`applyActionResult` dolgozza fel a választ) |
 | lekérdező gomb (`SET_BLOCK_PROPERTY … DEFAULT_WHERE` + `EXECUTE_QUERY`) | `public PageResult<XRow> on…(UserDto, QueryActionRequest)` | a gomb; a képernyő a visszaadott sorokat mutatja |
-| `PRE-FORM`, `WHEN-NEW-FORM-INSTANCE` | `onFormInit` | a képernyő konstruktora |
+| `PRE-FORM`, `WHEN-NEW-FORM-INSTANCE` (csak az adatbázist érintő részük) | `onFormInit`, ha marad ilyen | a képernyő konstruktora |
 | `POST-QUERY`, `PRE/POST/ON-INSERT|UPDATE|DELETE`, `WHEN-VALIDATE-ITEM/RECORD`, `POST-CHANGE`, `ON-CHECK-DELETE-MASTER` | `private void trigger<Esemény><Mező><Blokk>(XRow row, RuleContext context)` | a CRUD-folyamat a Forms-ponton (validálás, beszúrás előtt, lekérdezés után …) |
 | `PRE-COMMIT`, `POST-FORMS-COMMIT` | privát hook a `commitForm`-ban | a mentési lánc |
+
+Az indítókódból (`PRE-FORM`, `WHEN-NEW-FORM-INSTANCE`) csak az adatbázist érintő rész lesz AI-feladat (SQL,
+adatbázis-rutin, a form saját programegysége, feltétel, ciklus, ismeretlen hívás). Az állandó értékadás és a
+konstans mezőtulajdonság a képernyő kezdőállapota lesz, a Forms-keretrendszer (`qms$…`), a kurzor-, ablak- és
+munkamenet-beállítás kimarad, a memóriabeli értéklista és a csomagváltozó a képernyő MIGRATION_NOTES.md-jébe
+kerül. Ha nem marad adatbázismunka, nincs `onFormInit`. Egy cég saját, csak Forms-oldali könyvtárrutinjai
+(például cím- vagy menübeállítás) a keretrendszer-katalógus `forms_runtime_calls` listájába vehetők fel.
 
 Minden ilyen metódus törzse:
 

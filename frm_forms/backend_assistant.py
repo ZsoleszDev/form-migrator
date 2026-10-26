@@ -144,6 +144,28 @@ def hook_code(discovery: dict, hook: dict) -> list[str]:
     return found
 
 
+def startup_sources(sources: list[dict], reduced: dict) -> list[dict]:
+    """The start-up code as the Java assistant gets it: only its database work (startup.triage), and the local
+    units that work still calls. reduced: trigger id (FORM:EVENT) -> the PL/SQL left for the server."""
+    by_event = {trigger_id.split(":", 1)[-1]: text for trigger_id, text in reduced.items()}
+    triggers = [dict(s, source=by_event[s["name"]]) for s in sources if s["kind"] == "trigger" and s["name"] in by_event]
+    units = [s for s in sources if s["kind"] != "trigger"]
+    def mentions(text, name):
+        return re.search(r"(?<![\w$#.])" + re.escape(name) + r"(?![\w$#])", text, re.I) is not None
+    kept, texts = [], [s["source"] for s in triggers]
+    changed = True
+    while changed:  # the units the kept code calls, and the units those call
+        changed = False
+        for unit in units:
+            if unit not in kept and any(mentions(text, unit["name"]) for text in texts):
+                kept.append(unit)
+                texts.append(unit["source"])
+                changed = True
+    for entry in triggers:
+        entry["calls"] = [c for c in entry["calls"] if mentions(entry["source"], c["name"])]
+    return triggers + kept
+
+
 def hook_contract(hook: dict, ir: dict) -> dict:
     """What a hook's body may use: the record's fields (Forms item -> row.field) or the screen maps of commitForm."""
     if hook["hook_kind"] != "record":
@@ -236,6 +258,8 @@ def prepare_workspace(output: Path) -> dict:
                     "kind": codes[cid]["kind"], "sha256": codes[cid]["sha256"],
                     "source": codes[cid].get("source_view", codes[cid]["source"]),
                     "calls": codes[cid].get("calls", [])} for cid in reachable if cid in codes]
+        if endpoint.get("owner") == "@INIT" and (ir.get("init_plan") or {}).get("sources"):
+            sources = startup_sources(sources, ir["init_plan"]["sources"])
         task_id = digest(target + ":" + method)[:20]
         # A query button's target block (DEFAULT_WHERE + EXECUTE_QUERY) needs its table too.
         relevant_blocks = {endpoint.get("block"), endpoint.get("query_block"),

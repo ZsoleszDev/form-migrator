@@ -496,9 +496,10 @@ def ai_action_sources(o, model, discovery) -> list[tuple[str, str]]:
     action = o['action']
     if action.get('init'):
         sections = []
+        reduced = (model.get('init_plan') or {}).get('sources') or {}
         for trigger in model['triggers']:
             if trigger['id'] in action.get('init_triggers', []):
-                source = (trigger.get('replacement') or {}).get('source', trigger['source'])
+                source = reduced.get(trigger['id']) or (trigger.get('replacement') or {}).get('source', trigger['source'])
                 sections.append((trigger['id'], source))
         seen = {label for label, _ in sections}
         for trigger_id, source in list(sections):
@@ -525,6 +526,9 @@ def ai_action_method(o, model, discovery, log1x, user_type, blocks) -> str:
              + ((' · paraméterek: ' + ', '.join(parameters)) if parameters else '') + '.']
     trigger = next((t for t in model['triggers'] if t['owner'] == action['owner'] and t['event'] == action['event']), {})
     notes += ai_triggers.framework_note('', None, trigger.get('framework_calls'))
+    if action.get('init') and (model.get('init_plan') or {}).get('sources'):
+        notes.append('Az indítókódnak csak az adatbázist érintő része; a képernyő kezdőállapota (állandók, mezőtulajdonságok) '
+                     'a képernyőn van, a Forms-keretrendszer része kimaradt (MIGRATION_NOTES.md).')
     if query:
         target = next(b for b in blocks if b['name'] == query['target'])
         notes.append('Lekérdezőgomb: a(z) ' + target['name'] + ' (' + target['table'] + ') sorait adja vissza '
@@ -736,6 +740,10 @@ def generate(model, output: Path, config, module, package, discovery, actions):
         events = {t.split(':', 1)[1] for t in init['triggers']}
         init_binds = [b['name'] for c in discovery['code'] if c['kind'] == 'trigger' and not c.get('block')
                       and not c.get('item') and c.get('name') in events for b in c.get('binds', [])] if init['status'] == 'ai' else []
+        if init.get('sources'):
+            # Only the start-up code's database work runs on the server (startup.triage): what it reads.
+            from .discovery import scan
+            init_binds = [b['name'] for text in init['sources'].values() for b in scan(text)['binds']]
         actions = list(actions) + [{'owner': INIT_OWNER, 'event': ' + '.join(t.split(':', 1)[1] for t in init['triggers']),
                                     'block': None, 'item': None, 'key': 'init', 'api_name': 'init',
                                     'path': config['api_prefix'].rstrip('/') + '/' + module + '/init', 'method': 'POST',
@@ -1215,6 +1223,14 @@ import org.springframework.boot.web.client.RestTemplateBuilder;
         for selection in selections:
             selection['dto'] = cl_contract['dto_types'].get(selection['dto'], selection['dto'])
     api = frontend_api(ops, '' if cl_contract else base, cls)
+    if model.get('startup'):
+        # The screen's state on opening (startup.triage), not a server call. A :GLOBAL that other code writes too
+        # is no constant of the screen.
+        from .rules import INIT_EVENTS
+        written = {b['name'].upper() for c in discovery['code'] for b in c.get('binds', [])
+                   if b.get('usage') == 'assignment-target' and not (c['kind'] == 'trigger' and not c.get('block')
+                                                                    and c.get('name') in INIT_EVENTS)}
+        api['startup'] = dict(model['startup'], globals={k: v for k, v in model['startup']['globals'].items() if k not in written})
     if cl_contract:
         api.update(requires_host_adapter=True, response_envelope='RestResponseDto',
                    base_path_expression=cl_contract['wbs_base_path_expression'])

@@ -33,6 +33,14 @@ def load_api(output: Path) -> dict | None:
     return api if api and api.get('paths') else None
 
 
+def load_startup(output: Path) -> dict | None:
+    """The start-up code's screen state (startup.triage), also of a module without endpoints."""
+    path = output / 'analysis' / 'backend-plan.json'
+    if not path.is_file():
+        return None
+    return (json.loads(path.read_text(encoding='utf-8')).get('api') or {}).get('startup')
+
+
 def method_name(constant: str, taken: set) -> str:
     base = name(re.sub(r'_PATH$', '', constant).lower(), 'camel') or 'call'
     base = base if base not in RESERVED else base + 'Call'

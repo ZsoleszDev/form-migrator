@@ -33,6 +33,14 @@
   mutatja (a generált kulccsal), az üzenetek és utasítások az `applyActionResult`-ba mennek. A kérés a mentési
   lánc által olvasott képernyőértékeket is viszi (új detail rekord master-kulcsa, PRE-COMMIT kötései). Törlést a
   képernyő nem küld: a `DELETE_RECORD` megfelelője fejlesztői feladat.
+- **Az indítókódból csak az adatbázismunka megy a szerverre.** A PRE-FORM és a WHEN-NEW-FORM-INSTANCE eddig
+  egészében az AI-ra várt (`onFormInit`), keretrendszer-hívással, kurzorbeállítással, statikus értéklistával együtt.
+  Most utasításonként válogat (`frm_forms/startup.py`): az állandó értékadás és a konstans mezőtulajdonság a
+  képernyő kezdőállapota (`startValue`, `disabled`, `readonly`), az állandó `:GLOBAL` az az érték, amelyet a
+  képernyő a kéréseiben küld, a `GO_BLOCK` + `EXECUTE_QUERY` a konstruktor lekérdezése; a `qms$…`, a
+  `SET_APPLICATION_PROPERTY` és az `ALTER SESSION` kimarad; a memóriabeli értéklista és a csomagváltozó a
+  képernyő MIGRATION_NOTES.md-jébe kerül. Az AI csak az SQL-t, az adatbázis-rutinokat és a biztosan el nem
+  dönthető részt kapja; ha nincs ilyen, nincs `onFormInit` sem.
 - **Forms-sorrend a validációban.** A mező saját ellenőrzései (kötelező, hossz, tartomány, listaérték) a
   WHEN-VALIDATE-ITEM/RECORD és a PRE-INSERT/UPDATE előtt futnak, ahogy Formsban; a triggerek által írt értékeket
   utána újra ellenőrzi.

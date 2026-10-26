@@ -678,6 +678,11 @@ export class RendelesComponent extends ServiceBase {
 
 - **Konstruktor:** mindig van `constructor() { super(); }`, a mezők és a függvények között; ha a képernyőnek
   indítási végpontja van, a hívása is ide kerül.
+- **Indítás (AI-mód):** a PRE-FORM / WHEN-NEW-FORM-INSTANCE állandó értékadásai és konstans mezőtulajdonságai a
+  struktúrában vannak (`startValue`, `disabled`, `readonly`, `labelText`); az állandó `:GLOBAL` az az érték, amelyet a
+  képernyő a kéréseiben küld; a `GO_BLOCK` + `EXECUTE_QUERY` lekérdezést a konstruktor hívja, ha a feltétele nem a
+  képernyőről vagy paraméterből jön. Indítási végpont csak az adatbázist érintő kódhoz készül; a többi a
+  MIGRATION_NOTES.md „Indítás” szakaszában van.
 - **Sablon:** a struktúrákra szögletes zárójellel hivatkozik:
   `<ank-form-block [formStructure]="structures['ctrl']" (formGroupGenerated)="onFormGroupGenerated('ctrl', $event)" />`.
   A `structures` típusa `Record<string, …>`, és az Angular CLI alap tsconfigja (`noPropertyAccessFromIndexSignature`)

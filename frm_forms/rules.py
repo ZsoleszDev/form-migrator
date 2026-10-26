@@ -666,10 +666,22 @@ def startup_plan(model: dict, catalog: dict) -> None:
         parts.append("-- " + trigger["event"] + "\nBEGIN\n" + decode_line_escapes(source).strip().rstrip("/").strip() + "\nEND;")
     ids = [t["id"] for t in chosen]
     if model.get('options', {}).get('backend_trigger_mode') == 'ai':
-        # The init endpoint's frame (onFormInit, called when the screen opens); its body: the Java assistant.
-        model["init_plan"] = {"status": "ai", "triggers": ids}
+        # The web screen opens in its initial state: only the start-up code's database work needs the server
+        # (onFormInit, its body by the Java assistant). Constants and item properties go to the screen, Forms
+        # plumbing goes, Forms-only state goes to the notes (startup.triage).
+        from . import startup
+        from .plsql_passthrough import local_units
+        units = local_units(model)
+        results = {t["id"]: startup.triage((t.get("replacement") or {}).get("source", t["source"]), catalog, units)
+                   for t in chosen}
+        model["startup"] = startup.merge(results)
+        server = [t["id"] for t in chosen if results[t["id"]]["backend"]]
+        if server:
+            model["init_plan"] = {"status": "ai", "triggers": server, "sources": {i: results[i]["backend"] for i in server}}
         for trigger in chosen:
-            trigger.update(status="converted", target="init", ai=True)
+            trigger.update(status="converted", target="init" if trigger["id"] in server else "frontend")
+            if trigger["id"] in server:
+                trigger["ai"] = True
             trigger.pop("reason", None)
         model["issues"][:] = [i for i in model["issues"]
                               if not (i["code"] == "UNSUPPORTED_TRIGGER" and any(i["detail"].startswith(t + ": ") for t in ids))]
