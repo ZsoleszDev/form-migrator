@@ -72,7 +72,7 @@ szélesen: nincs vízszintes görgetés, nincs konzolhiba.
 
 ## Ismert korlátok — mi kell még a 100%-hoz
 
-- **Frontend-adatfolyam:** a mentés (`save()`) változáslistái, a lista-blokkok kezdeti betöltése, a LOV-javaslatok
+- **Frontend-adatfolyam:** a mentésben a törlés (a `save()` az új és a módosított rekordot már küldi), a lista-blokkok kezdeti betöltése, a LOV-javaslatok
   és a `:GLOBAL` értékek tárolása ma kézi befejezést kér. Ezek determinisztikusan generálhatók (a blokk- és
   DTO-modell megvan), ez a következő legnagyobb lépés a működő modul felé.
 - **KEY-COMMIT / KEY-* triggerek:** a mentés gombhoz kötése még kézi; AI-feladattá tehető ugyanígy (keret + kód).

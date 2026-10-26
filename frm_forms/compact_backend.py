@@ -88,10 +88,12 @@ def frontend_api(ops, base, cls):
                                              'ready': not o['lov']['blockers']}
         elif o['op'] == 'commit':
             from .commit_chain import field
+            reads, context = o.get('reads') or ([], [])
             api['commit'] = {'constant': o['constant'],
                              'blocks': {b['name']: {'request': 'changes' + field(b), 'result': 'rows' + field(b),
                                                     'operations': [op for op in ('create', 'update', 'delete') if b['endpoint_plan'].get(op)]}
-                                        for b in o['blocks']}}
+                                        for b in o['blocks']},
+                             'reads': reads, 'parameters': context}
         elif o['op'] == 'action':
             api['actions'][o['action']['owner']] = {'constant': o['constant']}
             # What the code reads: the screen sends these (blocks: BLOCK.ITEM, parameters: GLOBAL/PARAMETER/SYSTEM).
@@ -787,6 +789,7 @@ def generate(model, output: Path, config, module, package, discovery, actions):
         # Buttons with a commit point: commitForm runs their code up to the point first (commit_points).
         commit['preludes'] = [(o['action']['owner'], runner_name(o)) for o in ops
                               if o['op'] == 'action' and (o.get('passthrough') or {}).get('commit_points')]
+        commit['reads'] = commit_chain.screen_reads(commit, model, discovery)  # the screen sends them with the changes
     runnable_actions = [o for o in ops if (o.get('passthrough') or o.get('query_action')) and not o.get('ai')]
     blocks = backend_blocks(model)
     served = {b['name'] for b in blocks}

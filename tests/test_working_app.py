@@ -150,8 +150,9 @@ class ReplicaTests(unittest.TestCase):
         self.assertIn('row.rendelesId = saved.id;', commit)
         self.assertIn('PlsqlValues.number(values, "RENDELES", "ID")', commit)
         self.assertIn('<button pButton type="button" (click)="save()">Mentés</button>', self.screen)
-        # 4.27: the request of the save; its changes are the developer's (TODO)
-        self.assertIn('this.commitForm({ changesRendeles: { inserted: [], updated: [], deleted: [] } }).subscribe();', self.screen)
+        # The save sends the form's record (measured against the queried one) and the master key a new TETEL record reads.
+        self.assertIn("changesRendeles: this.migrationChanges('RENDELES', rendeles, this.forms['rendeles']?.dirty),", self.screen)
+        self.assertEqual(self.plan['api']['commit']['reads'], ['RENDELES.ID'])
 
     def test_generated_java_compiles(self):
         if not shutil.which('java'):

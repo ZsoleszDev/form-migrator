@@ -198,8 +198,8 @@ class AiFramesTests(unittest.TestCase):
         click = click[:click.index("\n  }\n")]
         self.assertIn("this.actionOnctrlsearchbtn(", click)
         self.assertIn("FILTER:", click)
-        self.assertIn("limit: 200", click)
-        self.assertIn("this.forms['orders']?.patchValue(res.rows?.[0] ?? {});", click)
+        self.assertIn("limit: 1,", click)  # the form shows one record; hasMore says when more matched
+        self.assertIn("this.migrationLoaded['ORDERS'] = row;\n      this.forms['orders']?.reset(row ?? {});", click)
 
     def test_screen_carries_out_the_commands_of_an_answer(self):
         screen = (self.output / "frontend/orders/orders.component.ts").read_text(encoding="utf-8")
