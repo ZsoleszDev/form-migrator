@@ -36,6 +36,7 @@ public final class DbcallDtos {
     public static class PageResult<T> {
         public List<T> rows;
         public List<String> messages;
+        public boolean hasMore;
 
         public PageResult() {
         }
@@ -45,12 +46,22 @@ public final class DbcallDtos {
             this.messages = messages;
         }
 
+        public PageResult(List<T> rows, List<String> messages, boolean hasMore) {
+            this.rows = rows;
+            this.messages = messages;
+            this.hasMore = hasMore;
+        }
+
         public List<T> rows() {
             return rows;
         }
 
         public List<String> messages() {
             return messages;
+        }
+
+        public boolean hasMore() {
+            return hasMore;
         }
     }
 

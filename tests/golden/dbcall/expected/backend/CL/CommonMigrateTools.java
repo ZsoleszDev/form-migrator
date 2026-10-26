@@ -37,7 +37,7 @@ import org.springframework.web.server.ResponseStatusException;
  */
 public final class CommonMigrateTools {
     /** A változat, amelyet a generált modulok várnak. */
-    public static final String VERSION = "5";
+    public static final String VERSION = "6";
 
     private CommonMigrateTools() {
         // Csak statikus segédek.
@@ -228,11 +228,17 @@ public final class CommonMigrateTools {
         private FormsErrors() {
         }
 
-        /** A dobandó kivétel: üzleti hiba (422), migrációs korlát (501) vagy az eredeti. */
+        /** Üzleti hiba: 422, zárolt rekord: 409, migrációs korlát: 501, különben az eredeti. */
         public static RuntimeException translate(DataAccessException e) {
             if (e.getMostSpecificCause() instanceof SQLException) {
                 SQLException ora = (SQLException) e.getMostSpecificCause();
                 String text = ora.getMessage() == null ? "" : ora.getMessage();
+                // ORA-00054 / ORA-30006 (FOR UPDATE NOWAIT / WAIT): another session holds the
+                // record, like the Forms "Could not reserve record": the user tries again later.
+                if (ora.getErrorCode() == 54 || ora.getErrorCode() == 30006) {
+                    return new ResponseStatusException(HttpStatus.CONFLICT,
+                            "A rekordot most más felhasználó zárolja; próbáld újra később.");
+                }
                 // ORA-20998: the migrated code changed an item it may not write back in this event.
                 if (ora.getErrorCode() == 20998) {
                     return new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED,
