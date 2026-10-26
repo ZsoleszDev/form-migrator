@@ -1,3 +1,48 @@
+# Következő változat (a 4.35 után) — javítások: pontosabb AI-tippek, típusos adatbázis-rutinok, valódi mentés, Forms-sorrend
+
+- **Magyar tizedesvessző a UI-modellben is.** A magyar Forms Builder a számpropertyket tizedesvesszővel
+  exportálja (`HighestAllowedValue="9999999999,99"`). A backend eddig is elfogadta, a UI-modell `INVALID_NUMBER`-rel
+  leállt, így a CLI alapmódja a repó saját replika-űrlapját is elutasította. Most mindkettő ugyanazt az olvasót
+  használja (`common.nls_decimal`); ezres elválasztót továbbra sem találgat.
+- **Java asszisztens: tippek csak az eredeti Forms-kódból.** Az `original_code()` a migrátor saját megjegyzéseit is
+  beolvasta, ezért minden rekordhook promptja `MESSAGE`-tippet kapott. A tippek és a mezősorok most a feladat
+  Forms-forrásaiból jönnek, a PL/SQL-megjegyzések nélkül.
+- **Pontos Oracle-formátumminták.** A „`TO_CHAR(date, fmt)`: ugyanaz a minta” tipp hibás volt (Oracle `MI`/`DD`/`YYYY`
+  = Java `mm`/`dd`/`yyyy`). Az `oracle_formats` a kód minden literál formátummintáját a pontos `java.time`-mintára
+  fordítja (`TO_CHAR`, `TO_DATE` az Oracle 1–2 jegyes engedékenységével), és megmondja, ha nincs megfelelő (NLS-nevek,
+  AM/PM, RR, hétszám) vagy ha számformátum. Új tipp: `a || b` → `SqlValues.concat` (Oracle-ben a NULL kimarad,
+  Javában `"a" + null = "anull"`).
+- **Adatbázis-rutinok típusos metódusként.** A Forms-kód tárolt eljárás- és függvényhívásai (pl. PRE-INSERT
+  `kod_pkg.check_insert(:B.KOD, :B.DATUM, :B.NEV)`) a schema.json `procedures` aláírásából generált, típusos
+  metódust kapnak (pl. `String kodPkgCheckInsert(String pKod, LocalDateTime pDatum)`; pozíciós vagy nevesített
+  paraméterek, a kihagyottaknál az adatbázis alapértéke, OUT/IN OUT érték visszatérési értékként vagy kis
+  holder osztályban). A prompt ezeket kínálja egyetlen megengedett PL/SQL-hívásként, és megnevezi az aláírás
+  nélküli rutinokat (MISSING, sosem újraírás). A beillesztés a hívott metódusokat is hozzáadja (`DbCalls` a
+  ServiceImpl `NamedParameterJdbcTemplate`-jén); ha a modell maga írja meg, javítást kér.
+- **Zárolás várakozás nélkül.** A rekord zárolása `FOR UPDATE NOWAIT`: ha más munkamenet tartja (ORA-00054,
+  ORA-30006), HTTP 409 „A rekordot most más felhasználó zárolja; próbáld újra később.”, mint Formsban — a kérés és a
+  kapcsolat nem vár korlátlanul. `CommonMigrateTools.VERSION` = 6: a projekt vegye át az új példányt.
+- **Nincs csendes levágás 200 sornál.** A lista-, kereső- és lekérdezőgomb-végpontok eggyel több sort kérnek,
+  és a `PageResult.hasMore` jelzi, ha a lap nem fért el (a POST-QUERY a plusz sort nem látja). A képernyő szól
+  (`migrationMoreRows`); az űrlapblokk egyetlen rekordot kér (`limit: 1`), és szól, ha több is illeszkedett.
+- **Valódi mentés.** A `save()` eddig üres változáslistákat küldött. Most a lekérdezés az űrlap rekordját
+  teljesen beírja (`reset`) és megjegyzi (`migrationLoaded`); a mentés blokkonként módosításként küldi, ha a
+  képernyő eltér tőle (`updated: [{ original, value }]`), lekérdezés nélkül új rekordként, ha a felhasználó beírt
+  valamit. A jelölőnégyzet a képernyőn `true/false`, a rekordban a Forms-érték; a dátum a képernyőn `Date`, a
+  rekordban helyi idő másodpercre; az üres szöveg `null`. Mentés után a képernyő a mentett, újraolvasott rekordot
+  mutatja (a generált kulccsal), az üzenetek és utasítások az `applyActionResult`-ba mennek. A kérés a mentési
+  lánc által olvasott képernyőértékeket is viszi (új detail rekord master-kulcsa, PRE-COMMIT kötései). Törlést a
+  képernyő nem küld: a `DELETE_RECORD` megfelelője fejlesztői feladat.
+- **Forms-sorrend a validációban.** A mező saját ellenőrzései (kötelező, hossz, tartomány, listaérték) a
+  WHEN-VALIDATE-ITEM/RECORD és a PRE-INSERT/UPDATE előtt futnak, ahogy Formsban; a triggerek által írt értékeket
+  utána újra ellenőrzi.
+- **Tesztek és CI.** A `tests/java_support.py` importáláskor `plsql`-re állította a `FRM_BACKEND_TRIGGER_MODE`-ot,
+  így az eredmény a futtatási sorrendtől függött; most minden modul kimondja a saját módját és visszaállítja a
+  környezetet. Az elavult elvárások frissítve, új futtatásos tesztek (Java: lapozás, zárolás, validációs sorrend;
+  Node: a mentés változáslistái), GitHub Actions munkafolyamat (`.github/workflows/tests.yml`: Python 3.13, JDK 21,
+  Node 22, TypeScript). A tesztek egy része az `examples/` mappát használja, amely nincs a repóban: amíg nem kerül
+  be, ezek hibával állnak le.
+
 # 4.35 — Minden szerveroldali trigger az AI-é, automatikus és élő AI-sor
 
 - **Új alapértelmezés: `backend_trigger_mode: "ai"`.** A determinisztikus generátor nem fordítja le a
