@@ -21,8 +21,9 @@ Az indítókódból (`PRE-FORM`, `WHEN-NEW-FORM-INSTANCE`) csak az adatbázist �
 adatbázis-rutin, a form saját programegysége, feltétel, ciklus, ismeretlen hívás). Az állandó értékadás és a
 konstans mezőtulajdonság a képernyő kezdőállapota lesz, a Forms-keretrendszer (`qms$…`), a kurzor-, ablak- és
 munkamenet-beállítás kimarad, a memóriabeli értéklista és a csomagváltozó a képernyő MIGRATION_NOTES.md-jébe
-kerül. Ha nem marad adatbázismunka, nincs `onFormInit`. Egy cég saját, csak Forms-oldali könyvtárrutinjai
-(például cím- vagy menübeállítás) a keretrendszer-katalógus `forms_runtime_calls` listájába vehetők fel.
+kerül. Ha nem marad adatbázismunka, nincs `onFormInit`. A céges, csak Forms-oldali könyvtárrutinok a
+keretrendszer-katalógus `forms_runtime_calls` listáján vannak (`ank_ctrl.*`, `ank_menu.*`); egy újabb ilyen
+könyvtár ugyanide vehető fel, és onnantól sehol sem kerül a backendbe.
 
 Minden ilyen metódus törzse:
 

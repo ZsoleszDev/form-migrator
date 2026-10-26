@@ -56,7 +56,7 @@ class TriageTests(unittest.TestCase):
 
     def test_conditions_loops_and_unknown_calls_stay_whole(self):
         code = ("IF :GLOBAL.X IS NULL THEN\n  :GLOBAL.X := 'A';\nEND IF;\n"
-                "FOR r IN (SELECT 1 FROM dual) LOOP NULL; END LOOP;\nank_menu.init('APP');")
+                "FOR r IN (SELECT 1 FROM dual) LOOP NULL; END LOOP;\nnaplo_pkg.init('APP');")
         result = triage(code)
         self.assertEqual(result['backend'], code)
         self.assertEqual(result['globals'], {})  # a conditional value is not the screen's constant
@@ -142,8 +142,10 @@ class StartupMigrationTests(unittest.TestCase):
         packet = json.loads((self.replica / engine.AREA / 'tasks' / (task['id'] + '.json')).read_text(encoding='utf-8'))
         code = '\n'.join(s['source'] for s in packet['sources'])
         self.assertIn('FROM param_tabla', code)
-        for gone in ('qms$event_form', 'SET_APPLICATION_PROPERTY', 'ALTER SESSION', 'CREATE_GROUP', 'SET_ITEM_PROPERTY', "MODUS := 'U'"):
+        for gone in ('qms$event_form', 'SET_APPLICATION_PROPERTY', 'ALTER SESSION', 'CREATE_GROUP', 'SET_ITEM_PROPERTY', "MODUS := 'U'",
+                     'ank_ctrl', 'ank_menu'):  # the company's Forms-only UI libraries are catalogued (forms_runtime_calls)
             self.assertNotIn(gone, code)
+        self.assertIn('naplo_init( :GLOBAL.CG$APP );', code)  # the log entry in the database stays, with the global it reads
         self.assertEqual(packet['pending_tables'], ['PARAM_TABLA'])
 
     def test_the_screen_opens_in_the_state_the_start_up_code_left(self):

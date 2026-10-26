@@ -41,6 +41,10 @@
   `SET_APPLICATION_PROPERTY` és az `ALTER SESSION` kimarad; a memóriabeli értéklista és a csomagváltozó a
   képernyő MIGRATION_NOTES.md-jébe kerül. Az AI csak az SQL-t, az adatbázis-rutinokat és a biztosan el nem
   dönthető részt kapja; ha nincs ilyen, nincs `onFormInit` sem.
+- **A céges Forms-felületkönyvtárak kimaradnak.** Az `ank_ctrl` (képernyőcím, súgósor) és az `ank_menu` (menü)
+  rutinjai csak az Oracle Forms futtatókörnyezetben működnek: a keretrendszer-katalógus `forms_runtime_calls`
+  listáján vannak, így sem a backendbe, sem az AI-feladatokba nem kerülnek, és a csatolt könyvtárból sem
+  töltődnek be. Az adatbázist érintő céges rutinok (pl. `naplo_init`, `ank_jog.irhat`) maradnak.
 - **Forms-sorrend a validációban.** A mező saját ellenőrzései (kötelező, hossz, tartomány, listaérték) a
   WHEN-VALIDATE-ITEM/RECORD és a PRE-INSERT/UPDATE előtt futnak, ahogy Formsban; a triggerek által írt értékeket
   utána újra ellenőrzi.
