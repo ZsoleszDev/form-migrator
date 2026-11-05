@@ -1000,7 +1000,6 @@ def attach(packet: dict, persistence: list[dict], own_table: str | None = None) 
     Returns {'methods': [Method], 'refused': [{'statement', 'reason'}], 'calls': {statement key: Method}} (the key:
     statement_key of the statement text). A statement that repeats an earlier one reuses its method; a method already
     in the repository file the same way is reused, a name taken by another method gets a number."""
-    from .jpa_assistant import add_imports, members_of, persistence_imports
     # A sequence (SELECT seq.NEXTVAL FROM DUAL) has no table: the code's own table hosts it, else the first one.
     host = (descriptor_of(own_table, persistence) if own_table else None) or (persistence[0] if persistence else None)
     methods, refused, by_statement, calls = [], [], {}, {}
@@ -1037,9 +1036,8 @@ def attach(packet: dict, persistence: list[dict], own_table: str | None = None) 
             by_statement[key] = names
     for descriptor in persistence:
         if any(m.repository == descriptor['repository'] for m in methods):
-            imports = imports_of(descriptor)
             path = 'backend/DPS/' + descriptor['repository'] + '.java'
-            descriptor['existing_repository'] = with_imports(descriptor['existing_repository'], imports, add_imports, persistence_imports)
+            descriptor['existing_repository'] = with_imports(descriptor['existing_repository'], descriptor['namespace'])
             descriptor['files'][path] = descriptor['existing_repository']
     unique, seen = [], set()
     for method in methods:
@@ -1068,17 +1066,16 @@ def place(descriptor: dict, method: str, source: str) -> tuple[str, bool]:
     return candidate, True
 
 
-def imports_of(descriptor: dict) -> dict:
-    return {'BigDecimal': 'java.math.BigDecimal', 'LocalDateTime': 'java.time.LocalDateTime', 'List': 'java.util.List',
-            'OffsetDateTime': 'java.time.OffsetDateTime'}
+# The JDK names of the generated methods (the JPA ones: jpa_assistant.persistence_imports).
+JDK_IMPORTS = {'BigDecimal': 'java.math.BigDecimal', 'LocalDateTime': 'java.time.LocalDateTime',
+               'OffsetDateTime': 'java.time.OffsetDateTime', 'List': 'java.util.List'}
 
 
-def with_imports(source: str, imports: dict, add_imports, persistence_imports) -> str:
+def with_imports(source: str, namespace: str) -> str:
+    """The imports of what the repository's methods use (javax or jakarta persistence, as the project's)."""
     from .backend_assistant import ensure_imports
-    from .jpa_assistant import package_of
-    namespace = 'jakarta' if re.search(r'^\s*import\s+jakarta\.persistence\.', source, re.M) else 'javax'
-    mapping = {**imports, **persistence_imports(namespace)}
-    return ensure_imports(source, mapping)
+    from .jpa_assistant import persistence_imports
+    return ensure_imports(source, {**JDK_IMPORTS, **persistence_imports(namespace)})
 
 
 def prompt_lines(generated: dict) -> list[str]:
