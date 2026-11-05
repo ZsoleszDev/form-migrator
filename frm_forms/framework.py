@@ -36,6 +36,14 @@ MODES = r'(?:no_validate|do_commit|no_commit|full_rollback|ask_commit|restrict|n
 NAMED = {'go_block': ('goBlock', 'block'), 'go_item': ('goItem', 'item'), 'show_window': ('showWindow', 'window'),
          'hide_window': ('hideWindow', 'window'), 'show_view': ('showCanvas', 'canvas'), 'hide_view': ('hideCanvas', 'canvas'),
          'message': ('message', 'text')}
+# Forms screen refreshes and beeps: the web screen has no equivalent and needs none.
+PRESENTATION_NOOPS = {'synchronize', 'clear_message', 'bell', 'redisplay'}
+VALIDATE = re.compile(r'validate\s*\(\s*(item_scope|record_scope|block_scope|form_scope|default_scope)\s*\)')
+# The check after VALIDATE: stop the trigger when the validation failed.
+VALIDATE_GUARD = re.compile(r'if\s+(?:not\s+form_success|form_failure)\s+then\s+raise\s+form_trigger_failure')
+# :BLOCK.ITEM := 'text' | number | NULL | :BLOCK.ITEM (a screen item; :GLOBAL/:SYSTEM/:PARAMETER are no screen items)
+SET_VALUE = re.compile(r"(?i):((?!(?:GLOBAL|SYSTEM|PARAMETER)\.)[A-Za-z][\w$#]*\.[A-Za-z][\w$#]*)\s*:=\s*"
+                       r"(?:" + LITERAL + r"|(-?\d+(?:\.\d+)?)|(null)|:((?!(?:GLOBAL|SYSTEM|PARAMETER)\.)[A-Za-z][\w$#]*\.[A-Za-z][\w$#]*))")
 SQL_CONSTRUCTS = [
     ('ROWNUM', re.compile(r'\brownum\b', re.I), 'LIMIT / ROW_NUMBER()'),
     ('CONNECT BY', re.compile(r'\bconnect\s+by\b', re.I), 'WITH RECURSIVE'),
@@ -348,22 +356,51 @@ def date_picker(body, catalog):
     return True
 
 
-def action_steps(body, catalog, model=None, block=None, item=None):
+def action_steps(body, catalog, model=None, block=None, item=None, screen_values=False):
     """Translate a button trigger into Forms built-in steps, or return None.
 
     Framework dispatch calls are set aside and listed. Every other statement
     must be a recognised built-in with literal arguments; a condition, a
     variable, a custom procedure or an exception handler means manual work.
     DO_KEY requires the same built-in fallback, without a source KEY override.
+    screen_values (backend_trigger_mode=ai): also a screen item's constant or
+    another item's value (setValue), VALIDATE with its FORM_SUCCESS check and
+    the screen refreshes (SYNCHRONIZE ...), which the web screen does itself.
     """
     steps, plumbing = [], []
     block = block.upper() if block else None
     item = item.upper() if item else None
-    for statement in statements(body):
+    parts = statements(body)
+    guard = None  # the END IF of a VALIDATE check
+    for index, statement in enumerate(parts):
         if framework_call(statement, catalog):
             plumbing.append(statement)
             continue
         lowered = statement.lower()
+        if screen_values and (lowered in PRESENTATION_NOOPS or index == guard):
+            continue
+        validate = VALIDATE.fullmatch(lowered) if screen_values else None
+        if validate:
+            steps.append({'op': 'validate', 'scope': validate.group(1).upper()})
+            continue
+        if screen_values and VALIDATE_GUARD.fullmatch(lowered):
+            # Only right after VALIDATE: the web screen's check is synchronous, it stops there itself.
+            if not steps or steps[-1]['op'] != 'validate' or index + 1 >= len(parts) or parts[index + 1].lower() != 'end if':
+                return None
+            guard = index + 1
+            continue
+        value = SET_VALUE.fullmatch(statement) if screen_values else None
+        if value:
+            target, text, number, null, source = value.groups()
+            step = {'op': 'setValue', 'item': target.upper()}
+            if source:
+                step['source'] = source.upper()
+            else:
+                step['value'] = text.replace("''", "'") if text is not None else number if number is not None else None
+                if text == '':
+                    step['value'] = None  # '' is NULL in Oracle
+            steps.append(step)
+            continue
         simple = re.fullmatch(r"([a-z_]+)(?:\s*\(\s*" + MODES + r"\s*\))?", lowered)
         if simple and simple.group(1) in SIMPLE:
             op = SIMPLE[simple.group(1)]

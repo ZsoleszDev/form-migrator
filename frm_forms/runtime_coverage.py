@@ -29,8 +29,16 @@ HOOKS = {
 }
 
 
+# backend_trigger_mode=ai: the button steps the screen runs itself (framework.action_steps screen_values).
+SCREEN_STEPS = {'validate', 'setValue', 'message'}
+STARTUP_EVENTS = ('PRE-FORM', 'WHEN-NEW-FORM-INSTANCE')
+
+
 def coverage(model, backend=None, screen=None):
     backend, screen = backend or {}, screen or {}
+    ai = model.get('options', {}).get('backend_trigger_mode') == 'ai'
+    startup = model.get('startup')  # backend_trigger_mode=ai: the start-up code is the screen's (startup.triage)
+    unmigrated = {s['trigger'] for s in (startup or {}).get('server', [])}
     endpoints = backend.get('endpoints', [])
     calls = screen.get('backend_calls') or {}
     visible = {a['owner'] for a in screen.get('actions', [])}
@@ -87,20 +95,29 @@ def coverage(model, backend=None, screen=None):
                                    + ' (a Java-metódusban TODO változó, értékét a fejlesztő adja át).')
             if query and query['target'] not in {s['block'] for s in screen.get('sections', [])}:
                 row['gaps'].append('A lekérdezett blokk nincs a generált képernyőn; az eredmény megjelenítését külön be kell kötni.')
+        elif startup is not None and event in STARTUP_EVENTS and trigger.get('target') == 'frontend':
+            row.update(status='frontend', engine='typescript',
+                       execution='A képernyő kezdőállapota (állandók, mezőtulajdonságok, indításkori lekérdezés); nincs Java-végpont.')
+            if trigger['id'] in unmigrated:
+                row['gaps'].append('Nem migrált adatbázismunka (Forms-indítás): a képernyő MIGRATION_NOTES.md-je listázza.')
         else:
-            # A trigger outside the backend: only a button's query runs (the screen's frame has no Forms emulation).
+            # A trigger outside the backend: only a button's recognised steps run (the screen has no Forms emulation).
             sequence = steps.get(owner) if event == 'WHEN-BUTTON-PRESSED' else None
-            if sequence and calls.get('queries'):
-                block, queries = '', []
+            if sequence and (calls.get('queries') or ai):
+                block, queries, screen_steps = owner.split('.', 1)[0], [], []
                 for step in sequence:
                     if step['op'] == 'goBlock':
                         block = step['block'].upper()
-                    elif step['op'] == 'executeQuery' and block in calls['queries']:
+                    elif step['op'] == 'executeQuery' and block in (calls.get('queries') or {}):
                         queries.append(block)
+                    elif ai and step['op'] in SCREEN_STEPS:
+                        screen_steps.append(step['op'])
                     else:
-                        queries = []; break
-                if queries:
-                    row.update(status='frontend', engine='typescript', execution='Gombnyomás → executeQuery: ' + ', '.join(queries) + '.')
+                        queries, screen_steps = [], []; break
+                if queries or screen_steps:
+                    row.update(status='frontend', engine='typescript',
+                               execution='Gombnyomás → ' + ', '.join(list(dict.fromkeys(screen_steps))
+                                                                     + (['executeQuery: ' + ', '.join(queries)] if queries else [])) + '.')
                     linked = [e for e in endpoints if e['block'] in queries and e['operation'] in {'list', 'search'}]
                     row['gaps'].append('A GO_BLOCK fókusz-, validációs és rekordnavigációs mellékhatásai hostfeladatok.')
                     if len(queries) > 1:

@@ -45,6 +45,9 @@ def skip_reason(source, trigger, catalog, model=None):
         return 'noop', 'Kifejezetten üres (NULL) trigger; nincs végrehajtandó művelet.'
     if trigger and trigger.get('status') == 'converted' and trigger.get('target') == 'frontend':
         return 'frontend', 'Teljes egészében felismert frontendművelet.'
+    if trigger and trigger.get('screen_only'):
+        # backend_trigger_mode=ai (database_work): no SQL, no database routine - the screen's, never a Java endpoint.
+        return 'frontend', 'Nincs benne adatbázismunka: a képernyő feladata, Java-végpont nélkül.'
     if trigger and trigger.get('ai') and trigger.get('query_action'):
         # 4.35: a query button (its own DEFAULT_WHERE + EXECUTE_QUERY) is a backend query endpoint whose
         # WHERE the Java assistant writes; the screen shows the returned rows. Not a Forms-runtime-only step.
@@ -73,7 +76,8 @@ def skip_reason(source, trigger, catalog, model=None):
         # action is needed for go_block/execute_query/window/navigation buttons.
         # MouseNavigate=false buttons may retain focus in another item/block.
         # Only an explicit GO_ITEM/GO_BLOCK proves a DO_KEY's dispatch context.
-        if ast and framework.action_steps(source, catalog, model):
+        ai = (model or {}).get('options', {}).get('backend_trigger_mode') == 'ai'
+        if ast and framework.action_steps(source, catalog, model, screen_values=ai):
             return 'frontend', 'Felismert Forms-felületművelet; a frontend/host adapter feladata.'
         # Only Forms built-ins / Forms-only routines (web.show_document, set_item_instance_property ...):
         # nothing to run in the database. SQL, reports, files or other triggers (server kind) stay.

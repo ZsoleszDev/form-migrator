@@ -234,10 +234,13 @@ class ScreenComponentTests(unittest.TestCase):
         self.assertIn('this.actionOnctrlpbujraszamol({', method)
         self.assertIn("this.migrationInputText(this.forms['rendeles']?.getRawValue()?.['id'] ?? null)", method)
         self.assertIn("this.migrationInputText(this.forms['rendeles']?.getRawValue()?.['osszeg'] ?? null)", method)
+        # PB_ALAP and PB_FRISSIT do no database work: no backend action (no request), the screen's (TODO + code there).
+        self.assertNotIn('actionOnctrlpbalap', replica)
+        self.assertIn('// TODO: a gomb kódját kézzel kell átültetni.', screen_method(self.out, 'onPbAlapClick'))
+        self.assertNotIn('actionOnctrlpbfrissit', replica)
         from frm_forms.input_bindings import sheet
         rows = sheet(self.out)['rows']
-        global_row = next(r for r in rows if r['source'] == 'GLOBAL.EV')
-        self.assertEqual(global_row['status'], 'missing')
+        self.assertFalse(any(r['source'] == 'GLOBAL.EV' for r in rows))  # it was only PB_ALAP's
         # The start-up code's constant: the PARTNER search sends it (no start-up request reads it any more).
         startup_row = next(r for r in rows if r['source'] == 'GLOBAL.CG$APP')
         self.assertEqual(startup_row['status'], 'connected')
@@ -253,15 +256,20 @@ class ScreenComponentTests(unittest.TestCase):
     def test_the_button_requests_run_in_node(self):
         if not shutil.which('node'):
             self.skipTest('Node with TypeScript stripping required')
-        members = [screen_method(self.out, name) for name in ('onPbUjraszamolClick', 'onPbAlapClick', 'save', 'migrationInputText',
-                                                               'migrationChanges')] + [screen_field(self.out, 'migrationLoaded')]
+        members = [screen_method(self.out, name) for name in ('onPbUjraszamolClick', 'onPbKeresClick', 'save', 'migrationInputText',
+                                                               'migrationChanges', 'migrationInvalid', 'migrationMoreRows')]
+        members.append(screen_field(self.out, 'migrationLoaded'))
         self.assertNotIn(None, members)
         script = self.root / 'button-flow.ts'
         script.write_text('''import assert from 'node:assert/strict';
 class Group {  // the FormGroup as the code uses it: reset() sets every control (null when missing) and clears dirty
   values: Record<string, unknown> = {};
   dirty = false;
+  invalid = false;
+  touched = false;
   getRawValue() { return {...this.values}; }
+  get(key: string) { return {setValue: (value: unknown) => { this.values[key] = value; }}; }
+  markAllAsTouched() { this.touched = true; }
   reset(value: Record<string, unknown>) {
     this.values = Object.fromEntries(Object.keys(this.values).map(key => [key, value?.[key] ?? null]));
     this.dirty = false;
@@ -276,8 +284,13 @@ const call = (name: string) => (body: unknown) => {
 class Screen {
   forms: Record<string, Group> = {rendeles: new Group(), ctrl: new Group()};
   actionOnctrlpbujraszamol = call('ujraszamol');
-  actionOnctrlpbalap = call('alap');
   commitForm = call('commit');
+  rendelesList(offset: number, limit: number) {
+    sent.push(['rendelesList', {offset, limit}]);
+    return {subscribe(next: (res: unknown) => void) { next({rows: [{id: 9, vevo: 'V9'}], hasMore: false}); }};
+  }
+  toast = {warning() {}};
+  toastLife = {warning: 0};
   applied: unknown[] = [];
   applyActionResult(res: unknown) { this.applied.push(res); }
 __MEMBERS__
@@ -286,10 +299,20 @@ const screen = new Screen();
 screen.forms.rendeles.values = {id: 7, osszeg: 1200, vevo: 'V1'};
 screen.onPbUjraszamolClick();
 assert.deepEqual(sent[0], ['ujraszamol', {blocks: {RENDELES: {ID: '7', OSSZEG: '1200'}}, parameters: {}}]);
-delete screen.forms.ctrl;  // a region not yet generated: its values are missing, the request still goes
-screen.onPbAlapClick();
-assert.deepEqual(sent[1], ['alap', {blocks: {CTRL: {EV: null}}, parameters: {'GLOBAL.EV': null}}]);
+// PB_KERES does no database work: the screen checks its fields, sets MODUS and queries RENDELES itself.
+screen.forms.ctrl.values = {modus: 'U', ev: null};
+screen.forms.ctrl.invalid = true;
+screen.onPbKeresClick();
+assert.equal(screen.forms.ctrl.touched, true);
+assert.equal(sent.length, 1);  // stopped at the invalid field, like FORM_TRIGGER_FAILURE after VALIDATE
+screen.forms.ctrl.invalid = false;
+screen.onPbKeresClick();
+assert.equal(screen.forms.ctrl.values.modus, 'K');
+assert.deepEqual(sent[1], ['rendelesList', {offset: 0, limit: 1}]);
+assert.deepEqual(screen.migrationLoaded['RENDELES'], {id: 9, vevo: 'V9'});
+assert.equal(screen.forms.rendeles.values.id, 9);
 // Nothing queried, nothing entered (the start values do not count): no record to save.
+screen.migrationLoaded['RENDELES'] = null;
 screen.forms.rendeles.values = {id: null, vevo: null, vevoNev: null, datum: null, statusz: 'N', osszeg: null};
 answer = {rowsRendeles: [], messages: []};
 screen.save();

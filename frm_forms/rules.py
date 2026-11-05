@@ -1204,9 +1204,25 @@ def analyze(model: dict, metadata: dict, replacements: dict, catalog: dict | Non
         except Exception as error:
             exc = adapter_error(error)
             if ai_mode and trigger["event"] == "WHEN-BUTTON-PRESSED" and source.strip():
-                # Not a pure screen step: a backend action whose body the Java assistant writes. A query button
-                # (own DEFAULT_WHERE + EXECUTE_QUERY) keeps the query contract: the screen shows the returned rows.
+                from . import database_work
                 target = ai_triggers.query_target(source, model)
+                work = database_work.evidence(source, model, catalog, trigger["block"], trigger["item"])
+                if not work and not target:
+                    # Only screen work (items, navigation, messages, the blocks' queries and save): the screen's,
+                    # never a Java endpoint or a task for the Java assistant. Its recognised steps run there; the
+                    # rest is the developer's on the screen (TODO with the original code in the button's method).
+                    steps = framework.action_steps(source, catalog, model, trigger["block"], trigger["item"], screen_values=True)
+                    trigger.update(status="converted" if steps else "review", target="frontend", screen_only=True)
+                    trigger.pop("reason", None)
+                    if not steps:
+                        trigger["reason"] = ("Nincs benne adatbázismunka, ezért nincs Java-végpontja: a képernyőn kell "
+                                             "megírni (" + str(exc).rstrip(".") + ").")
+                        model["issues"].append({"code": "UNSUPPORTED_TRIGGER", "owner": trigger["block"] or form_owner,
+                                                "scope": "frontend", "detail": trigger["id"] + ": " + trigger["reason"]})
+                    continue
+                trigger["database_work"] = work
+                # A backend action whose body the Java assistant writes. A query button (own DEFAULT_WHERE +
+                # EXECUTE_QUERY) keeps the query contract: the screen shows the returned rows.
                 if target:
                     trigger['query_action'] = {'target': target, 'unit': trigger.get('owner') or '', 'context': None,
                                                'variants': [], 'message_units': {}, 'java': None, 'ai': True,

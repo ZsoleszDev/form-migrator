@@ -457,7 +457,8 @@ def build_screen(resolution, ui, module, config):
                                 and get(props(t), 'Name').upper() == 'WHEN-BUTTON-PRESSED'), '')
                 opener = list_opener(pressed)
                 if opener: openers[owner] = opener
-                recognised = framework.action_steps(pressed, catalog, key_context)
+                recognised = framework.action_steps(pressed, catalog, key_context,
+                                                    screen_values=config.get('backend_trigger_mode') == 'ai')
                 actions[-1].update(steps=recognised['steps'] if recognised else None,
                                    framework_calls=recognised['framework'] if recognised else [],
                                    own_calls=framework.classify(pressed, catalog)[1])

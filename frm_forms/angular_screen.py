@@ -456,6 +456,7 @@ def generate(resolution, ui, output, config, module, discovery):
     methods += code.methods
     methods += code.result_methods()
     methods += code.more_rows_methods()
+    methods += code.validate_methods()
     methods += code.changes_methods()
     fields = code.class_fields(tab_fields, labels, toast_symbol, form_type, structures)
     if code.input_rows:

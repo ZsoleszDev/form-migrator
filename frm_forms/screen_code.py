@@ -29,7 +29,7 @@ NAVIGATION_STEPS = {'goItem', 'nextRecord', 'previousRecord', 'firstRecord', 'la
 # Members of the component (and of ServiceBase) the endpoint methods must not shadow.
 RESERVED = {'migrationParameters', 'migrationInputText', 'constructor', 'url', 'http', 'toast', 'toastLife', 'labels', 'router', 'route', 'modName', 'forms', 'structures', 'onFormGroupGenerated',
             'onRowAction', 'save', 'windowVisible', 'canvasVisible', 'activeContentCanvas', 'applyActionResult', 'migrationQuery',
-            'migrationMoreRows', 'migrationLoaded', 'migrationChanges'}
+            'migrationMoreRows', 'migrationLoaded', 'migrationChanges', 'migrationInvalid'}
 # Local names of a method: a region's values never take them.
 LOCALS = {'res', 'row', 'error', 'body'}
 LINE = 120  # a longer request is written one block per line
@@ -393,17 +393,37 @@ class ScreenCode:
     # ---------------------------------------------------------------- buttons
 
     def steps(self, owner: str, steps: list, body: Body) -> list[str] | None:
-        """A button's recognised Forms steps: its queries, its save, its windows; None when one has no plain equivalent."""
-        block, lines = owner.split('.', 1)[0], []
+        """A button's recognised Forms steps: its values, checks, messages, queries, save and windows; None when one
+        has no plain equivalent."""
+        block, lines, written = owner.split('.', 1)[0], [], set()
         controls = self.plan.get('window_controls') or {}
         for step in steps:
             op = step['op']
             if op == 'goBlock':
                 block = step['block'].upper()
+            elif op == 'goItem' and '.' in step['item']:
+                block = step['item'].split('.', 1)[0].upper()
             elif op in NAVIGATION_STEPS:
                 continue
+            elif op == 'setValue':
+                line = self.set_value(step)
+                if line is None:
+                    return None
+                lines.append(line)
+                written.add(self.controls[step['item']][0])
+            elif op == 'validate':
+                regions = [s['property'] for s in self.forms if step['scope'] == 'FORM_SCOPE' or s['block'] == block]
+                if regions:
+                    self.validates = True
+                    lines += [f"if (this.migrationInvalid({', '.join(map(sq, regions))})) {{",
+                              f"  return;  // Forms VALIDATE({step['scope']}) + FORM_SUCCESS: hibás mezőnél a gomb megáll",
+                              '}']
+            elif op == 'message' and self.config.get('backend_trigger_mode') == 'ai':
+                lines.append(f"this.toast.success('Üzenet', {sq(step['text'])}, false, this.toastLife.success);")
             elif op == 'executeQuery' and block in self.queries:
                 lines += self.query(block, body)
+                if written & set(body.regions):
+                    return None  # the request would read the values from before the button wrote them
             elif op == 'commit' and self.w.get('commit'):
                 lines.append('this.save();')
             elif op in {'showWindow', 'hideWindow'} and step['window'].upper() in controls.get('windows', {}):
@@ -419,6 +439,41 @@ class ScreenCode:
             else:
                 return None
         return lines
+
+    def set_value(self, step: dict) -> str | None:
+        """:BLOCK.ITEM := constant / NULL / :BLOCK.ITEM on a form control of the screen; None when it has no plain equivalent."""
+        if step['item'] not in self.controls:
+            return None
+        region, key, item = self.controls[step['item']]
+        widget = item['widget']
+        if 'source' in step:
+            source = self.controls.get(step['source'])
+            if source is None or source[2]['widget'] != widget:
+                return None  # a conversion between control kinds (checkbox, date ...) is the developer's
+            value = f'this.forms[{sq(source[0])}]?.getRawValue()?.[{sq(source[1])}] ?? null'
+        elif step['value'] is None:
+            value = 'null'
+        elif widget == 'checkbox':
+            states = {item.get('checked'): 'true', item.get('unchecked'): 'false'}
+            if step['value'] not in states:
+                return None
+            value = states[step['value']]
+        elif widget in {'date', 'datetime'} or (widget == 'number' and not re.fullmatch(r'-?\d+(?:\.\d+)?', step['value'])):
+            return None  # an Oracle date or number conversion of a text
+        else:
+            value = sq(step['value'])
+        return f'this.forms[{sq(region)}]?.get({sq(key)})?.setValue({value});'
+
+    def validate_methods(self) -> list[str]:
+        """migrationInvalid: Forms VALIDATE + FORM_SUCCESS in a button - the controls' own checks, errors shown."""
+        if not getattr(self, 'validates', False):
+            return []
+        return ['''  // Forms VALIDATE egy gombban: a régiók mezőinek saját ellenőrzése (a hibásak megjelölve); igaz, ha valamelyik hibás.
+  protected migrationInvalid(...regions: string[]): boolean {
+    const forms = regions.map(region => this.forms[region]).filter(form => !!form);
+    forms.forEach(form => form.markAllAsTouched());
+    return forms.some(form => form.invalid);
+  }''']
 
     def original(self, owner: str, todo: str, code: str | None = None) -> list[str]:
         source = (self.sources.get(owner, '') if code is None else code).strip()
