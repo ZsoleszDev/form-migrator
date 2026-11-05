@@ -109,3 +109,112 @@ def write_stubs(root: Path) -> list[Path]:
         path.write_text('package ' + package + ';\n' + source + '\n', encoding='utf-8')
         paths.append(path)
     return paths
+
+
+# The JPA 2.2 API surface the migrator's repositories use (entities, jpa_sql's Criteria methods, the sequence query):
+# the real signatures, generics included, so javac checks the generated code as against javax.persistence-api.
+JPA_API = {
+    'Entity': 'public @interface Entity { String name() default ""; }',
+    'Table': 'public @interface Table { String name(); String schema() default ""; }',
+    'Column': 'public @interface Column { String name(); boolean nullable() default true; int length() default 255; '
+              'int precision() default 0; int scale() default 0; }',
+    'Id': 'public @interface Id {}', 'IdClass': 'public @interface IdClass { Class<?> value(); }',
+    'Lob': 'public @interface Lob {}', 'PersistenceContext': 'public @interface PersistenceContext {}',
+    'Parameter': 'public interface Parameter<T> {}',
+    'PersistenceException': 'public class PersistenceException extends RuntimeException {}',
+    'NoResultException': 'public class NoResultException extends PersistenceException {}',
+    'NonUniqueResultException': 'public class NonUniqueResultException extends PersistenceException {}',
+    'Query': 'public interface Query { Object getSingleResult(); java.util.List getResultList(); int executeUpdate(); '
+             'Query setMaxResults(int max); Query setParameter(String name, Object value); <T> Query setParameter(Parameter<T> p, T value); }',
+    'TypedQuery': 'public interface TypedQuery<X> extends Query { X getSingleResult(); java.util.List<X> getResultList(); '
+                  'TypedQuery<X> setMaxResults(int max); TypedQuery<X> setParameter(String name, Object value); '
+                  '<T> TypedQuery<X> setParameter(Parameter<T> p, T value); }',
+    'EntityManager': 'public interface EntityManager { <T> T find(Class<T> type, Object id); Query createNativeQuery(String sql); '
+                     'void persist(Object entity); <T> T merge(T entity); void remove(Object entity); '
+                     'javax.persistence.criteria.CriteriaBuilder getCriteriaBuilder(); '
+                     '<T> TypedQuery<T> createQuery(javax.persistence.criteria.CriteriaQuery<T> query); '
+                     'Query createQuery(javax.persistence.criteria.CriteriaUpdate update); '
+                     'Query createQuery(javax.persistence.criteria.CriteriaDelete delete); }',
+}
+CRITERIA_API = {
+    'Selection': 'public interface Selection<X> {}',
+    'Expression': 'public interface Expression<T> extends Selection<T> { Predicate in(Object... values); '
+                  'Predicate in(Expression<?>... values); }',
+    'Predicate': 'public interface Predicate extends Expression<Boolean> {}',
+    'Path': 'public interface Path<X> extends Expression<X> { <Y> Path<Y> get(String attributeName); }',
+    'From': 'public interface From<Z, X> extends Path<X> {}',
+    'Root': 'public interface Root<X> extends From<X, X> {}',
+    'Order': 'public interface Order {}',
+    'ParameterExpression': 'public interface ParameterExpression<T> extends javax.persistence.Parameter<T>, Expression<T> {}',
+    'CommonAbstractCriteria': 'public interface CommonAbstractCriteria {}',
+    'AbstractQuery': 'public interface AbstractQuery<T> extends CommonAbstractCriteria { <X> Root<X> from(Class<X> type); '
+                     'AbstractQuery<T> where(Expression<Boolean> restriction); AbstractQuery<T> where(Predicate... restrictions); }',
+    'CriteriaQuery': 'public interface CriteriaQuery<T> extends AbstractQuery<T> { CriteriaQuery<T> select(Selection<? extends T> s); '
+                     'CriteriaQuery<T> where(Expression<Boolean> restriction); CriteriaQuery<T> where(Predicate... restrictions); '
+                     'CriteriaQuery<T> orderBy(Order... o); }',
+    'CriteriaUpdate': 'public interface CriteriaUpdate<T> extends CommonAbstractCriteria { Root<T> from(Class<T> type); '
+                      '<Y, X extends Y> CriteriaUpdate<T> set(Path<Y> attribute, X value); '
+                      '<Y> CriteriaUpdate<T> set(Path<Y> attribute, Expression<? extends Y> value); '
+                      'CriteriaUpdate<T> where(Expression<Boolean> restriction); CriteriaUpdate<T> where(Predicate... restrictions); }',
+    'CriteriaDelete': 'public interface CriteriaDelete<T> extends CommonAbstractCriteria { Root<T> from(Class<T> type); '
+                      'CriteriaDelete<T> where(Expression<Boolean> restriction); CriteriaDelete<T> where(Predicate... restrictions); }',
+    'CriteriaBuilder': '''public interface CriteriaBuilder {
+    <T> CriteriaQuery<T> createQuery(Class<T> type);
+    <T> CriteriaUpdate<T> createCriteriaUpdate(Class<T> type);
+    <T> CriteriaDelete<T> createCriteriaDelete(Class<T> type);
+    <T> ParameterExpression<T> parameter(Class<T> type);
+    <T> Expression<T> literal(T value);
+    <T> Expression<T> nullLiteral(Class<T> type);
+    Predicate and(Expression<Boolean> x, Expression<Boolean> y);
+    Predicate and(Predicate... restrictions);
+    Predicate or(Expression<Boolean> x, Expression<Boolean> y);
+    Predicate or(Predicate... restrictions);
+    Predicate not(Expression<Boolean> restriction);
+    Predicate isNull(Expression<?> x);
+    Predicate isNotNull(Expression<?> x);
+    Predicate equal(Expression<?> x, Expression<?> y);
+    Predicate equal(Expression<?> x, Object y);
+    Predicate notEqual(Expression<?> x, Expression<?> y);
+    Predicate notEqual(Expression<?> x, Object y);
+    <Y extends Comparable<? super Y>> Predicate greaterThan(Expression<? extends Y> x, Expression<? extends Y> y);
+    <Y extends Comparable<? super Y>> Predicate greaterThan(Expression<? extends Y> x, Y y);
+    <Y extends Comparable<? super Y>> Predicate greaterThanOrEqualTo(Expression<? extends Y> x, Expression<? extends Y> y);
+    <Y extends Comparable<? super Y>> Predicate greaterThanOrEqualTo(Expression<? extends Y> x, Y y);
+    <Y extends Comparable<? super Y>> Predicate lessThan(Expression<? extends Y> x, Expression<? extends Y> y);
+    <Y extends Comparable<? super Y>> Predicate lessThan(Expression<? extends Y> x, Y y);
+    <Y extends Comparable<? super Y>> Predicate lessThanOrEqualTo(Expression<? extends Y> x, Expression<? extends Y> y);
+    <Y extends Comparable<? super Y>> Predicate lessThanOrEqualTo(Expression<? extends Y> x, Y y);
+    <Y extends Comparable<? super Y>> Predicate between(Expression<? extends Y> v, Expression<? extends Y> x, Expression<? extends Y> y);
+    <Y extends Comparable<? super Y>> Predicate between(Expression<? extends Y> v, Y x, Y y);
+    Predicate like(Expression<String> x, Expression<String> pattern);
+    Predicate like(Expression<String> x, String pattern);
+    Predicate notLike(Expression<String> x, Expression<String> pattern);
+    Predicate notLike(Expression<String> x, String pattern);
+    Expression<String> concat(Expression<String> x, Expression<String> y);
+    Expression<String> upper(Expression<String> x);
+    Expression<String> lower(Expression<String> x);
+    Expression<String> trim(Expression<String> x);
+    <N extends Number> Expression<N> sum(Expression<N> x);
+    <N extends Number> Expression<N> sum(Expression<? extends N> x, Expression<? extends N> y);
+    <N extends Number> Expression<N> diff(Expression<? extends N> x, Expression<? extends N> y);
+    <N extends Number> Expression<N> max(Expression<N> x);
+    <N extends Number> Expression<N> min(Expression<N> x);
+    <X extends Comparable<? super X>> Expression<X> greatest(Expression<X> x);
+    <X extends Comparable<? super X>> Expression<X> least(Expression<X> x);
+    Expression<Long> count(Expression<?> x);
+    Order asc(Expression<?> x);
+    Order desc(Expression<?> x);
+}''',
+}
+
+
+def write_jpa_stubs(root: Path) -> list[Path]:
+    """javax.persistence (+ .criteria) as the generated entities and repositories use it, for compile tests."""
+    paths = []
+    for package, files in (('javax.persistence', JPA_API), ('javax.persistence.criteria', CRITERIA_API)):
+        for name, body in files.items():
+            path = root.joinpath(*package.split('.'), name + '.java')
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('package ' + package + ';\n' + body + '\n', encoding='utf-8')
+            paths.append(path)
+    return paths

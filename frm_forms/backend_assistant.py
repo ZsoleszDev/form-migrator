@@ -706,6 +706,16 @@ def budget_message(required: int, num_ctx: int) -> str:
             f"a beállított num_ctx {num_ctx}. {next_step} A trigger és a szükséges források teljesek maradtak.")
 
 
+def persistence_plan(packet: dict, output: Path) -> tuple[list[dict], dict]:
+    """The entities and repositories of the task's tables, with the generated repository methods of its SQL (jpa_sql):
+    the model calls them, it does not write them. The same for a request and for its apply."""
+    from . import jpa_assistant, jpa_sql
+    persistence = jpa_assistant.plan(packet, output)
+    generated = (jpa_sql.attach(packet, persistence, (packet.get("hook") or {}).get("table"))
+                 if persistence else {"methods": [], "refused": []})
+    return persistence, generated
+
+
 def prepare(output: Path, task_id: str, options: Options) -> dict:
     """Everything one request needs, built locally without network access."""
     options.validate()
@@ -722,17 +732,18 @@ def prepare(output: Path, task_id: str, options: Options) -> dict:
     packet["service_package_source"] = service[:service.find("public class") if "public class" in service else 1000]
     packet["common_tool_imports"] = common_tool_imports(output)
     packet["plsql_values_import"] = packet["common_tool_imports"].get("PlsqlValues")
-    from . import assistant_context, jpa_assistant
-    persistence = jpa_assistant.plan(packet, output) if options.data_access == "jpa" else []
+    from . import assistant_context
+    persistence, generated = persistence_plan(packet, output) if options.data_access == "jpa" else ([], None)
+    generated = generated or {"methods": [], "refused": []}
     helpers, notes = data_models(packet) if options.data_access == "jdbc" else ({}, [])
     prompt = assistant_context.build(packet, persistence, helpers, options,
-                                     plsql_values=bool(packet["plsql_values_import"]))
+                                     plsql_values=bool(packet["plsql_values_import"]), generated=generated)
     # What the former JSON request carried (whole task packet): kept as a size comparison.
     legacy = {"task": packet, "generated_jdbc_helpers": helpers, "helper_notes": notes,
               "additional_requirements": options.instructions, "project_context": options.project_context}
     input_tokens = estimate_tokens(prompt["system"], prompt["user"])
     return {"output": output, "packet": packet, "service": service, "persistence": persistence, "helpers": helpers,
-            "notes": notes, "prompt": prompt, "input_tokens": input_tokens,
+            "notes": notes, "prompt": prompt, "generated": generated, "input_tokens": input_tokens,
             "required_tokens": input_tokens + options.num_predict + 1000,
             "original_bytes": len(json.dumps(legacy, ensure_ascii=False).encode("utf-8"))}
 
@@ -742,13 +753,22 @@ def preview(output: Path, task_id: str, options: Options) -> dict:
     prepared = prepare(output, task_id, options)
     prompt = prepared["prompt"]
     warnings = []
-    if prepared["required_tokens"] > options.num_ctx:
+    deterministic = False
+    if options.data_access == "jpa" and prepared["packet"].get("kind") == "hook":
+        from . import hook_java
+        deterministic = hook_java.response(prepared["packet"], prepared["generated"])[0] is not None
+    if deterministic:
+        warnings.append("Ezt a triggert a migrátor AI nélkül fordítja (az SQL-je a generált repository-metódusokban van): "
+                        "a futtatás nem hívja a modellt, ez a kérés nem megy el.")
+    elif prepared["required_tokens"] > options.num_ctx:
         warnings.append(budget_message(prepared["required_tokens"], options.num_ctx))
     return {"task_id": task_id, "method": prepared["packet"]["method"], "system": prompt["system"], "user": prompt["user"],
             "bytes": prompt["bytes"], "estimated_input_tokens": prepared["input_tokens"],
             "required_tokens": prepared["required_tokens"], "num_ctx": options.num_ctx, "num_predict": options.num_predict,
             "repositories": prompt["repositories"], "entities": prompt["entities"],
-            "omitted_tables": prompt["omitted_tables"], "original_bytes": prepared["original_bytes"], "warnings": warnings}
+            "omitted_tables": prompt["omitted_tables"], "original_bytes": prepared["original_bytes"], "warnings": warnings,
+            "deterministic": deterministic, "generated_methods": prompt.get("generated_methods", []),
+            "refused_sql": prompt.get("refused_sql", [])}
 
 
 class Cancelled(MigrationError):
@@ -983,8 +1003,6 @@ def _propose(prepared, options, cache, request, log, assistant_reply, jpa_assist
     output, packet, service = prepared["output"], prepared["packet"], prepared["service"]
     persistence, helpers, notes, prompt = prepared["persistence"], prepared["helpers"], prepared["notes"], prepared["prompt"]
     task_id = packet["id"]
-    if prepared["required_tokens"] > options.num_ctx:
-        raise MigrationError(budget_message(prepared["required_tokens"], options.num_ctx))
     ctx = reply_context(prepared, options)
 
     def render_files(response):
@@ -1002,7 +1020,25 @@ def _propose(prepared, options, cache, request, log, assistant_reply, jpa_assist
     cache = cache or output.parent / ".frm-assistant-cache"
     cache_file = safe_file(cache, key + ".json")
     response, errors, cached, extraction, usage = None, [], False, None, {}
-    if cache_file.is_file():
+    deterministic = False
+    if options.data_access == "jpa" and packet.get("kind") == "hook":
+        # A simple record trigger (sequence key, code description, check with a message): no model (hook_java).
+        from . import hook_java
+        response, reason = hook_java.response(packet, prepared["generated"])
+        if response is not None:
+            try:
+                validate_response(response)
+                parse_files(render_files(response))
+                deterministic, cached = True, True
+                extraction = {"format": "deterministic", "status": "proposal", "truncated": False, "blocks": [],
+                              "notes": ["AI-hívás nélkül, a migrátor fordította (az SQL a generált repository-metódusokban)."],
+                              "warnings": [], "problems": [], "missing": []}
+            except MigrationError as exc:
+                response, reason = None, str(exc)  # the model writes it after all
+        log.data["deterministic"] = deterministic or reason
+    if response is None and prepared["required_tokens"] > options.num_ctx:
+        raise MigrationError(budget_message(prepared["required_tokens"], options.num_ctx))
+    if response is None and cache_file.is_file():
         try:
             entry = read_json(cache_file)
             if entry.get("key") == key:
@@ -1071,6 +1107,8 @@ def _propose(prepared, options, cache, request, log, assistant_reply, jpa_assist
         raise MigrationError(f"Nem érkezett használható Java-javaslat ({calls} AI-hívás): " + " | ".join(errors))
     if not cached:
         write_json(cache_file, {"key": key, "response": response, "raw": raw, "extraction": extraction})
+    if deterministic:
+        key = digest(key + ":deterministic:" + json.dumps(response, sort_keys=True, ensure_ascii=False))
     proposal_id = key[:20]
     folder = safe_file(output, AREA + "/proposals/" + proposal_id)
     files, draft_note = {}, None
@@ -1103,7 +1141,8 @@ def _propose(prepared, options, cache, request, log, assistant_reply, jpa_assist
     if draft_note:
         extraction["warnings"] = list(extraction.get("warnings", [])) + [draft_note]
     result = {"version": VERSION, "id": proposal_id, "task_id": task_id, "method": packet["method"],
-              "status": response["status"], "model": options.model, "cached": cached, "calls": calls,
+              "status": response["status"], "model": "determinisztikus (AI nélkül)" if deterministic else options.model,
+              "deterministic": deterministic, "cached": cached and not deterministic, "calls": calls,
               "data_access": options.data_access, "exchange_id": log.data["id"],
               "context": {"original_bytes": prepared["original_bytes"], "sent_bytes": prompt["bytes"],
                           "estimated_input_tokens": prepared["input_tokens"], "method_count": 1,
@@ -1169,7 +1208,7 @@ def apply_proposal(output: Path, proposal_id: str, reviewed: bool = False) -> di
     expected_files = {packet["target"]: render_candidate(source, packet, response)}
     if record.get("data_access") == "jpa":
         from . import jpa_assistant
-        expected_files = jpa_assistant.render_files(output, packet, response, source, jpa_assistant.plan(packet, output))
+        expected_files = jpa_assistant.render_files(output, packet, response, source, persistence_plan(packet, output)[0])
     elif any(f["target"] != packet["target"] for f in record["files"]):
         expected_files.update(data_models(packet)[0])
     expected_files, _ = format_candidates(packet, expected_files)
