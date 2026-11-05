@@ -1,8 +1,7 @@
 """The form's start-up code (PRE-FORM, WHEN-NEW-FORM-INSTANCE), sorted by what the web application needs of it.
 
-A web screen does not "start a form": it opens in its initial state, and only work on the database needs the
-server. So every statement goes where its effect belongs, and the Java assistant gets only what touches the
-database (backend_trigger_mode=ai):
+A web screen does not "start a form": it opens in its initial state. So every statement goes where its effect
+belongs (backend_trigger_mode=ai), and none of it becomes Java - there is no start-up endpoint:
 
 - dropped: Forms plumbing without a web equivalent - framework dispatch (qms$event_form), cursor style, window and
   focus moves, session NLS settings (FORMS_DDL('ALTER SESSION ...'));
@@ -12,7 +11,8 @@ database (backend_trigger_mode=ai):
 - notes: Forms state the web application has no place for (in-memory record groups, package variables, block query
   properties, a message on opening): MIGRATION_NOTES.md lists them for the developer;
 - backend: SQL, database routines, the form's own program units, unknown calls, conditions and loops - verbatim,
-  inside their blocks with their declarations and handlers.
+  inside their blocks with their declarations and handlers. MIGRATION_NOTES.md lists it as not migrated (merge:
+  'server'): opening a web screen does not run database work; the developer decides whether the application needs it.
 
 A statement leaves the backend only when its kind is certain; anything else stays, so no logic is lost. A constant
 written to an item stays in the backend code too when a statement left there reads that item.
@@ -310,9 +310,13 @@ def constant(tokens):
 
 
 def merge(results: dict) -> dict:
-    """The effects of the start-up triggers in Forms order (PRE-FORM first): the later write wins."""
-    merged = {'values': {}, 'globals': {}, 'properties': [], 'queries': [], 'notes': [], 'dropped': []}
+    """The effects of the start-up triggers in Forms order (PRE-FORM first): the later write wins.
+
+    server: the database work of each trigger (triage 'backend'), [{trigger, code}]; not migrated, only listed."""
+    merged = {'values': {}, 'globals': {}, 'properties': [], 'queries': [], 'notes': [], 'dropped': [], 'server': []}
     for trigger_id, result in results.items():
+        if result['backend']:
+            merged['server'].append({'trigger': trigger_id, 'code': result['backend']})
         merged['values'].update(result['values'])
         merged['globals'].update(result['globals'])
         merged['properties'] += result['properties']
@@ -336,7 +340,8 @@ def screen_state(sections: list, state: dict) -> dict:
     """The opening state of the screen from the start-up code: start values and item properties on its items.
 
     sections: the screen plan's form and table sections (their items change in place). Returns what MIGRATION_NOTES.md
-    lists: applied [{owner, what}], manual and dropped [{statement, reason}] (the triage's notes included).
+    lists: applied [{owner, what}], manual and dropped [{statement, reason}] (the triage's notes included), and the
+    database work that is not migrated (server [{trigger, code}]).
     """
     items = {i['owner'].upper(): i for s in sections for i in s['items'] if s['mode'] == 'form'}
     applied, manual = [], [dict(n) for n in state.get('notes', [])]
@@ -381,4 +386,4 @@ def screen_state(sections: list, state: dict) -> dict:
                 dropped.append({'statement': statement(prop), 'reason': 'megjelenés (visual attribute): a képernyő stílusának része'})
             else:
                 manual.append({'statement': statement(prop), 'reason': 'mezőtulajdonság a megnyitáskor: a képernyőn kell beállítani'})
-    return {'applied': applied, 'manual': manual, 'dropped': dropped}
+    return {'applied': applied, 'manual': manual, 'dropped': dropped, 'server': [dict(s) for s in state.get('server', [])]}

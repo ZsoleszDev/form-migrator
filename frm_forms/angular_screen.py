@@ -284,7 +284,7 @@ def generate(resolution, ui, output, config, module, discovery):
     state = (api or {}).get('startup') or screen_api.load_startup(output)
     if state:
         from . import startup
-        plan['startup'] = dict(startup.screen_state(forms + tables, state), server=bool((api or {}).get('init')))
+        plan['startup'] = startup.screen_state(forms + tables, state)
     # Forms CALL_FORM/OPEN_FORM/NEW_FORM buttons -> Angular Router, with the parameter list.
     navigations = screen_navigations(resolution, forms, config) if buttons else {}
     manual_navs = manual_navigations(resolution, navigations) if buttons else {}
@@ -531,16 +531,20 @@ def field_lengths_template(plan):
             'fields': fields}
 
 
-def startup_notes(state, cell):
+def startup_notes(state, cell, sql_block):
     """MIGRATION_NOTES.md: where the start-up code went (startup.triage, startup.screen_state)."""
     lines = ['', '## Indítás (Forms PRE-FORM, WHEN-NEW-FORM-INSTANCE)', '',
-             'A webes képernyőnek nincs „form indulása”: a kezdőállapotát a generált kód adja, a szerver csak az '
-             'indítókód adatbázist érintő részét futtatja.', '',
-             '- Szerver: ' + ('az `onFormInit` végpont (a konstruktor hívja); a törzsét a Java asszisztens írja, és csak az '
-                             'adatbázist érintő utasításokat kapja.' if state['server'] else
-                             'nincs indítási végpont: az indítókódban nincs adatbázismunka.')]
+             'A webes képernyőnek nincs „form indulása”, és a Java-alkalmazásnak sincs indítási végpontja: a képernyő '
+             'kezdőállapotát a generált kód adja, az indítókódból semmi sem lesz Java.']
     if state.get('queries'):
         lines.append('- Indításkori lekérdezés (a konstruktor hívja): ' + ', '.join('`' + b + '`' for b in state['queries']) + '.')
+    if state.get('server'):
+        lines += ['', '### Nem migrált adatbázismunka', '',
+                  'A Forms a form megnyitásakor ezt is lefuttatta (lekérdezés, adatbázis-rutin, a form saját eljárása). '
+                  'A webes képernyő megnyitása nem indít adatbázismunkát; ha az alkalmazásnak szüksége van rá (például egy '
+                  'adatbázisból vett kezdőértékre), a fejlesztő köti be, a képernyő saját lekérdezéseként.', '']
+        for entry in state['server']:
+            lines += ['`' + cell(entry['trigger']) + '`:', '', *sql_block(entry['code'])]
     if state['applied']:
         lines += ['', '### A képernyő kezdőállapota', '', '| Mező | Beállítás |', '|---|---|']
         lines += ['| `' + cell(a['owner']) + '` | ' + cell(a['what']) + ' |' for a in state['applied']]
@@ -613,7 +617,7 @@ def notes(plan, discovery, config):
         lines += ['| ' + ' | '.join(map(cell, [r['owner'] + ' / ' + r['event'], r['call'], r['window'] + ' / ' + r['canvas'],
                                                r['status'], r['source_file'] + ':' + str(r['line'])])) + ' |' for r in plan['window_references']]
     if plan.get('startup'):
-        lines += startup_notes(plan['startup'], cell)
+        lines += startup_notes(plan['startup'], cell, sql_block)
     lines += ['', '## Elrendezés és felülbírálások', '',
               'Sorillesztési tolerancia: ' + str(plan['layout_settings']['row_tolerance']) + ' × a kisebb mezőmagasság; '
                                                                                              'a valódi sorok elkülönítéséhez függőleges és vízszintes átfedésvizsgálat is történik. '

@@ -238,8 +238,9 @@ class ScreenComponentTests(unittest.TestCase):
         rows = sheet(self.out)['rows']
         global_row = next(r for r in rows if r['source'] == 'GLOBAL.EV')
         self.assertEqual(global_row['status'], 'missing')
-        init_row = next(r for r in rows if r['source'] == 'GLOBAL.CG$APP')
-        self.assertEqual(init_row['status'], 'lifecycle')
+        # The start-up code's constant: the PARTNER search sends it (no start-up request reads it any more).
+        startup_row = next(r for r in rows if r['source'] == 'GLOBAL.CG$APP')
+        self.assertEqual(startup_row['status'], 'connected')
         self.assertNotIn('FRM:', replica)
         save = screen_method(self.out, 'save')
         # The record of the form against the queried one; the saved record (its generated key) back on the screen.

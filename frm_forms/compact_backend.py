@@ -491,22 +491,8 @@ def manual_source(action, discovery) -> str:
 
 
 def ai_action_sources(o, model, discovery) -> list[tuple[str, str]]:
-    """The original code of an action for its AI stub: the trigger(s), the local units they call, DO_KEY targets."""
-    from . import ai_triggers
+    """The original code of an action for its AI stub: the trigger, the local units it calls, DO_KEY targets."""
     action = o['action']
-    if action.get('init'):
-        sections = []
-        reduced = (model.get('init_plan') or {}).get('sources') or {}
-        for trigger in model['triggers']:
-            if trigger['id'] in action.get('init_triggers', []):
-                source = reduced.get(trigger['id']) or (trigger.get('replacement') or {}).get('source', trigger['source'])
-                sections.append((trigger['id'], source))
-        seen = {label for label, _ in sections}
-        for trigger_id, source in list(sections):
-            for label, text in ai_triggers.unit_sections(source, model):
-                if label not in seen:
-                    seen.add(label); sections.append((label, text))
-        return sections
     codes = discovery.get('_code_index', {})
     sections = [(codes[cid]['path'].rsplit('/', 1)[-1] if codes[cid]['kind'] != 'trigger' else action['owner'] + ' / ' + action['event'],
                  codes[cid]['source_view']) for cid in action.get('reachable_code', []) if cid in codes]
@@ -516,7 +502,7 @@ def ai_action_sources(o, model, discovery) -> list[tuple[str, str]]:
 
 
 def ai_action_method(o, model, discovery, log1x, user_type, blocks) -> str:
-    """backend_trigger_mode=ai: the endpoint frame of a button / the start-up code, its body for the Java assistant."""
+    """backend_trigger_mode=ai: the endpoint frame of a button, its body for the Java assistant."""
     from . import ai_triggers
     action = o['action']
     label = action['owner'] + ' / ' + action['event']
@@ -526,9 +512,6 @@ def ai_action_method(o, model, discovery, log1x, user_type, blocks) -> str:
              + ((' · paraméterek: ' + ', '.join(parameters)) if parameters else '') + '.']
     trigger = next((t for t in model['triggers'] if t['owner'] == action['owner'] and t['event'] == action['event']), {})
     notes += ai_triggers.framework_note('', None, trigger.get('framework_calls'))
-    if action.get('init') and (model.get('init_plan') or {}).get('sources'):
-        notes.append('Az indítókódnak csak az adatbázist érintő része; a képernyő kezdőállapota (állandók, mezőtulajdonságok) '
-                     'a képernyőn van, a Forms-keretrendszer része kimaradt (MIGRATION_NOTES.md).')
     if query:
         target = next(b for b in blocks if b['name'] == query['target'])
         notes.append('Lekérdezőgomb: a(z) ' + target['name'] + ' (' + target['table'] + ') sorait adja vissza '
@@ -536,8 +519,6 @@ def ai_action_method(o, model, discovery, log1x, user_type, blocks) -> str:
     original = ai_triggers.region(label, ai_action_sources(o, model, discovery), '            ', notes)
     info = [label + ': a Forms-kód Java-változatát a Java asszisztens (helyi AI) írja ide.',
             'A metódus kerete (végpont, DTO, tranzakció, log1x) végleges; csak a törzs változik.']
-    if action.get('init'):
-        info.append('Indítási végpont: a képernyő megnyitáskor hívja (PRE-FORM, WHEN-NEW-FORM-INSTANCE).')
     if query:
         returns, request = f"PageResult<{target['class']}Row>", 'QueryActionRequest'
     else:
@@ -735,22 +716,15 @@ def generate(model, output: Path, config, module, package, discovery, actions):
     cls = name(module, 'pascal')
     cl = cl_package(config, package)  # where the developer puts the module's CL files
     init = model.get('init_plan') or {}
-    if init.get('status') in ('generated', 'ai'):
-        # The form's start-up code (PRE-FORM, WHEN-NEW-FORM-INSTANCE): the screen calls it when it opens.
-        events = {t.split(':', 1)[1] for t in init['triggers']}
-        init_binds = [b['name'] for c in discovery['code'] if c['kind'] == 'trigger' and not c.get('block')
-                      and not c.get('item') and c.get('name') in events for b in c.get('binds', [])] if init['status'] == 'ai' else []
-        if init.get('sources'):
-            # Only the start-up code's database work runs on the server (startup.triage): what it reads.
-            from .discovery import scan
-            init_binds = [b['name'] for text in init['sources'].values() for b in scan(text)['binds']]
+    if init.get('status') == 'generated':
+        # The form's start-up code (PRE-FORM, WHEN-NEW-FORM-INSTANCE) as PL/SQL (backend_trigger_mode=plsql): the
+        # screen calls it when it opens. backend_trigger_mode=ai has no start-up endpoint (rules.startup_plan).
         actions = list(actions) + [{'owner': INIT_OWNER, 'event': ' + '.join(t.split(':', 1)[1] for t in init['triggers']),
                                     'block': None, 'item': None, 'key': 'init', 'api_name': 'init',
                                     'path': config['api_prefix'].rstrip('/') + '/' + module + '/init', 'method': 'POST',
                                     'method_name': 'onFormInit', 'trigger_id': None, 'reachable_code': [],
-                                    'event_code_candidates': [], 'binds': list(dict.fromkeys(init_binds)), 'external_calls': [],
-                                    'source_file': '', 'source_sha256': '', 'init': True, 'init_triggers': init['triggers'],
-                                    'ai': init['status'] == 'ai'}]
+                                    'event_code_candidates': [], 'binds': [], 'external_calls': [],
+                                    'source_file': '', 'source_sha256': '', 'init': True, 'init_triggers': init['triggers']}]
     ops = operations(model, actions)
     # LOVs: reviewed read-only SQL from RecordGroupQuery, one endpoint per LOV.
     from .backend_lovs import lov_plans, lov_method, lov_evidence
@@ -773,9 +747,6 @@ def generate(model, output: Path, config, module, package, discovery, actions):
             continue
         if o['action'].get('init'):
             o['passthrough'] = init.get('plan')
-            o['ai'] = init.get('status') == 'ai'
-            if o['ai']:
-                o['ai_reads'] = action_reads(o['action'], discovery)
             continue
         trigger = next((t for t in model['triggers'] if t['owner'] == o['action']['owner'] and t['event'] == o['action']['event']), None)
         o['passthrough'] = trigger.get('passthrough_plan') if trigger else None

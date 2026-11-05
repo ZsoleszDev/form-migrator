@@ -1,9 +1,10 @@
-"""The form's start-up code in the web application: only its database work reaches the server and the Java assistant.
+"""The form's start-up code in the web application: none of it becomes Java.
 
-PRE-FORM / WHEN-NEW-FORM-INSTANCE are Forms events; a web screen opens in its initial state. Constants and item
-properties become the screen's opening state, Forms plumbing (Headstart dispatch, cursor style, session NLS)
-goes, Forms-only state (record groups, package variables) is listed for the developer, and only SQL, database
-routines and what cannot be decided statically stay for onFormInit (backend_trigger_mode=ai).
+PRE-FORM / WHEN-NEW-FORM-INSTANCE are Forms events; a web screen opens in its initial state and the Java application
+has no start-up endpoint (backend_trigger_mode=ai). Constants and item properties become the screen's opening state,
+Forms plumbing (Headstart dispatch, cursor style, session NLS) goes, Forms-only state (record groups, package
+variables) and the database work (SQL, database routines, what cannot be decided statically) are listed for the
+developer.
 """
 import contextlib
 import io
@@ -132,21 +133,33 @@ class StartupMigrationTests(unittest.TestCase):
         self.assertIn("formControlName: 'modus', labelText: 'MODUS', col: '3', disabled: true, maxLenght: 1, startValue: 'U' }", screen)
         self.assertNotIn('actionOnforminit', screen)
         notes = (self.kezdo / 'frontend/kezdo/MIGRATION_NOTES.md').read_text(encoding='utf-8')
-        self.assertIn('nincs indítási végpont: az indítókódban nincs adatbázismunka.', notes)
+        self.assertIn('az indítókódból semmi sem lesz Java.', notes)
+        self.assertNotIn('Nem migrált adatbázismunka', notes)
         self.assertIn("| `qms$event_form('PRE-FORM');` | keretrendszer-hívás", notes)
 
-    def test_the_java_assistant_gets_only_the_database_work(self):
+    def test_database_work_of_the_start_up_code_is_listed_not_migrated(self):
+        # Opening a web screen is no event of the Java application: no onFormInit, no task for the Java assistant.
         model = json.loads((self.replica / 'analysis/form.ir.json').read_text(encoding='utf-8'))
-        self.assertEqual(model['init_plan']['triggers'], ['RENDELES:WHEN-NEW-FORM-INSTANCE'])  # PRE-FORM: nothing for the server
-        task = next(t for t in engine.prepare_workspace(self.replica)['tasks'] if t['method'] == 'onFormInit')
-        packet = json.loads((self.replica / engine.AREA / 'tasks' / (task['id'] + '.json')).read_text(encoding='utf-8'))
-        code = '\n'.join(s['source'] for s in packet['sources'])
+        self.assertNotIn('init_plan', model)
+        plan = json.loads((self.replica / 'analysis/backend-plan.json').read_text(encoding='utf-8'))
+        self.assertNotIn('init', plan['api'])
+        self.assertFalse(any(e.get('method') == 'onFormInit' for e in plan['endpoints']))
+        self.assertNotIn('onFormInit', [t['method'] for t in engine.prepare_workspace(self.replica)['tasks']])
+        self.assertNotIn('onFormInit', (self.replica / 'backend/DPS/RendelesServiceImpl.java').read_text(encoding='utf-8'))
+        screen = next((self.replica / 'frontend').rglob('*.component.ts')).read_text(encoding='utf-8')
+        self.assertNotIn('actionOnforminit', screen)
+        server = model['startup']['server']
+        self.assertEqual([s['trigger'] for s in server], ['RENDELES:WHEN-NEW-FORM-INSTANCE'])  # PRE-FORM: no database work
+        code = server[0]['code']
         self.assertIn('FROM param_tabla', code)
+        self.assertIn('naplo_init( :GLOBAL.CG$APP );', code)
         for gone in ('qms$event_form', 'SET_APPLICATION_PROPERTY', 'ALTER SESSION', 'CREATE_GROUP', 'SET_ITEM_PROPERTY', "MODUS := 'U'",
                      'ank_ctrl', 'ank_menu'):  # the company's Forms-only UI libraries are catalogued (forms_runtime_calls)
             self.assertNotIn(gone, code)
-        self.assertIn('naplo_init( :GLOBAL.CG$APP );', code)  # the log entry in the database stays, with the global it reads
-        self.assertEqual(packet['pending_tables'], ['PARAM_TABLA'])
+        notes = (self.replica / 'frontend/rendeles/MIGRATION_NOTES.md').read_text(encoding='utf-8')
+        listed = notes[notes.index('### Nem migrált adatbázismunka'):]
+        self.assertIn('`RENDELES:WHEN-NEW-FORM-INSTANCE`:', listed)
+        self.assertIn('naplo_init( :GLOBAL.CG$APP );', listed)
 
     def test_the_screen_opens_in_the_state_the_start_up_code_left(self):
         screen = next((self.replica / 'frontend').rglob('*.component.ts')).read_text(encoding='utf-8')
