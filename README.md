@@ -43,10 +43,15 @@ bekötni. A képernyőértékek bekötése külön, összecsukott haladó eszkö
 ## Mit készít az AI-val együtt?
 
 - A migrátor az igazolt táblaszerkezetből JPA entityt készít.
-- Táblánként saját Spring repository készül. Az AI a konkrét adatbázis-műveleteket
-  ebben valósítja meg, az entitykkel, EntityManager/Criteria API használatával.
-- A DPS ServiceImpl kiválasztott metódusa a repositorykat hívja; a migrátor
-  a Spring-bekötéseket is beilleszti.
+- Táblánként saját Spring repository készül. A trigger SQL-jéből a migrátor maga írja
+  meg a repository-metódusokat (Criteria API, persist, szekvencia; az eredeti SQL a
+  kommentjükben), ahol pontosan fordítható; az AI csak a lefedetlen SQL-hez ír metódust.
+- A DPS ServiceImpl kiválasztott metódusa a repositorykat hívja; az üzleti logikát az AI
+  írja, az egyszerű rekordtriggereket (szekvenciás kulcs, kódtábla-megnevezés, üzenettel
+  megálló ellenőrzés, master-detail törlésellenőrzés) a migrátor AI nélkül. A
+  Spring-bekötéseket is a migrátor illeszti be.
+- Java csak adatbázismunkából lesz: az indítókód (PRE-FORM, WHEN-NEW-FORM-INSTANCE) és az
+  adatbázismunka nélküli gombok a képernyő feladatai, nem kapnak Java-végpontot.
 - Szükség esetén kiegészítő DTO készül. A már létező Controller, végpont,
   service-aláírás és request/result DTO-szerződés megmarad.
 - Ugyanazon tábla repositoryja a következő triggernél is használható. A már

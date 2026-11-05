@@ -269,6 +269,11 @@ class AssistantTests(unittest.TestCase):
                     engine.propose(self.out, self.tasks()[method]['id'], self.options)
         service = (self.out / 'backend/DPS/RendelesServiceImpl.java').read_text(encoding='utf-8')
         self.assertIn('import javax.persistence.NoResultException;', service)
+        hook = service[service.index('private void triggerPostChangeVevoRendeles('):]
+        hook = hook[:hook.index('\n    }\n')]
+        self.assertIn('//region Eredeti Forms-kód: RENDELES.VEVO / POST-CHANGE', hook)  # the original code stays
+        self.assertIn('// Bemenet/kimenet: a rekord', hook)
+        self.assertNotIn('AI-ra vár', hook)  # written: it waits for nothing
         self.assertIn('private RendelesVevoRepository rendelesVevoRepository;', service)
         repository = (self.out / 'backend/DPS/RendelesRendelesTetelRepository.java').read_text(encoding='utf-8')
         self.assertIn('public boolean existsByRendelesId(BigDecimal rendelesId) {', repository)

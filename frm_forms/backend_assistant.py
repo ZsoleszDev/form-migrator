@@ -320,8 +320,12 @@ def prepare_workspace(output: Path) -> dict:
              "a saját repositoryk és a szükséges kiegészítő DTO-k együtt frissülnek. A meglévő Controller és "
              "végponti szerződés megmarad. A friss modul ZIP-je letölthető.\n\n"
              "Az adatbázis-műveletek entitykkel, a repositoryban futnak; a service üzleti logikát és "
-             "repositoryhívásokat tartalmaz. Nem kell promptot írni. Hiányzó külső rutint vagy céges API-t "
-             "csak akkor kell pótolni a kiegészítő forrásban, ha a működéshez szükséges.\n\n"
+             "repositoryhívásokat tartalmaz. A trigger SQL-jéhez a migrátor maga írja a repository-metódusokat "
+             "(Criteria API, az eredeti SQL a kommentjükben), ahol pontosan fordítható: az AI ezeket hívja, és csak "
+             "a service logikáját írja. Az egyszerű rekordtriggerekhez (szekvenciás kulcs, kódtábla-megnevezés, "
+             "üzenettel megálló ellenőrzés, master-detail törlésellenőrzés) AI-hívás sem kell. Nem kell promptot "
+             "írni. Hiányzó külső rutint vagy céges API-t csak akkor kell pótolni a kiegészítő forrásban, ha a "
+             "működéshez szükséges.\n\n"
              "A képernyőértékek külön bekötése opcionális haladó eszköz; nem feltétele a Java-átírásnak. "
              "A meglévő log1x és tranzakciós keret megmarad. A céges projektben JPA/Hibernate és a megfelelő "
              "entity/repository csomagok felismerése szükséges. Java 11 mellett az alap névtér javax.persistence; "
@@ -513,7 +517,7 @@ def render_candidate(service: str, packet: dict, response: dict) -> str:
     if packet.get("kind") == "hook":
         # A private trigger hook (backend_trigger_mode=ai): the region stays on top, the model's code replaces the rest.
         original = ORIGINAL_REGION.search(existing)
-        region = original.group(0).rstrip() + "\n" if original else ""
+        region = written(original.group(0).rstrip() + "\n") if original else ""
         body = "\n".join("        " + line if line else "" for line in response["body"].strip().splitlines())
         result = service[:opening + 1] + "\n" + region + body + "\n    }" + service[end + 1:]
         return finish_candidate(result, service, packet, response)
@@ -523,7 +527,7 @@ def render_candidate(service: str, packet: dict, response: dict) -> str:
     lambda_end = matching_brace(mask, lambda_open)
     # The commented original Forms source stays in the method: the model need not repeat it.
     original = ORIGINAL_REGION.search(existing, lambda_open + 1, lambda_end)
-    region = original.group(0).rstrip() + "\n" if original else ""
+    region = written(original.group(0).rstrip() + "\n") if original else ""
     body = "\n".join("            " + line if line else "" for line in response["body"].strip().splitlines())
     # The gate is generator-owned, never delegated to the model.
     guard = ('            if (!MODULE_REVIEWED) {\n'
@@ -539,6 +543,11 @@ def render_candidate(service: str, packet: dict, response: dict) -> str:
         before = before[:line_start] + "    @org.springframework.transaction.annotation.Transactional(rollbackFor = Exception.class)\n" + before[line_start:]
     result = before + new_method + service[end + 1:]
     return finish_candidate(result, service, packet, response)
+
+
+def written(region: str) -> str:
+    """The kept region of a method whose body is written now: its note no longer says it waits for the AI."""
+    return re.sub(r"^([ \t]*//[ \t]*)AI-ra vár\.[ \t]*", r"\1", region, count=1, flags=re.M)
 
 
 def finish_candidate(result: str, service: str, packet: dict, response: dict) -> str:
