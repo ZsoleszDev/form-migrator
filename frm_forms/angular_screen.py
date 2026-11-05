@@ -29,14 +29,45 @@ def wf_table_source() -> str:
     return (Path(__file__).with_name('templates') / 'wf-table.ts.tpl').read_text(encoding='utf-8')
 
 
-def button_sources(resolution) -> dict:
-    """The WHEN-BUTTON-PRESSED code of every button (BLOCK.ITEM -> source): the TODO of an unwired button shows it."""
+def button_sources(resolution, reached: bool = False) -> dict:
+    """The WHEN-BUTTON-PRESSED code of every button (BLOCK.ITEM -> source): the TODO of an unwired button shows it.
+
+    reached (backend_trigger_mode=ai, where a button without database work is the screen's): also the code it runs -
+    the key trigger a DO_KEY starts and the form's program units it calls - which the developer ports there."""
     from .forms_keys import screen_context
     from .xmlmodel import tag
     from .plsql_passthrough import decode_line_escapes
     context = screen_context(next(e for e in resolution.root.iter() if tag(e) == 'formmodule'))
-    return {(t['block'] + '.' + t['item']).upper(): decode_line_escapes(t['source'] or '') for t in context['triggers']
-            if t['event'] == 'WHEN-BUTTON-PRESSED' and t['item'] and t['block']}
+    sources = {(t['block'] + '.' + t['item']).upper(): decode_line_escapes(t['source'] or '') for t in context['triggers']
+               if t['event'] == 'WHEN-BUTTON-PRESSED' and t['item'] and t['block']}
+    return {owner: source + reached_code(source, owner, context) for owner, source in sources.items()} if reached else sources
+
+
+def reached_code(source: str, owner: str, context: dict) -> str:
+    """The key triggers of the code's DO_KEY calls and the form's program units it calls, as PL/SQL sections."""
+    from .ai_triggers import code_text, reachable_units
+    from .forms_keys import overrides
+    from .plsql_passthrough import decode_line_escapes
+    from .xmlmodel import get
+    block, item = owner.split('.', 1)
+    sections, seen = [], set()
+    # The key trigger of the item that has the focus: a GO_ITEM / GO_BLOCK before the DO_KEY moves it.
+    for call in re.finditer(r"\b(GO_ITEM|GO_BLOCK|DO_KEY)\s*\(\s*'([A-Za-z_$#.]+)'\s*\)", code_text(source), re.I):
+        target = call.group(2).upper()
+        if call.group(1).upper() == 'GO_ITEM' and '.' in target:
+            block, item = target.split('.', 1)
+        elif call.group(1).upper() == 'GO_BLOCK':
+            block, item = target, None
+        elif call.group(1).upper() == 'DO_KEY':
+            for trigger in overrides(context, target, block, item):
+                if trigger['id'] not in seen:
+                    seen.add(trigger['id'])
+                    sections.append(f"-- DO_KEY('{target}') által indított key-trigger: {trigger['id']}\n"
+                                    + decode_line_escapes(trigger['source'] or '').strip())
+    units = {get(u, 'Name').upper(): {'text': decode_line_escapes(get(u, 'ProgramUnitText'))} for u in context['program_units']}
+    for name in reachable_units(source + '\n' + '\n'.join(sections), units):
+        sections.append('-- A form saját programegysége: ' + name + '\n' + units[name]['text'].strip())
+    return ''.join('\n\n' + section for section in sections)
 
 
 def angular_string(value):
@@ -292,7 +323,8 @@ def generate(resolution, ui, output, config, module, discovery):
     plan['navigations'] = navigations  # screen-plan.json and MIGRATION_NOTES
     # The screen's code (screen_code): the frame, the endpoints and the requests of the buttons.
     from .screen_code import ScreenCode
-    code = ScreenCode(plan, forms, tables, wiring, config, navigations, manual_navs, button_sources(resolution))
+    code = ScreenCode(plan, forms, tables, wiring, config, navigations, manual_navs,
+                      button_sources(resolution, config.get('backend_trigger_mode') == 'ai'))
     code.build()
     if plan.get('startup'):
         plan['startup']['queries'] = code.startup_queries_run

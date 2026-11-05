@@ -131,6 +131,10 @@ class ScreenButtonTests(unittest.TestCase):
         self.assertEqual((alap['status'], alap['target']), ('review', 'frontend'))
         self.assertTrue(alap['reason'].startswith('Nincs benne adatbázismunka, ezért nincs Java-végpontja: a képernyőn kell megírni'))
         self.assertIn("DEFAULT_VALUE('2024', 'GLOBAL.EV');", screen_method(self.out, 'onPbAlapClick'))
+        # The code it runs is there too, where the developer ports it: the form's own procedure.
+        frissit = screen_method(self.out, 'onPbFrissitClick')
+        self.assertIn('// -- A form saját programegysége: BLOKK_FRISSIT', frissit)
+        self.assertIn("//   IF :SYSTEM.CURSOR_BLOCK = 'RENDELES' THEN", frissit)
         issue = next(i for i in self.model['issues'] if i['detail'].startswith('CTRL.PB_ALAP:WHEN-BUTTON-PRESSED: '))
         self.assertEqual(issue['scope'], 'frontend')
 
