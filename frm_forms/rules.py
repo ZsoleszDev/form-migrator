@@ -1221,8 +1221,24 @@ def analyze(model: dict, metadata: dict, replacements: dict, catalog: dict | Non
                                                 "scope": "frontend", "detail": trigger["id"] + ": " + trigger["reason"]})
                     continue
                 trigger["database_work"] = work
-                # A backend action whose body the Java assistant writes. A query button (own DEFAULT_WHERE +
-                # EXECUTE_QUERY) keeps the query contract: the screen shows the returned rows.
+                if target:
+                    # A query button (own DEFAULT_WHERE + EXECUTE_QUERY) is the block's query with another WHERE: the
+                    # migrator writes it (query_java: the WHERE built like the Forms code built it, every screen value
+                    # a bind, checked against the PL/SQL on input cases), the same JDBC query as the block's search.
+                    # Only what it does not cover becomes the Java assistant's task.
+                    from .query_java import plan as java_query
+                    try:
+                        java = java_query(trigger, source, model, catalog)
+                        trigger['query_action'] = {'target': java['target'], 'unit': java['unit'], 'context': None,
+                                                   'variants': [], 'message_units': {}, 'java': java,
+                                                   'prepared': {'binds': [], 'outs': [], 'inputs': java['inputs']}}
+                        trigger.update(status='converted', target='action')
+                        trigger.pop('reason', None)
+                        continue
+                    except Exception as java_error:
+                        trigger['query_java_reason'] = str(adapter_error(java_error))
+                # A backend action whose body the Java assistant writes. A query button keeps the query contract:
+                # the screen shows the returned rows.
                 if target:
                     trigger['query_action'] = {'target': target, 'unit': trigger.get('owner') or '', 'context': None,
                                                'variants': [], 'message_units': {}, 'java': None, 'ai': True,

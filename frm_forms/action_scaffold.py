@@ -48,9 +48,10 @@ def skip_reason(source, trigger, catalog, model=None):
     if trigger and trigger.get('screen_only'):
         # backend_trigger_mode=ai (database_work): no SQL, no database routine - the screen's, never a Java endpoint.
         return 'frontend', 'Nincs benne adatbázismunka: a képernyő feladata, Java-végpont nélkül.'
-    if trigger and trigger.get('ai') and trigger.get('query_action'):
-        # 4.35: a query button (its own DEFAULT_WHERE + EXECUTE_QUERY) is a backend query endpoint whose
-        # WHERE the Java assistant writes; the screen shows the returned rows. Not a Forms-runtime-only step.
+    if trigger and trigger.get('query_action') and (trigger.get('ai') or trigger.get('database_work')):
+        # 4.35: a query button (its own DEFAULT_WHERE + EXECUTE_QUERY) is a backend query endpoint: the migrator's
+        # Java query (query_java) or, when that does not cover it, the Java assistant's task; the screen shows the
+        # returned rows. Not a Forms-runtime-only step.
         return None
     if model is not None and trigger and trigger.get('block'):
         block = next((b for b in model.get('blocks', []) if b.get('name', '').upper() == trigger['block'].upper()), None)

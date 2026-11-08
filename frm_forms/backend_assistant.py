@@ -194,9 +194,12 @@ def prepare_workspace(output: Path) -> dict:
     # hooks of the ServiceImpl (triggerOnInsertRendeles ...); each is a task of its own, like an endpoint.
     applied_hooks = {h["method"] for h in plan.get("ai_hooks_applied", [])}
     endpoints += [h for h in ai_hooks(service, ir, {e["method"] for e in endpoints}) if h["method"] not in applied_hooks]
+    ai_mode = (ir.get("options") or {}).get("backend_trigger_mode") == "ai"
     for endpoint in endpoints:
         if endpoint.get("assistant", {}).get("applied"):
             continue
+        if ai_mode and endpoint.get("runs") == "java-query":
+            continue  # the migrator's query (query_java): done, no AI call (also not by the automatic AI queue)
         # Offered: exactly the methods that still carry the commented original Forms code
         # (//region Eredeti Forms-kód ...): manual buttons, Java/PL-SQL query buttons, gated CRUD.
         method = endpoint["method"]
