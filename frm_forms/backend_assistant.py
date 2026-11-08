@@ -158,6 +158,11 @@ def hook_contract(hook: dict, ir: dict) -> dict:
             "row_class": hook["row_class"], "fields": fields}
 
 
+def screen_items(ir: dict) -> dict:
+    from .action_java import screen_items as items
+    return items(ir)
+
+
 def prepare_workspace(output: Path) -> dict:
     """Index unfinished endpoints without network access or backend modifications."""
     output = output.resolve()
@@ -293,6 +298,8 @@ def prepare_workspace(output: Path) -> dict:
                   "source_module_sha256": ir.get("source_sha256"),
                   "external_calls": external,
                   "db_routines": routines, "unavailable_routines": unavailable,
+                  # an AI button: the types of the screen's values (action_java translates a simple one itself)
+                  "screen_items": screen_items(ir) if manual and ai_mode else {},
                   "module_gate": plan.get("module_gate", {}),
                   "table_requirements": sheet["tables"], "pending_tables": sheet["pending"], "schema_warnings": sheet["warnings"],
                   "notice": "A tiltás oka és a forrás megmarad; az AI-javaslat nem működésigazolás."}
@@ -762,15 +769,25 @@ def prepare(output: Path, task_id: str, options: Options) -> dict:
             "original_bytes": len(json.dumps(legacy, ensure_ascii=False).encode("utf-8"))}
 
 
+def deterministic_response(prepared: dict) -> tuple[dict | None, str]:
+    """A simple record trigger (sequence key, code description, check with a message) or a simple button (screen
+    values, checks, one alert, its SQL, commands) needs no model (hook_java, action_java): (response, why not)."""
+    from . import action_java, framework, hook_java
+    packet = prepared["packet"]
+    if packet.get("kind") == "hook":
+        return hook_java.response(packet, prepared["generated"])
+    effective = read_json(safe_file(prepared["output"], "analysis/effective-config.json"))
+    return action_java.response(packet, prepared["generated"], framework.load(effective["config"]))
+
+
 def preview(output: Path, task_id: str, options: Options) -> dict:
     """The exact request the next run would send, without calling the model."""
     prepared = prepare(output, task_id, options)
     prompt = prepared["prompt"]
     warnings = []
     deterministic = False
-    if options.data_access == "jpa" and prepared["packet"].get("kind") == "hook":
-        from . import hook_java
-        deterministic = hook_java.response(prepared["packet"], prepared["generated"])[0] is not None
+    if options.data_access == "jpa" and prepared["packet"].get("kind") in {"hook", "implement"}:
+        deterministic = deterministic_response(prepared)[0] is not None
     if deterministic:
         warnings.append("Ezt a triggert a migrátor AI nélkül fordítja (az SQL-je a generált repository-metódusokban van): "
                         "a futtatás nem hívja a modellt, ez a kérés nem megy el.")
@@ -1050,10 +1067,8 @@ def _propose(prepared, options, cache, request, log, assistant_reply, jpa_assist
     cache_file = safe_file(cache, key + ".json")
     response, errors, cached, extraction, usage = None, [], False, None, {}
     deterministic = False
-    if options.data_access == "jpa" and packet.get("kind") == "hook":
-        # A simple record trigger (sequence key, code description, check with a message): no model (hook_java).
-        from . import hook_java
-        response, reason = hook_java.response(packet, prepared["generated"])
+    if options.data_access == "jpa" and packet.get("kind") in {"hook", "implement"}:
+        response, reason = deterministic_response(prepared)
         if response is not None:
             try:
                 validate_response(response)

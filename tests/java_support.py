@@ -131,6 +131,7 @@ JPA_API = {
                   '<T> TypedQuery<X> setParameter(Parameter<T> p, T value); }',
     'EntityManager': 'public interface EntityManager { <T> T find(Class<T> type, Object id); Query createNativeQuery(String sql); '
                      'void persist(Object entity); <T> T merge(T entity); void remove(Object entity); '
+                     'default void flush() {} default boolean contains(Object entity) { return false; } '
                      'javax.persistence.criteria.CriteriaBuilder getCriteriaBuilder(); '
                      '<T> TypedQuery<T> createQuery(javax.persistence.criteria.CriteriaQuery<T> query); '
                      'Query createQuery(javax.persistence.criteria.CriteriaUpdate update); '

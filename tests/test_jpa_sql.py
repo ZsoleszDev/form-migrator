@@ -204,6 +204,11 @@ class TranslateTests(unittest.TestCase):
         compile_java(self, self.root, sources)
 
 
+def model_path():
+    """The model's way for a button the migrator translates itself (action_java): the tests of the AI path."""
+    return patch('frm_forms.action_java.response', return_value=(None, 'a modell útját teszteljük'))
+
+
 def migrate(root: Path) -> Path:
     config = root / 'config.json'
     config.write_text(json.dumps({'java_company_imports': COMPANY_IMPORTS, 'backend_trigger_mode': 'ai', 'backend_live': True,
@@ -234,7 +239,7 @@ class AssistantTests(unittest.TestCase):
     def test_the_prompt_offers_the_generated_methods_and_asks_for_the_service_only(self):
         tasks = self.tasks()
         lezar = engine.preview(self.out, tasks['onCtrlPbLezar']['id'], self.options)
-        self.assertFalse(lezar['deterministic'])
+        self.assertTrue(lezar['deterministic'])  # the migrator writes this button (action_java); the prompt is the fallback
         self.assertIn('2. Database access only through the generated repository methods listed below', lezar['user'])
         self.assertIn("- rendelesRendelesRepository.updateStatuszById(BigDecimal id) returns int\n"
                       "  SQL: UPDATE rendeles SET statusz = 'L' WHERE id = :RENDELES.ID", lezar['user'])
@@ -301,7 +306,7 @@ public ActionResult onCtrlPbLezar(UserDto user, ActionRequest request) throws Ex
 ```
 '''
         client = Client(answer)
-        with patch('frm_forms.ollama.opener', return_value=client):
+        with patch('frm_forms.ollama.opener', return_value=client), model_path():
             result = engine.propose(self.out, self.tasks()['onCtrlPbLezar']['id'], self.options)
         self.assertEqual((result['status'], result['calls'], result['deterministic']), ('proposal', 1, False))
         engine.apply_proposal(self.out, result['id'], reviewed=True)
@@ -320,7 +325,7 @@ public ActionResult onCtrlPbLezar(UserDto user, ActionRequest request) throws Ex
 }
 ```
 '''
-        with patch('frm_forms.ollama.opener', return_value=Client(answer)):
+        with patch('frm_forms.ollama.opener', return_value=Client(answer)), model_path():
             with self.assertRaisesRegex(MigrationError, 'EntityManagert használ'):
                 engine.propose(self.out, self.tasks()['onCtrlPbLezar']['id'], engine.Options(num_ctx=16384, attempts=1))
 

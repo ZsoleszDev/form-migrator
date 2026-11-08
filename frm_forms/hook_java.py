@@ -45,11 +45,25 @@ def response(packet: dict, generated: dict) -> tuple[dict | None, str]:
             'assumptions': [], 'missing_context': [], 'test_cases': []}, ''
 
 
+def with_dml(text: str) -> tuple[str, dict]:
+    """INSERT / UPDATE / DELETE as placeholder calls (FRM$DML1;): the PL/SQL parser does not take DML, the generated
+    repository method of each statement (jpa_sql, keyed by its text) is called in its place."""
+    from .jpa_sql import find
+    statements = {}
+    found = [f for f in find(text) if f.kind in {'insert', 'update', 'delete'} and f.tokens]
+    for n, statement in reversed(list(enumerate(found, 1))):
+        name = 'FRM$DML' + str(n)
+        text = text[:statement.tokens[0][2]] + name + text[statement.tokens[-1][3]:]
+        statements[name] = statement.text
+    return text, statements
+
+
 def translate(text: str, hook: dict, generated: dict) -> tuple[str | None, str]:
     compiler = HookCompiler(hook, generated)
     try:
         lines = compiler.delete_check(text)
         if lines is None:
+            text, compiler.dml = with_dml(text)
             nodes = parse(text, extended=True)
             lines = compiler.statements(nodes, '')
         if compiler.locals:
@@ -73,11 +87,31 @@ class HookCompiler(Compiler):
         super().__init__(block, {}, ())
         self.calls = generated.get('calls') or {}
         self.depth = 0
+        self.dml = {}  # FRM$DML1 -> the statement it stands for (with_dml)
+
+    # the record: row.field (ActionCompiler: the screen's values)
+    def value(self, field: dict) -> str:
+        return 'row.' + field['field']
+
+    def assign(self, field: dict, expr: str, indent: str) -> str:
+        return indent + self.value(field) + ' = ' + expr + ';'
+
+    def message(self, expr: str, indent: str) -> str:
+        return indent + 'context.message(' + expr + ');'
+
+    def abort(self, indent: str) -> str:
+        return indent + 'context.abort();'
+
+    def other(self, node: dict, indent: str) -> list[str]:
+        raise Unsupported('Nem támogatott utasítás az AI nélküli fordításban: ' + str(node.get('name', node['op'])))
 
     # expressions: SYSDATE as the application server's clock (an Oracle DATE has seconds)
     def expression(self, node: dict) -> tuple[str, str]:
         if node['op'] == 'symbol' and node['name'] == 'SYSDATE':
             return 'LocalDateTime.now().withNano(0)', 'datetime'
+        if node['op'] == 'ref':
+            field = self.ref(node['name'])
+            return self.value(field), field['type']
         return super().expression(node)
 
     def statements(self, nodes: list[dict], indent: str) -> list[str]:
@@ -103,7 +137,7 @@ class HookCompiler(Compiler):
                 expr, typ = self.expression(node['value'])
                 if typ not in {field['type'], 'null'}:
                     raise Unsupported('Implicit hozzárendelési konverzió: ' + typ + ' -> ' + field['type'])
-                lines.append(indent + 'row.' + field['field'] + ' = ' + expr + ';')
+                lines.append(self.assign(field, expr, indent))
             elif op == 'if':
                 for n, branch in enumerate(node['branches']):
                     expr, typ = self.expression(branch['condition'])
@@ -119,13 +153,16 @@ class HookCompiler(Compiler):
                 expr, typ = self.expression(node['args'][0])
                 if typ not in {'text', 'null'}:
                     raise Unsupported('MESSAGE csak szöveget fogad ebben a részhalmazban.')
-                lines.append(indent + 'context.message(' + expr + ');')
+                lines.append(self.message(expr, indent))
             elif op == 'abort':
-                lines.append(indent + 'context.abort();')
+                lines.append(self.abort(indent))
             elif op == 'select':
                 lines += self.select(node, indent)
+            elif op == 'call' and node['name'] in self.dml and not node['args']:
+                # INSERT / UPDATE / DELETE: its generated repository method (the row count of an UPDATE unused)
+                lines.append(indent + self.call(self.method(self.dml[node['name']])) + ';')
             else:
-                raise Unsupported('Nem támogatott utasítás az AI nélküli fordításban: ' + str(node.get('name', op)))
+                lines += self.other(node, indent)
         return lines
 
     def guarded(self, node: dict, indent: str) -> list[str]:
@@ -157,7 +194,7 @@ class HookCompiler(Compiler):
         for source, typ in zip(method.arguments, types):
             if source.startswith(':'):
                 field = self.ref(source[1:])
-                actual, java = TYPES[field['type']], 'row.' + field['field']
+                actual, java = TYPES[field['type']], self.value(field)
             elif source in self.locals:
                 actual, java = TYPES[self.locals[source]['type']], self.locals[source]['java']
             else:
@@ -171,7 +208,7 @@ class HookCompiler(Compiler):
         """(Java target, Java type) of an INTO target: a field of the record or a local variable."""
         if '.' in name:
             field = self.ref(name)
-            return 'row.' + field['field'], TYPES[field['type']]
+            return self.value(field), TYPES[field['type']]
         if name in self.locals:
             return self.locals[name]['java'], TYPES[self.locals[name]['type']]
         raise Unsupported('Nem támogatott INTO-cél: ' + name)
