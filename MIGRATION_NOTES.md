@@ -86,6 +86,18 @@
 
   A replika-űrlapon a 9 AI-feladatból most 5-höz nem kell modellhívás (a megerősítő `PB_LEZAR` gomb is ilyen);
   4 maradt az AI-é (form-csomageljárás, `DO_KEY` key-trigger, adatbázis-rutin, `|| 'x'`-es UPDATE).
+- **Frontend AI-átírás (opcionális).** A generált képernyő elküldhető a helyi modellnek: standalone komponens,
+  signalok az állapotra (`signal`, `computed`, `input()`, `output()`), olvasható, magyarul kommentezett kód,
+  ugyanazzal a működéssel (HTTP-hívások, metódusnevek, lépések). Bekapcsolni a Java asszisztens fül új paneljén vagy
+  az `/ai-log` oldalon lehet; sosem fut magától, és csak átnézés után illeszthető be (`frm_forms/frontend_assistant.py`,
+  [docs/FRONTEND_AI_HU.md](docs/FRONTEND_AI_HU.md)). A **Teljes fájl** gomb csak akkor aktív, ha a kérés és a válasz is
+  belefér a kontextusba és a kimeneti keretbe; ha nem, **részenként** megy: előbb a fej (itt lesz az állapotból
+  signal), utána a metódusok csoportokban, mindegyik a fej vázlatával és a signalok listájával, majd a migrátor
+  összerakja. A nagy állandók (FormBlock-struktúrák) helyőrzőként mennek, a migrátor visszateszi őket. Ellenőrzés:
+  metódusok, selector, helyőrzők, signal-írás, `@angular/core` import, TypeScript-szintaxis (ha van TypeScript a gépen);
+  hibánál javítókérés, végül hibás vázlat. A közös AI-beállítás mentése mostantól csak a kérésben szereplő mezőket
+  írja (egy kapcsoló nem nullázza a kapcsolatot). A `migrator-app.ts` egy sablonhibája (`collapsedChange` típusa)
+  javítva, a felület így a mostani függőségekkel lefordul.
 - **A céges Forms-felületkönyvtárak kimaradnak.** Az `ank_ctrl` (képernyőcím, súgósor) és az `ank_menu` (menü)
   rutinjai csak az Oracle Forms futtatókörnyezetben működnek: a keretrendszer-katalógus `forms_runtime_calls`
   listáján vannak, így sem a backendbe, sem az AI-feladatokba nem kerülnek, és a csatolt könyvtárból sem
