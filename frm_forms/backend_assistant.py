@@ -475,7 +475,9 @@ def validate_response(value: object) -> dict:
     # Structural checks are deliberately NOT described as compilation/security proof.
     if "\\u" in code or "```" in code or re.search(r"\b(NOT_IMPLEMENTED|UnsupportedOperationException)\b", mask):
         raise MigrationError("A javaslat helyőrzőt vagy nem támogatott kódformát tartalmaz.")
-    if re.search(r"\b(package|import|class|interface|enum|record)\s+", mask):
+    # A declaration, not a word: `String record = ...` or `Foo.class` is ordinary code.
+    if re.search(r"(?<![\w$.])(?:package|import)\s+[\w.*]+\s*;|(?<![\w$.])(?:class|interface|enum)\s+[A-Za-z_$][\w$]*\s*(?:[{<]|extends\b|implements\b)"
+                 r"|(?<![\w$.])record\s+[A-Za-z_$][\w$]*\s*[(<]", mask):
         raise MigrationError("A modell csak metódustörzset és privát segédmetódusokat adhat.")
     if re.search(r"\b(Runtime|ProcessBuilder|System\s*\.\s*(?:exit|setProperty)|ScriptEngineManager|ClassLoader|DriverManager)\b|java\s*\.\s*(?:net|io|nio|lang\s*\.\s*reflect)\b", mask + "\n" + "\n".join(value["imports"])):
         raise MigrationError("A javaslat nem megengedett rendszer-/hálózati API-t használ.")
@@ -960,12 +962,27 @@ def reply_context(prepared: dict, options: Options):
     used = [p for p in prepared["persistence"] if p["repository"] in prepared["prompt"]["repositories"]]
     allowed = set(re.findall(r"^\s*import\s+([\w.$]+)\s*;", service, re.M))
     allowed |= set(re.findall(r"\b(?:[a-z_][\w]*\.)+[A-Z][\w$]*", options.project_context))
+    generated = {}
+    for method in (prepared.get("generated") or {}).get("methods", []):
+        returns, call = method.signature.split(" ", 1)
+        generated.setdefault(method.repository, []).append(method.variable + "." + call + " returns " + returns)
+    hook = packet.get("hook") or {}
     return assistant_reply.Context(
         method=packet["method"], service=service, module_class=name(packet["module"], "pascal"),
-        repositories=[assistant_reply.Repository(p["repository"], p["variable"], p["entity"], p["existing_repository"])
-                      for p in used],
+        repositories=[assistant_reply.Repository(p["repository"], p["variable"], p["entity"], p["existing_repository"],
+                                                 id_type(p)) for p in used],
         namespace=(packet.get("config") or {}).get("jpa_namespace") or "javax", mode=options.data_access,
-        allowed_imports=frozenset(allowed), routines=frozenset(r["method"] for r in packet.get("db_routines") or []))
+        allowed_imports=frozenset(allowed), routines=frozenset(r["method"] for r in packet.get("db_routines") or []),
+        generated=generated,
+        row_fields=frozenset(f["field"] for f in hook.get("fields", []) if f.get("field")) if hook.get("kind") == "record" else frozenset())
+
+
+def id_type(descriptor: dict) -> str:
+    """The id type of a repository's findById (reply_repair): the key field's type, or the composite key class."""
+    keys = descriptor.get("primary_key") or []
+    if len(keys) == 1:
+        return descriptor.get("fields", {}).get(keys[0], "").replace("java.math.", "").replace("java.time.", "")
+    return descriptor["entity"] + "Id" if keys else ""
 
 
 def propose(output: Path, task_id: str, options: Options, cache: Path | None = None,

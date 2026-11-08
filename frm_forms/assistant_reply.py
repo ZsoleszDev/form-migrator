@@ -58,6 +58,7 @@ class Repository:
     variable: str             # lookupAppAccountRepository (field in the service)
     entity: str               # LookupAppAccountEntity
     existing: str = ""        # the repository class as it is now
+    id_type: str = ""         # BigDecimal, or <Entity>Id for a composite key (reply_repair's findById ...)
 
 
 @dataclass
@@ -70,6 +71,8 @@ class Context:
     mode: str = "jpa"                             # jpa | inline | jdbc
     allowed_imports: frozenset = frozenset()      # FQNs the developer already uses
     routines: frozenset = frozenset()             # the generated database routine methods (db_routines)
+    generated: dict = field(default_factory=dict)  # repository -> the migrator's methods of the task's SQL (prompt lines)
+    row_fields: frozenset = frozenset()           # a hook: the public fields of its record (row.field)
 
 
 @dataclass
@@ -417,6 +420,15 @@ def repository_parts(block: Block, repo: Repository, ctx: Context, reply: Reply,
     types = [m for m in members if m.kind == "type"]
     classes = [t for t in types if t.type_kind in {"class", "enum"} and t.body]
     if any(t.type_kind == "interface" for t in types) and not classes:
+        from .reply_repair import STANDARD
+        declared = [m for t in types if t.type_kind == "interface" and t.body
+                    for m in scan_members(code, mask, t.body[0] + 1, t.body[1])]
+        if all(m.kind == "method" and m.name in STANDARD for m in declared):
+            # `interface XRepository extends JpaRepository<E, ID> {}`: only the CrudRepository methods, which the
+            # migrator writes on demand (reply_repair.standard_methods); nothing of the model's is lost.
+            reply.note(f"Az AI Spring Data interfészt írt a(z) {repo.name} helyett; elhagytuk, a hívott alapmetódusokat "
+                       "(findById, save ...) a migrátor írja.")
+            return {"methods": [], "constants": [], "imports": []}
         reply.problem(f"A(z) {repo.name} Spring Data interfészként érkezett; a migrátor osztálymetódusokat vár entityManager-rel.",
                       f"Do not write a Spring Data interface for {repo.name}. Write concrete public methods that use "
                       "the existing `entityManager` field (find/persist/merge/remove or the Criteria API).")
@@ -563,7 +575,10 @@ def check_service_code(code: str, ctx: Context, reply: Reply, missing: bool) -> 
                       "Do not use Runtime, ProcessBuilder, reflection, files or network APIs.")
     if ctx.mode == "jpa":
         if re.search(r"\b(?:entityManager|EntityManager|Session|SessionFactory)\b", mask):
+            generated = [line for lines in ctx.generated.values() for line in lines]
             reply.problem("A service közvetlenül EntityManagert használ; az adatbázis-művelet a repositoryba tartozik.",
+                          ("The service must not use the EntityManager. Call the generated repository methods instead: "
+                           + "; ".join(generated) + ".") if generated else
                           "The service must not use the EntityManager. Put every database operation into a repository "
                           "method and call that method from the service.")
         if NATIVE_DB.search(mask) or re.search(r"(?<![\w$.])jdbc\s*\.", mask):
@@ -590,7 +605,11 @@ def consistency(ctx: Context, service_code: str, new_methods: dict, reply: Reply
         calls = re.finditer(r"(?:(?<=this\.)|(?<![\w$.]))" + re.escape(repo.variable) + r"\s*\.\s*([A-Za-z_$][\w$]*)\s*\(", mask)
         for name in dict.fromkeys(call.group(1) for call in calls):
             if name not in available:
+                generated = ctx.generated.get(repo.name)
                 reply.problem(f"A service a(z) {repo.variable}.{name}() metódust hívja, de a(z) {repo.name} nem tartalmazza.",
+                              (f"The service calls {repo.variable}.{name}(...), which does not exist. Call only the "
+                               "generated methods (their SQL is the Forms code's SQL): " + "; ".join(generated) + ".")
+                              if generated else
                               f"The service calls {repo.variable}.{name}(...), but the REPOSITORY {repo.name} block does "
                               "not define it. Add the method with a complete body that uses `entityManager`.")
     for unknown in sorted(set(re.findall(r"(?:(?<=this\.)|(?<![\w$.]))([a-z][\w$]*Repository)\s*\.", mask)) - variables):
@@ -627,7 +646,7 @@ def extract(raw: str, ctx: Context, *, truncated: bool = False) -> Reply:
 
 def assemble(blocks: list[Block], ctx: Context, reply: Reply) -> Reply:
     existing_service = methods_by_name(ctx.service) if ctx.service else {}
-    service, helpers, service_imports, dtos = None, [], [], []
+    service, helpers, service_imports, dtos, extra_helpers = None, [], [], [], []
     repo_parts = {r.name: {"methods": [], "constants": [], "imports": []} for r in ctx.repositories}
     classified, unknown = [], []
     for index, block in enumerate(blocks, 1):
@@ -652,6 +671,13 @@ def assemble(blocks: list[Block], ctx: Context, reply: Reply) -> Reply:
         index, block, _, target, info = unknown.pop(0)
         info.update(kind="service", note="címke nélkül, tartalom alapján")
         classified.append((index, block, "service", target, info))
+    for item in list(unknown):
+        # A block of private methods only, after the SERVICE block: the service's helpers (the method may call them).
+        methods = helper_methods(item[1])
+        if methods and any(kind == "service" for _, _, kind, _, _ in classified):
+            unknown.remove(item)
+            item[4].update(kind="service", note="címke nélküli privát segédmetódusok", used=True)
+            extra_helpers += methods
     for _, _, _, _, info in unknown:
         info["note"] = "nem azonosítható blokk, kihagyva"
         reply.warn(f"A(z) {info['index']}. kódblokkot nem tudtuk besorolni, kihagytuk.")
@@ -694,7 +720,20 @@ def assemble(blocks: list[Block], ctx: Context, reply: Reply) -> Reply:
             found = dto_parts(block, reply)
             dtos += found
             info["used"] = bool(found)
-    return finish(ctx, reply, service, helpers, service_imports, repo_parts, dtos)
+    return finish(ctx, reply, service, helpers + extra_helpers, service_imports, repo_parts, dtos)
+
+
+def helper_methods(block: Block) -> list[str]:
+    """The methods of a block that holds private methods and nothing else (no class, field or statement)."""
+    _, code = take_imports(block.code.replace("\r\n", "\n"))
+    mask = java_mask(code)
+    if not balanced(mask):
+        return []
+    members = scan_members(code, mask)
+    if not members or any(m.kind != "method" or not m.body or not re.search(r"(?<![\w$])private(?![\w$])", m.header)
+                          for m in members):
+        return []
+    return [member_source(code, m) for m in members]
 
 
 def finish(ctx: Context, reply: Reply, service, helpers, service_imports, repo_parts, dtos, summary: str = "") -> Reply:
@@ -705,10 +744,19 @@ def finish(ctx: Context, reply: Reply, service, helpers, service_imports, repo_p
             reply.problem("Nem találtunk használható SERVICE kódot az AI válaszában.",
                           f"Send the complete rewritten method {ctx.method} in a ```java block that starts with // SERVICE.")
         return reply
+    # The usual slips with one meaning (request.getBlocks(), row.getX(), a repository without the module prefix):
+    # repaired here, not by another model call (reply_repair).
+    from . import reply_repair
+    fixes = []
+    body = reply_repair.service(body, ctx, fixes)
+    helpers = [reply_repair.service(h, ctx, fixes) for h in helpers]
+    for text in dict.fromkeys(fixes):
+        reply.note(text)
     # Repository methods: reuse identical existing ones, rename colliding ones (and the service calls).
     new_methods = {}
     for repo in ctx.repositories:
         existing = methods_by_name(repo.existing)
+        generated = {re.match(r"[\w$]+\.([\w$]+)\(", line).group(1) for line in ctx.generated.get(repo.name, [])}
         additions, taken = [], set(existing)
         for text in repo_parts[repo.name]["methods"]:
             member = first_method(text)
@@ -716,6 +764,11 @@ def finish(ctx: Context, reply: Reply, service, helpers, service_imports, repo_p
             name = member.name
             if name in existing and " ".join(text[member.start:].split()) in existing[name]:
                 reply.note(f"A(z) {repo.name}.{name}() már létezik ugyanígy; a meglévőt használjuk.")
+                continue
+            if name in generated:
+                # The model rewrote a method the migrator generated from the SQL: the generated one stays.
+                reply.note(f"A(z) {repo.name}.{name}() a migrátor generált metódusa (az eredeti SQL-ből); "
+                           "az AI saját változatát elhagytuk.")
                 continue
             if name in existing:
                 new = unique(ctx.method + pascal(name), taken | set(existing))
@@ -766,6 +819,11 @@ def finish(ctx: Context, reply: Reply, service, helpers, service_imports, repo_p
         parts["methods"] = [decode_literal_escapes(m) for m in parts["methods"]]
         parts["constants"] = [decode_literal_escapes(c) for c in parts["constants"]]
     service_code = body + "\n" + "\n".join(final_helpers)
+    # findById/save/delete ... on a repository without generated methods: the migrator writes them (reply_repair).
+    available = {r.name: set(methods_by_name(r.existing)) | new_methods.get(r.name, set()) for r in ctx.repositories}
+    for name, methods in reply_repair.standard_methods(service_code, ctx, available, reply.warnings).items():
+        repo_parts[name]["methods"] += [source for source, _ in methods]
+        new_methods[name] = new_methods.get(name, set()) | {first_method(source).name for source, _ in methods}
     checks = Reply()
     if "\\u" in service_code + "".join(m for p in repo_parts.values() for m in p["methods"] + p["constants"]):
         checks.problem("A kódban \\uXXXX unicode-escape maradt (biztonsági okból nem vehető át).",
@@ -904,7 +962,7 @@ def correction(reply: Reply, ctx: Context) -> str:
     """The follow-up user message of a retry (English, like the prompt)."""
     lines = ["Your previous answer could not be used:"] + ["- " + p.en for p in reply.problems]
     blocks = "one ```java block that starts with `// SERVICE`"
-    if ctx.mode == "jpa" and ctx.repositories:
+    if ctx.mode == "jpa" and any(r.name not in ctx.generated for r in ctx.repositories):
         blocks += " and, for new repository methods, one block per repository that starts with `// REPOSITORY <Name>`"
     lines += ["", "Send the complete answer again: " + blocks + ". Do not explain the code."]
     return "\n".join(lines)

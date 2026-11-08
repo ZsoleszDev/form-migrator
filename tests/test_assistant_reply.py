@@ -57,7 +57,7 @@ public class LookupAppAccountRepository {
 def context(**changes):
     values = dict(method="onCtrlRun", service=SERVICE, module_class="Lookup", namespace="jakarta",
                   repositories=[reply.Repository("LookupAppAccountRepository", "lookupAppAccountRepository",
-                                                 "LookupAppAccountEntity", REPOSITORY)])
+                                                 "LookupAppAccountEntity", REPOSITORY, "BigDecimal")])
     values.update(changes)
     return reply.Context(**values)
 
@@ -199,13 +199,40 @@ public class LookupAppAccountRepository {
         text = ("```java\n// SERVICE\nvar row = accountRepository.findById(id).orElse(null);\n"
                 "return new ActionResult(Map.of(), List.of(), List.of(), Map.of());\n```\n"
                 "```java\n// REPOSITORY AccountRepository\npublic interface AccountRepository extends "
-                "JpaRepository<LookupAppAccountEntity, BigDecimal> {}\n```")
+                "JpaRepository<LookupAppAccountEntity, BigDecimal> {\n  List<LookupAppAccountEntity> findByName(String name);\n}\n```")
         result = reply.extract(text, context())
-        self.assertEqual(len(result.problems), 2)
+        self.assertEqual(len(result.problems), 1)
         correction = reply.correction(result, context())
         self.assertIn("Do not write a Spring Data interface", correction)
-        self.assertIn("`accountRepository` does not exist. Use only these repository fields: lookupAppAccountRepository.", correction)
         self.assertIn("// REPOSITORY <Name>", correction)
+        # The repository without the module prefix is the one repository that ends so: repaired, no correction.
+        self.assertIn("lookupAppAccountRepository.findById(id)", result.response["body"])
+        unknown = reply.extract(service_block("otherRepository.findById(id);\nreturn null;"), context())
+        self.assertIn("`otherRepository` does not exist. Use only these repository fields: lookupAppAccountRepository.",
+                      reply.correction(unknown, context()))
+
+    def test_a_plain_spring_data_interface_is_dropped_and_its_methods_written(self):
+        """findById/save/delete ... on a repository without generated methods: the migrator's find/merge/remove."""
+        text = ("```java\n// SERVICE\nvar row = accountRepository.findById(id).orElse(null);\nrow.setName(\"x\");\n"
+                "accountRepository.save(row);\nreturn new ActionResult(Map.of(), List.of(), List.of(), Map.of());\n```\n"
+                "```java\n// REPOSITORY AccountRepository\npublic interface AccountRepository extends "
+                "JpaRepository<LookupAppAccountEntity, BigDecimal> {}\n```")
+        ctx = context()
+        result = reply.extract(text, ctx)
+        self.assertEqual(result.problems, [])
+        methods = result.response["repositories"][0]["methods"]
+        self.assertIn("public Optional<LookupAppAccountEntity> findById(BigDecimal id) {\n"
+                      "        return Optional.ofNullable(entityManager.find(LookupAppAccountEntity.class, id));", methods)
+        self.assertIn("LookupAppAccountEntity saved = entityManager.merge(entity);\n        entityManager.flush();", methods)
+        self.assertTrue(any("save() INSERT vagy UPDATE (merge)" in w for w in result.warnings), result.warnings)
+        self.assertTrue(any("Spring Data interfészt" in n for n in result.notes), result.notes)
+        # Beside generated methods (the task's SQL is the migrator's) the same call is the model ignoring them.
+        generated = context(generated={"LookupAppAccountRepository": ["lookupAppAccountRepository.loadName(BigDecimal id) returns String"]})
+        result = reply.extract(service_block("lookupAppAccountRepository.findById(id);\nreturn null;"), generated)
+        self.assertEqual(len(result.problems), 1)
+        self.assertIn("Call only the generated methods (their SQL is the Forms code's SQL): "
+                      "lookupAppAccountRepository.loadName(BigDecimal id) returns String.", result.problems[0].en)
+        self.assertNotIn("// REPOSITORY <Name>", reply.correction(result, generated))
 
     def test_unicode_escapes_in_strings_become_characters_elsewhere_a_correction(self):
         body = 'throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "Hi\\u00e1nyz\\u00f3 \\"k\\u00f3d\\"");'
@@ -215,11 +242,25 @@ public class LookupAppAccountRepository {
         hidden = "String a = \"x\"; \\u0022; return null;"
         self.assertTrue(any("unicode-escape" in p.hu for p in reply.extract(service_block(hidden), context()).problems))
 
-    def test_getter_style_request_access_is_corrected(self):
+    def test_getter_style_request_access_is_repaired_without_a_new_call(self):
         result = reply.extract(service_block("String id = request.getBlocks().get(\"CTRL\").get(\"ID\");\n"
-                                             "return new ActionResult(Map.of(), List.of(id), List.of(), Map.of());"), context())
-        self.assertEqual(len(result.problems), 1)
-        self.assertIn("use request.blocks()", result.problems[0].en)
+                                             "String p = request.getParameters().get(\"X\"); // request.getBlocks() in a comment\n"
+                                             "return new ActionResult(Map.of(), List.of(id, p), List.of(), Map.of());"), context())
+        self.assertEqual(result.problems, [])
+        self.assertIn('String id = request.blocks().get("CTRL").get("ID");', result.response["body"])
+        self.assertIn('request.parameters().get("X"); // request.getBlocks() in a comment', result.response["body"])
+        self.assertIn("Helyben javítva: request.getBlocks() -> request.blocks(), request.getParameters() -> "
+                      "request.parameters()", " ".join(result.notes))
+
+    def test_the_records_getters_and_setters_become_its_fields(self):
+        ctx = context(row_fields=frozenset({"id", "vevoNev"}))
+        result = reply.extract(service_block('row.setVevoNev(lookup(row.getId()));\nif (row.getId() == null) { row.setVevoNev(null); }\n'
+                                             'other.setVevoNev("x");\nrow.setUnknown(1);\nreturn null;'), ctx)
+        body = result.response["body"]
+        self.assertIn("row.vevoNev = lookup(row.id);", body)
+        self.assertIn("if (row.id == null) { row.vevoNev = null; }", body)
+        self.assertIn('other.setVevoNev("x");', body)  # not the record
+        self.assertIn("row.setUnknown(1);", body)       # not a field of it
 
     def test_called_repository_method_must_be_written(self):
         result = reply.extract(service_block(BODY), context())
