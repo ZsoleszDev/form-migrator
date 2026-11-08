@@ -76,6 +76,20 @@ QUERY_RESULT = """4. Screen values: request.blocks().get("BLOCK").get("ITEM") (a
    are listed below) and return new PageResult<>(rows, messages). MESSAGE texts go to messages; an error:
    throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "text")."""
 
+# A plain button (ActionResult): the shape of a body the migrator can insert as it is. Small local models copy a
+# skeleton far more reliably than they follow prose; the repaired slips (reply_repair) are the ones it shows right.
+ACTION_SKELETON = """The body usually has this shape (fill in the logic of the Forms code):
+```java
+var values = request.blocks() == null ? Map.<String, Map<String, String>>of() : request.blocks();
+BigDecimal id = PlsqlValues.number(values, "BLOCK", "ITEM");   // text(...) for a String, datetime(...) for a date
+List<String> messages = new ArrayList<>();
+List<List<String>> commands = new ArrayList<>();
+Map<String, Map<String, String>> blocks = new LinkedHashMap<>();
+// ... the Forms logic: if / the repository methods / messages.add("...") / commands.add(List.of("GO_BLOCK", "BLOCK"))
+PlsqlValues.put(blocks, "BLOCK", "ITEM", value);               // every item the Forms code assigns
+return new ActionResult(blocks, messages, commands, Map.of());
+```"""
+
 # backend_trigger_mode=ai: a private hook of the CRUD flow (POST-QUERY, PRE-INSERT, ON-INSERT, WHEN-VALIDATE-ITEM ...).
 HOOK_RULES = """Rules:
 1. Keep the method signature exactly (private void {method}({row_class} row, RuleContext context)). Replace its
@@ -423,6 +437,8 @@ def build(packet: dict, persistence: list[dict], helpers: dict, options, *, plsq
                      + options.project_context.strip() + "\n```")
     if options.instructions.strip():
         parts.append("Additional requirements from the developer:\n" + options.instructions.strip())
+    if not hook and action_api and plsql_values:
+        parts.append(ACTION_SKELETON)
     parts.append("Method:\n```java\n" + method.strip("\n") + "\n```")
     answer = ["Answer format (code only, no explanation):", "```java", "// SERVICE",
               "<the complete rewritten method, followed by any new private helper methods>", "```"]
