@@ -155,7 +155,7 @@
   function badge(status) {
     const map = {completed: ['Kész', 'ok'], failed: ['Sikertelen', 'bad'], running: ['Fut…', 'run'], cancelled: ['Leállítva', ''],
       queued: ['Sorban', 'run'], applied: ['Beillesztve', 'ok'],
-      proposal: ['Javaslat', 'ok'], needs_context: ['Adatot kér', 'warn'], rejected: ['Elutasítva', 'bad']};
+      proposal: ['Javaslat', 'ok'], needs_context: ['Adatot kér', 'warn'], draft: ['Hibás vázlat', 'warn'], rejected: ['Elutasítva', 'bad']};
     const [label, kind] = map[status] || [status || '—', ''];
     return el('span', {class: 'badge ' + kind, text: label});
   }
@@ -361,6 +361,7 @@
   function runFinished(run) {
     if (run.status === 'completed' && run.applied) return badge('applied');
     if (run.status === 'completed' && run.proposal_status === 'needs_context') return badge('needs_context');
+    if (run.status === 'completed' && run.proposal_status === 'draft') return badge('draft');
     if (run.status === 'completed') return el('span', {class: 'badge', text: run.apply_error ? 'Javaslat, nem illeszthető be' : 'Átnézendő javaslat'});
     return badge(run.status);
   }

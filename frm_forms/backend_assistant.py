@@ -43,7 +43,7 @@ RESPONSE_SCHEMA = {
     "type": "object", "additionalProperties": False,
     "required": ["status", "summary", "body", "imports", "private_methods", "assumptions", "missing_context", "test_cases"],
     "properties": {
-        "status": {"type": "string", "enum": ["proposal", "needs_context"]},
+        "status": {"type": "string", "enum": ["proposal", "needs_context", "draft"]},
         "summary": {"type": "string"}, "body": {"type": "string"},
         "private_methods": {"type": "string"},
         **{key: {"type": "array", "items": {"type": "string"}}
@@ -458,7 +458,7 @@ public final class {repository} {{
 def validate_response(value: object) -> dict:
     """The normalized answer a proposal stores (see assistant_reply); re-checked before apply."""
     keys = set(RESPONSE_SCHEMA["required"])
-    if not isinstance(value, dict) or not keys <= set(value) or set(value) - keys - {"repositories", "dtos"} or value["status"] not in {"proposal", "needs_context"}:
+    if not isinstance(value, dict) or not keys <= set(value) or set(value) - keys - {"repositories", "dtos"} or value["status"] not in {"proposal", "needs_context", "draft"}:
         raise MigrationError("Az AI-válasz nem követi a Java-javaslat sémáját.")
     for key, limit in (("summary", 4000), ("body", 60000), ("private_methods", 40000)):
         if not isinstance(value[key], str) or len(value[key]) > limit:
@@ -472,6 +472,11 @@ def validate_response(value: object) -> dict:
         # A draft waiting for the missing source: shown and downloadable, never applied.
         if not value["missing_context"]:
             raise MigrationError("Hiányzó kontextus esetén meg kell nevezni, mi hiányzik.")
+        return value
+    if value["status"] == "draft":
+        # The model's last answer that still had problems (draft_response): shown with them, never applied.
+        if not value["body"].strip():
+            raise MigrationError("A vázlathoz kódtörzs kell.")
         return value
     if not value["body"].strip() or value["missing_context"]:
         raise MigrationError("A teljes javaslathoz kódtörzs kell, megnevezett hiányzó függőség nélkül.")
@@ -976,6 +981,28 @@ def call_model(options: Options, body: dict, progress=None, cancel=None, attempt
     return outer
 
 
+def draft_response(reply, calls: int) -> tuple[dict | None, dict | None]:
+    """The model's last answer with problems as a draft (status draft): readable, downloadable, never applied.
+
+    Not cached: the next run asks the model again. The problems are the extraction's warnings, so every screen that
+    shows a proposal shows them.
+    """
+    if reply is None or not reply.response or not reply.response.get("body", "").strip() or reply.truncated:
+        return None, None
+    draft = dict(reply.response, status="draft", missing_context=[],
+                 summary=f"Vázlat: az AI {calls} hívás után sem adott hibátlan választ. A kódja megtekinthető és "
+                         "kézzel javítható, de így nem illeszthető be; a hibák a figyelmeztetések között.")
+    try:
+        validate_response(draft)
+    except MigrationError:
+        return None, None
+    extraction = reply.report()
+    extraction["status"] = "draft"
+    extraction["warnings"] = (["Az AI utolsó válaszának hibája: " + p.hu for p in reply.problems]
+                              + list(extraction.get("warnings", [])))
+    return draft, extraction
+
+
 def reply_context(prepared: dict, options: Options):
     from . import assistant_reply
     packet, service = prepared["packet"], prepared["service"]
@@ -1097,7 +1124,7 @@ def _propose(prepared, options, cache, request, log, assistant_reply, jpa_assist
     from .db_routines import resolve
     verified_procedures = {name.upper(): {} for name in packet.get("schema", {}).get("procedures", {})}
     unresolved = [call for call in packet.get("external_calls", []) if resolve(call, verified_procedures) is None]
-    messages, correction = list(request["messages"]), None
+    messages, correction, last = list(request["messages"]), None, None
     while response is None and calls < options.attempts:
         calls += 1
         attempt = log.begin(calls, correction)
@@ -1137,6 +1164,7 @@ def _propose(prepared, options, cache, request, log, assistant_reply, jpa_assist
             response, extraction = reply.response, reply.report()
             break
         errors.append("; ".join(p.hu for p in reply.problems)[:2000])
+        last = reply
         if reply.truncated:
             errors.append(f"A válasz a kimeneti keretnél (num_predict={options.num_predict}) megszakadt; "
                           "növeld a Kimeneti keretet a Memória és futtatás résznél.")
@@ -1148,8 +1176,11 @@ def _propose(prepared, options, cache, request, log, assistant_reply, jpa_assist
             errors.append("A javítási kérés (előző válasz + hibalista) nem fér a beállított kontextusba; nem küldtük el.")
             break
     if response is None:
-        raise MigrationError(f"Nem érkezett használható Java-javaslat ({calls} AI-hívás): " + " | ".join(errors))
-    if not cached:
+        # The calls are not thrown away: the last answer is kept as a draft with its problems (never applied).
+        response, extraction = draft_response(last, calls)
+        if response is None:
+            raise MigrationError(f"Nem érkezett használható Java-javaslat ({calls} AI-hívás): " + " | ".join(errors))
+    elif not cached:
         write_json(cache_file, {"key": key, "response": response, "raw": raw, "extraction": extraction})
     if deterministic:
         key = digest(key + ":deterministic:" + json.dumps(response, sort_keys=True, ensure_ascii=False))
@@ -1160,11 +1191,18 @@ def _propose(prepared, options, cache, request, log, assistant_reply, jpa_assist
         files = render_files(response)
         if cached: parse_status = parse_files(files)
     elif response["body"].strip():
-        # needs_context: show what the model could write, never apply it.
+        # needs_context / draft: show what the model could write, never apply it.
         try:
             files = render_files(response)
         except MigrationError as exc:
             draft_note = "A hiányos vázlatból nem készült fájl: " + str(exc)
+            if response["status"] == "draft":
+                # The draft's code is still worth reading: the service file with the model's method as written.
+                try:
+                    files, draft_note = {packet["target"]: render_candidate(service, packet, response)}, (
+                        "A vázlatból csak a service-fájl készült (a repository-rész nem illeszthető): " + str(exc))
+                except MigrationError:
+                    pass
     files, formatting = format_candidates(packet, files)
     manifest = []
     for relative, text in sorted(files.items()):
@@ -1194,7 +1232,7 @@ def _propose(prepared, options, cache, request, log, assistant_reply, jpa_assist
               "source_fingerprint": packet["fingerprint"], "response": response, "files": manifest,
               "apply_allowed": packet["apply_allowed"], "extraction": extraction,
               "helper_notes": notes, "format_errors": errors, "applied": False,
-              "validation": {"schema": "passed", "structural_checks": "passed", "java_parse": parse_status,
+              "validation": {"schema": "passed", "structural_checks": "failed" if response["status"] == "draft" else "passed", "java_parse": parse_status,
                              "java_compile": "not_run", "oracle_equivalence": "not_run",
                              "deterministic_format": formatting}}
     write_json(folder / "proposal.json", result)

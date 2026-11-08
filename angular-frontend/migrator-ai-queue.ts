@@ -360,6 +360,7 @@ export class MigratorAiQueue implements OnInit, OnChanges, OnDestroy {
   finishedLabel(run: AiRun): {label: string; severity: 'success' | 'info' | 'warn' | 'danger' | 'secondary'} {
     if (run.status === 'completed' && run.applied) return {label: 'Beillesztve', severity: 'success'};
     if (run.status === 'completed' && run.proposal_status === 'needs_context') return {label: 'Adatot kér', severity: 'warn'};
+    if (run.status === 'completed' && run.proposal_status === 'draft') return {label: 'Hibás vázlat', severity: 'warn'};
     if (run.status === 'completed') return {label: run.apply_error ? 'Javaslat, nem illeszthető be' : 'Átnézendő javaslat', severity: 'info'};
     if (run.status === 'cancelled') return {label: 'Leállítva', severity: 'secondary'};
     return {label: 'Sikertelen', severity: 'danger'};

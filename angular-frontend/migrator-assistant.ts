@@ -276,7 +276,7 @@ ORDER BY column_id;</pre>
               </label>
               @if (proposal(); as result) {
                 <p class="m-0">{{ result.response.summary }}</p>
-                <p-tag [value]="result.applied ? 'Átvéve' : result.status === 'needs_context' ? 'További adat szükséges' : 'Átnézendő javaslat'" />
+                <p-tag [value]="result.applied ? 'Átvéve' : result.status === 'needs_context' ? 'További adat szükséges' : result.status === 'draft' ? 'Hibás vázlat (nem illeszthető be)' : 'Átnézendő javaslat'" />
                 @if (result.response.missing_context.length) {
                   <p-message severity="warn">Az AI szerint ez hiányzik: {{ result.response.missing_context.join(' · ') }}
                     @if (result.status === 'needs_context') { A vázlat megtekinthető, de nem illeszthető be: add meg a hiányzó forrást a Kiegészítő forrás részben, és futtasd újra. }
@@ -525,7 +525,7 @@ export class MigratorAssistant implements OnChanges, OnDestroy {
   private exchangeEpoch = 0;
   private exchangeTimer?: ReturnType<typeof setTimeout>;
   readonly exchangeOptions = computed(() => this.exchanges().map(item => ({value: item.id,
-    label: item.method + ' · ' + this.exchangeStatus(item.status) + (item.proposal_status === 'needs_context' ? ' (adatot kér)' : '')
+    label: item.method + ' · ' + this.exchangeStatus(item.status) + (item.proposal_status === 'needs_context' ? ' (adatot kér)' : item.proposal_status === 'draft' ? ' (hibás vázlat)' : '')
       + ' · ' + this.formatTime(item.started)})));
   // A running model does not lock the panel: tables can be filled in meanwhile (the queue picks them up).
   readonly locked = computed(() => this.loading() || this.mutating());
@@ -555,7 +555,7 @@ export class MigratorAssistant implements OnChanges, OnDestroy {
     return rows.length ? rows.length + ' felismert értékből ' + pending + ' igényel még bekötést vagy ellenőrzést.' : 'Nincs felismert bemenet.';
   });
   readonly proposalOptions = computed(() => (this.index()?.proposals ?? []).map(p => ({value: p.id,
-    label: p.method + ' · ' + (p.applied ? 'átvéve' : p.status === 'needs_context' ? 'adatot kér' : 'javaslat')})));
+    label: p.method + ' · ' + (p.applied ? 'átvéve' : p.status === 'needs_context' ? 'adatot kér' : p.status === 'draft' ? 'hibás vázlat' : 'javaslat')})));
   readonly previewOptions = computed(() => (this.proposal()?.files ?? []).flatMap(f => [
     {value: f.candidate + '.patch', label: 'Diff · ' + f.target}, {value: f.candidate, label: 'Teljes fájl · ' + f.target}]));
   readonly reviewSections = computed(() => {

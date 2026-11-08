@@ -314,7 +314,7 @@ public ActionResult onCtrlPbLezar(UserDto user, ActionRequest request) throws Ex
         self.assertIn('public int updateStatuszById(BigDecimal id) {', repository)
         compile_java(self, self.root, list((self.out / 'backend').rglob('*.java')))
 
-    def test_entity_manager_in_the_service_is_still_refused(self):
+    def test_entity_manager_in_the_service_is_still_refused_and_kept_as_a_draft(self):
         answer = '''```java
 // SERVICE
 public ActionResult onCtrlPbLezar(UserDto user, ActionRequest request) throws Exception {
@@ -326,8 +326,18 @@ public ActionResult onCtrlPbLezar(UserDto user, ActionRequest request) throws Ex
 ```
 '''
         with patch('frm_forms.ollama.opener', return_value=Client(answer)), model_path():
-            with self.assertRaisesRegex(MigrationError, 'EntityManagert használ'):
-                engine.propose(self.out, self.tasks()['onCtrlPbLezar']['id'], engine.Options(num_ctx=16384, attempts=1))
+            result = engine.propose(self.out, self.tasks()['onCtrlPbLezar']['id'], engine.Options(num_ctx=16384, attempts=1))
+        # The call is not lost: a draft with the problem, which can be read but not applied.
+        self.assertEqual((result['status'], result['calls'], result['validation']['structural_checks']), ('draft', 1, 'failed'))
+        self.assertIn('Az AI utolsó válaszának hibája: A service közvetlenül EntityManagert használ', result['extraction']['warnings'][0])
+        draft = (self.out / engine.AREA / 'proposals' / result['id'] / result['files'][0]['candidate']).read_text(encoding='utf-8')
+        self.assertIn('entityManager.createQuery("UPDATE x").executeUpdate();', draft)
+        with self.assertRaisesRegex(MigrationError, 'nem alkalmazható'):
+            engine.apply_proposal(self.out, result['id'], reviewed=True)
+        # Not cached: the next run asks the model again.
+        with patch('frm_forms.ollama.opener', return_value=Client(answer)) as opener, model_path():
+            engine.propose(self.out, self.tasks()['onCtrlPbLezar']['id'], engine.Options(num_ctx=16384, attempts=1))
+        self.assertEqual(opener.call_count, 1)
 
 
 if __name__ == '__main__':
