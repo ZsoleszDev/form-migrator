@@ -64,6 +64,28 @@
   (`NO_DATA_FOUND` → `NULL`), az üzenettel megálló ellenőrzés és a master-detail varázsló törlésellenőrzése
   (`frm_forms/hook_java.py`) a migrátortól kap Java-kódot, modellhívás nélkül (`calls: 0`); a javaslat ugyanúgy
   illeszthető be. A replika-űrlap maradék 9 feladatából 4 ilyen.
+- **Kevesebb AI-hívás, kevesebb újrakérés.** A helyi modell gyakran 2–3 kérés után sem adott elfogadható választ, és
+  minden javító kör egy teljes modellhívás volt. Négy változás:
+  - *Több feladat AI nélkül.* Az egyszerű gomb (képernyőérték, ellenőrzés üzenettel, egy `SHOW_ALERT`-kérdés, az SQL
+    a generált repository-metódusokon át, mezőérték visszaírása, `GO_BLOCK`/`EXECUTE_QUERY`, `COMMIT_FORM` a végén)
+    a migrátortól kap `ActionResult`-törzset (`frm_forms/action_java.py`); a rekordtrigger `INSERT`/`UPDATE`/`DELETE`
+    utasítása is a generált metódusán át fut; a lekérdező gomb (DEFAULT_WHERE + EXECUTE_QUERY) AI-módban is a
+    migrátor PL/SQL-lel összevetett Java-lekérdezése (`query_java`), és az automatikus AI-sor sem küldi el.
+  - *A szokásos apró hibák helyben javítva* (`frm_forms/reply_repair.py`): `request.getBlocks()` → `request.blocks()`,
+    `row.getVevo()` / `row.setId(x)` → `row.vevo` / `row.id = x`, a modul előtagja nélküli repository és entity,
+    a Spring Data `findById`/`save`/`delete`… egy generált metódus nélküli repositoryn (a migrátor írja,
+    find/merge/remove + flush, figyelmeztetéssel), az üres `JpaRepository`-interfész, a generált metódus
+    újraírása, a címke nélküli segédmetódus-blokk, és a `record` nevű változó téves elutasítása. Egyik sem kér
+    újabb AI-hívást; a javaslat megjegyzése felsorolja, mit javított a migrátor.
+  - *Pontosabb javítókérés:* generált metódusok mellett a nem létező metódus vagy az EntityManager hibájánál a
+    kérés felsorolja a hívható metódusokat a pontos aláírásukkal, és nem kér repository-blokkot. A gombok promptja
+    a törzs vázát is megadja (`values`, `messages`, `commands`, `blocks`, `return new ActionResult(...)`).
+  - *A sikertelen futás nem vész el:* ha az utolsó válaszban is maradt hiba, az hibás vázlatként (`draft`)
+    megmarad a hibáival — megtekinthető, letölthető, kézzel javítható, de így nem illeszthető be és nem kerül
+    cache-be. Hibaüzenet csak akkor jön, ha a válaszban nincs használható kód.
+
+  A replika-űrlapon a 9 AI-feladatból most 5-höz nem kell modellhívás (a megerősítő `PB_LEZAR` gomb is ilyen);
+  4 maradt az AI-é (form-csomageljárás, `DO_KEY` key-trigger, adatbázis-rutin, `|| 'x'`-es UPDATE).
 - **A céges Forms-felületkönyvtárak kimaradnak.** Az `ank_ctrl` (képernyőcím, súgósor) és az `ank_menu` (menü)
   rutinjai csak az Oracle Forms futtatókörnyezetben működnek: a keretrendszer-katalógus `forms_runtime_calls`
   listáján vannak, így sem a backendbe, sem az AI-feladatokba nem kerülnek, és a csatolt könyvtárból sem

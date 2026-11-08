@@ -47,9 +47,14 @@ bekötni. A képernyőértékek bekötése külön, összecsukott haladó eszkö
   meg a repository-metódusokat (Criteria API, persist, szekvencia; az eredeti SQL a
   kommentjükben), ahol pontosan fordítható; az AI csak a lefedetlen SQL-hez ír metódust.
 - A DPS ServiceImpl kiválasztott metódusa a repositorykat hívja; az üzleti logikát az AI
-  írja, az egyszerű rekordtriggereket (szekvenciás kulcs, kódtábla-megnevezés, üzenettel
-  megálló ellenőrzés, master-detail törlésellenőrzés) a migrátor AI nélkül. A
-  Spring-bekötéseket is a migrátor illeszti be.
+  írja, az egyszerű triggereket a migrátor AI nélkül: a rekordtriggereket (szekvenciás kulcs,
+  kódtábla-megnevezés, üzenettel megálló ellenőrzés, master-detail törlésellenőrzés, a trigger
+  INSERT/UPDATE/DELETE-je), az egyszerű gombokat (ellenőrzés, egy megerősítő kérdés, SQL,
+  mezőérték visszaírása, GO_BLOCK/EXECUTE_QUERY) és a lekérdező gombokat (DEFAULT_WHERE +
+  EXECUTE_QUERY, az eredeti PL/SQL-lel összevetve). A Spring-bekötéseket is a migrátor illeszti be.
+- Az AI-válasz szokásos apró hibáit (`request.getBlocks()`, `row.getX()`, a modul előtagja
+  nélküli repository, Spring Data `findById`/`save`) a migrátor helyben javítja, nem kér érte
+  újabb AI-hívást; ha az utolsó válaszban is marad hiba, az hibás vázlatként megtekinthető marad.
 - Java csak adatbázismunkából lesz: az indítókód (PRE-FORM, WHEN-NEW-FORM-INSTANCE) és az
   adatbázismunka nélküli gombok a képernyő feladatai, nem kapnak Java-végpontot.
 - Szükség esetén kiegészítő DTO készül. A már létező Controller, végpont,
