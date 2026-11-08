@@ -22,6 +22,7 @@ from typing import Literal
 
 from frm_forms import backend_assistant as engine
 from frm_forms import assistant_log
+from frm_forms import frontend_assistant
 from frm_forms.common import MigrationError, read_json
 from frm_forms import schema_workbench, input_bindings
 from .jobs import JobError
@@ -74,6 +75,33 @@ class AutoSettings(BaseModel):
     think: Literal["default", "disabled", "low", "medium", "high"] = "default"
     auto_run: bool = True
     auto_apply: bool = True
+    # Optional: the developer may send a generated screen to the model (standalone, signals, commented code).
+    # Never automatic, never applied without review.
+    frontend_ai: bool = False
+
+
+class FrontendRequest(BaseModel):
+    """An AI rewrite of one screen component: the whole file when it fits, else in parts."""
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    task_id: str = Field(pattern=r"^[a-f0-9]{20}$")
+    mode: Literal["whole", "parts"] = "whole"
+    url: str = Field(default="", max_length=1000)
+    model: str = Field(default="", max_length=120)
+    num_ctx: int | None = Field(default=None, ge=4096, le=65536, strict=True)
+    num_predict: int | None = Field(default=None, ge=512, le=16384, strict=True)
+    timeout: int | None = Field(default=None, ge=1, le=3600, strict=True)
+    attempts: int | None = Field(default=None, ge=1, le=3, strict=True)
+    think: Literal["default", "disabled", "low", "medium", "high"] | None = None
+    instructions: str = Field(default="", max_length=8000)
+
+
+class FrontendPromptRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    task_id: str = Field(pattern=r"^[a-f0-9]{20}$")
+    mode: Literal["whole", "parts"] = "whole"
+    num_ctx: int | None = Field(default=None, ge=4096, le=65536, strict=True)
+    num_predict: int | None = Field(default=None, ge=512, le=16384, strict=True)
+    instructions: str = Field(default="", max_length=8000)
 
 
 class AutoRequest(BaseModel):
@@ -350,6 +378,9 @@ class AssistantManager:
         def cancel() -> bool:
             return self.closed or run_id in self.cancel_requested
 
+        if record.get("kind") == "frontend":
+            self._run_frontend(record, output, options, exchange_id, progress, cancel)
+            return
         if record["auto"]:
             self.auto_tried[(job_id, record["task_id"])] = record.get("fingerprint")
         try:
@@ -398,6 +429,128 @@ class AssistantManager:
                 LOG.warning("ZIP-frissítés: %s", exc)
             record.update(status="completed", finished=now(), result=result, applied=applied, apply_error=apply_error)
 
+    def _run_frontend(self, record, output, options, exchange_id, progress, cancel) -> None:
+        """A screen rewrite: a reviewable proposal (or a draft), never applied automatically."""
+        try:
+            result = frontend_assistant.propose(output, record["task_id"], options, record["_request"].get("mode", "whole"),
+                                                Path(self.manager.settings.data_dir) / "assistant-cache",
+                                                exchange_id=exchange_id, progress=progress, cancel=cancel)
+        except engine.Cancelled as exc:
+            with self.lock:
+                record.update(status="cancelled", finished=now(), error=str(exc))
+            return
+        except Exception as exc:
+            message = str(exc).strip() or type(exc).__name__
+            logged = (assistant_log.folder(output) / (exchange_id + ".json")).is_file()
+            if logged:
+                message += f" Megnyitás böngészőben: /ai-log?job={record['job_id']}&exchange={exchange_id}"
+            LOG.error("Frontend-asszisztens %s: %s", record["id"], message[:2000])
+            with self.lock:
+                record.update(status="failed", finished=now(), error=message[:3000], exchange_id=exchange_id if logged else None)
+            return
+        with self.lock:
+            record.update(status="interrupted" if self.closed else "completed", finished=now(), result=result,
+                          applied=False, apply_error=None)
+
+    # ---------------------------------------------------------------- the frontend assistant (optional)
+
+    def _frontend_options(self, settings: dict, request=None) -> engine.Options:
+        values = {k: getattr(request, k) for k in ("url", "model", "num_ctx", "num_predict", "timeout", "attempts", "think")
+                  if request is not None and getattr(request, k, None) not in (None, "")}
+        merged = {**{k: settings[k] for k in ("url", "model", "num_ctx", "num_predict", "timeout", "attempts", "think")}, **values}
+        options = engine.Options(**merged, data_access="jpa",
+                                 instructions=getattr(request, "instructions", "") if request is not None else "")
+        options.validate()
+        return options
+
+    def frontend_index(self, job_id: str, num_ctx: int | None = None, num_predict: int | None = None) -> dict:
+        """The screens of a module, each with its size and whether it fits the context whole or in parts.
+
+        num_ctx / num_predict: the values the developer is about to run with (default: the saved settings).
+        """
+        output = self.output(job_id)
+        settings = self.settings()
+        options = engine.Options(num_ctx=num_ctx or settings["num_ctx"], num_predict=num_predict or settings["num_predict"])
+        tasks = []
+        with self.lock:
+            busy = {self.runs[r]["task_id"] for r in self.queue if self.runs[r]["job_id"] == job_id}
+            if self.active and self.runs[self.active]["job_id"] == job_id:
+                busy.add(self.runs[self.active]["task_id"])
+        for task in frontend_assistant.screens(output):
+            try:
+                tasks.append({**frontend_assistant.plan(output, task["id"], options), "busy": task["id"] in busy})
+            except MigrationError as exc:
+                tasks.append({**task, "error": str(exc), "recommended": None, "busy": task["id"] in busy})
+        return {"enabled": settings["frontend_ai"], "connected": bool(settings["url"] and settings["model"]),
+                "num_ctx": options.num_ctx, "num_predict": options.num_predict, "tasks": tasks,
+                "proposals": frontend_assistant.proposals(output),
+                "notice": "Az AI-átírás után a képernyőértékek bekötése (frm-input) csak kézzel módosítható: "
+                          "előbb kösd be a bemeneteket."}
+
+    def frontend_start(self, job_id: str, request: FrontendRequest) -> dict:
+        output = self.output(job_id)
+        settings = self.settings()
+        if not settings["frontend_ai"]:
+            raise JobError("A frontend AI-átírás nincs bekapcsolva (AI-beállítások: Frontend AI-átírás).", 409)
+        options = self._frontend_options(settings, request)
+        if not options.url or not options.model:
+            raise JobError("Előbb mentsd az AI-kapcsolatot (Ollama-cím és modell) a közös AI-beállításoknál.", 409)
+        with self.lock:
+            if self.closed:
+                raise JobError("A backend leállítás alatt van.", 503)
+            try:
+                info = frontend_assistant.plan(output, request.task_id, options)
+            except MigrationError as exc:
+                raise JobError(str(exc), 404) from exc
+            if not info[request.mode]["fits"]:
+                need = info[request.mode]
+                raise JobError(("A teljes fájl nem fér a kontextusba" if request.mode == "whole" else
+                                "A komponens részei sem férnek a kontextusba")
+                               + f" (num_ctx ≥ {need['required_num_ctx']}, num_predict ≥ {need['required_num_predict']} kellene).", 409)
+            if self._queued_task(job_id, request.task_id):
+                raise JobError("Ez a képernyő már a sorban van vagy éppen fut.", 409)
+            task = {"id": request.task_id, "method": info["name"], "owner": info["target"], "event": "", "kind": "frontend",
+                    "fingerprint": info["sha256"]}
+            record = self._record(job_id, task, auto=False, options=options, request={"mode": request.mode})
+            record["mode"] = request.mode
+            if self.active is None and not self.queue:
+                record["status"] = "running"
+            self.queue.appendleft(record["id"])
+            self.wake.notify_all()
+            return self.public(record)
+
+    def frontend_prompt(self, job_id: str, request: FrontendPromptRequest) -> dict:
+        """The first request a run would send (the whole file or the head), and the plan; the model is not called."""
+        output = self.output(job_id)
+        settings = self.settings()
+        options = engine.Options(num_ctx=request.num_ctx or settings["num_ctx"], num_predict=request.num_predict or settings["num_predict"],
+                                 instructions=request.instructions)
+        try:
+            info = frontend_assistant.plan(output, request.task_id, options)
+            source = engine.safe_file(output, info["target"]).read_text(encoding="utf-8")
+        except MigrationError as exc:
+            raise JobError(str(exc), 404) from exc
+        masked, _ = frontend_assistant.masked_source(source)
+        user = (frontend_assistant.whole_prompt(masked, info["name"], options) if request.mode == "whole" else
+                frontend_assistant.head_prompt(frontend_assistant.split(masked), info["name"], options))
+        return {"plan": info, "mode": request.mode, "system": frontend_assistant.SYSTEM, "user": user}
+
+    def frontend_proposal(self, job_id: str, proposal_id: str) -> dict:
+        try:
+            return frontend_assistant.proposal(self.output(job_id), proposal_id)
+        except MigrationError as exc:
+            raise JobError(str(exc), 404) from exc
+
+    def frontend_apply(self, job_id: str, proposal_id: str) -> dict:
+        output = self.output(job_id)
+        with self.lock:
+            try:
+                result = frontend_assistant.apply_proposal(output, proposal_id, reviewed=True)
+            except MigrationError as exc:
+                raise JobError(str(exc), 409) from exc
+            engine.refresh_archives(output)
+            return result
+
     # ---------------------------------------------------------------- reading
 
     def queue_state(self, job_id: str | None = None) -> dict:
@@ -418,7 +571,8 @@ class AssistantManager:
             return {"active": view(active) if active and (job_id is None or active["job_id"] == job_id) else None,
                     "busy_with_other_job": bool(active and job_id and active["job_id"] != job_id),
                     "queued": queued, "finished": finished,
-                    "settings": {k: settings[k] for k in ("url", "model", "auto_run", "auto_apply", "num_ctx", "num_predict", "timeout")},
+                    "settings": {k: settings[k] for k in ("url", "model", "auto_run", "auto_apply", "num_ctx", "num_predict",
+                                                          "timeout", "frontend_ai")},
                     "server_time": time.time()}
 
     def auto_summary(self, job_id: str, index: dict, output: Path) -> dict:

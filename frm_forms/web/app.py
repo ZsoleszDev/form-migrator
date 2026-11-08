@@ -27,6 +27,7 @@ from .jobs import JobError, JobManager, tail
 from .models import DeployRequest, FolderRequest, JobAnswer, MigrationOptions, OllamaConnection, PickRequest
 from .settings import PROJECT_ROOT, Settings
 from .assistant import (AssistantManager, AssistantRequest, ApplyRequest, PromptRequest, TableSchemaRequest,
+                        FrontendRequest, FrontendPromptRequest,
                         TableCsvRequest, InputBindingsRequest, AutoRequest, AutoSettings, CancelRequest)
 
 AI_LOG_PAGE = Path(__file__).resolve().parents[1] / "data" / "ai-log.html"
@@ -190,7 +191,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/assistant/settings")
     def assistant_save_settings(request: AutoSettings):
-        return app.state.assistant.save_settings(request.model_dump())
+        # Only the fields the request names: a single switch (frontend_ai) must not reset the connection.
+        return app.state.assistant.save_settings(request.model_dump(exclude_unset=True))
 
     # The queue of every module: the running request with its live progress, the waiting ones, the finished.
     @app.get("/api/assistant/queue")
@@ -402,6 +404,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/jobs/{job_id}/assistant/proposals/{proposal_id}/apply")
     def assistant_apply(job_id: str, proposal_id: str, request: ApplyRequest):
         return app.state.assistant.apply(job_id, proposal_id)
+
+    # Optional: a generated screen rewritten by the local model (standalone, signals); never applied unreviewed.
+    @app.get("/api/jobs/{job_id}/frontend-assistant")
+    def frontend_assistant_index(job_id: str, num_ctx: int | None = Query(default=None, ge=4096, le=65536),
+                                 num_predict: int | None = Query(default=None, ge=512, le=16384)):
+        return app.state.assistant.frontend_index(job_id, num_ctx, num_predict)
+
+    @app.post("/api/jobs/{job_id}/frontend-assistant", status_code=202)
+    def frontend_assistant_start(job_id: str, request: FrontendRequest):
+        return app.state.assistant.frontend_start(job_id, request)
+
+    @app.post("/api/jobs/{job_id}/frontend-assistant/prompt")
+    def frontend_assistant_prompt(job_id: str, request: FrontendPromptRequest):
+        return app.state.assistant.frontend_prompt(job_id, request)
+
+    @app.get("/api/jobs/{job_id}/frontend-assistant/proposals/{proposal_id}")
+    def frontend_assistant_proposal(job_id: str, proposal_id: str):
+        return app.state.assistant.frontend_proposal(job_id, proposal_id)
+
+    @app.post("/api/jobs/{job_id}/frontend-assistant/proposals/{proposal_id}/apply")
+    def frontend_assistant_apply(job_id: str, proposal_id: str, request: ApplyRequest):
+        return app.state.assistant.frontend_apply(job_id, proposal_id)
 
     # What was sent to the local model and what it answered (also for rejected answers).
     @app.post("/api/jobs/{job_id}/assistant/prompt")
