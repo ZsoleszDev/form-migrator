@@ -15,6 +15,7 @@ import { SelectModule } from '@openng/optimus-ui/select';
 import { TableModule } from '@openng/optimus-ui/table';
 import { TagModule } from '@openng/optimus-ui/tag';
 import { AiProgress, AiRun, AiSummary, MigratorAiQueue } from './migrator-ai-queue';
+import { MigratorFrontendAi } from './migrator-frontend-ai';
 
 interface AssistantJob { id: string; status: string; module: string | null; filename: string }
 interface Task {
@@ -105,7 +106,7 @@ const ORACLE_TYPES = ['VARCHAR2', 'NVARCHAR2', 'CHAR', 'NCHAR', 'NUMBER', 'FLOAT
 @Component({
   selector: 'app-migrator-assistant',
   imports: [FormsModule, ReactiveFormsModule, ButtonModule, CheckboxModule, InputTextModule,
-    MessageModule, PanelModule, ProgressBarModule, SelectModule, TableModule, TagModule, MigratorAiQueue],
+    MessageModule, PanelModule, ProgressBarModule, SelectModule, TableModule, TagModule, MigratorAiQueue, MigratorFrontendAi],
   host: {class: 'block min-w-0'},
   styles: `
     .as-table { min-width: 0; width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
@@ -406,6 +407,10 @@ ORDER BY column_id;</pre>
               </div>
             }
           </details>
+        </p-panel>
+        <p-panel header="Frontend AI-átírás (opcionális)" [toggleable]="true" [collapsed]="true" class="block min-w-0 w-full">
+          <app-migrator-frontend-ai [apiBase]="apiBase" [jobId]="jobId()" [numCtx]="numCtx.value" [numPredict]="numPredict.value"
+            [timeout]="timeout.value" [attempts]="attempts.value" [think]="think.value" (applied)="moduleUpdated.emit($event)" />
         </p-panel>
         <details [open]="bindingsOpen()" (toggle)="bindingsOpen.set($any($event.target).open)"><summary class="cursor-pointer text-sm opacity-80">Haladó: képernyőértékek bekötése</summary>
         @if (bindingsOpen()) {

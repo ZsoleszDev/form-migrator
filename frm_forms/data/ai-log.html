@@ -97,12 +97,13 @@
 </head>
 <body>
 <header>
-  <h1>AI-munkasor és napló — Java asszisztens</h1>
+  <h1>AI-munkasor és napló — Java- és frontend-asszisztens</h1>
   <p>Mit csinál most a helyi modell (mióta, milyen gyorsan, mit írt eddig), mi vár sorra, és pontosan mit küldött a migrátor,
     mit válaszolt a modell, mit vett át belőle a migrátor.</p>
 </header>
 <main>
   <section class="panel queue" aria-label="AI-munkasor" id="queue"></section>
+  <section class="panel queue" aria-label="Frontend AI-átírás" id="frontend"></section>
   <div class="panel controls">
     <label>Generált modul <select id="job" aria-label="Generált modul"></select></label>
     <label>Végpont <select id="task" aria-label="Végpont"><option value="">Minden végpont</option></select></label>
@@ -339,7 +340,7 @@
   // ---------------------------------------------------------------- the queue, live
   const PHASES = {connecting: 'kapcsolódás', prompt: 'a modell olvassa a kérést', thinking: 'gondolkodik', writing: 'kódot ír', done: 'kész, ellenőrzés'};
   function phaseText(phase) { return PHASES[phase] || phase || '—'; }
-  const live = {queue: null, index: null, skew: 0, timer: 0, ticker: 0, busy: false, lastTail: ''};
+  const live = {queue: null, index: null, frontend: null, skew: 0, timer: 0, ticker: 0, busy: false, lastTail: ''};
   function clock(seconds) {
     const total = Math.max(0, Math.round(seconds)); const m = Math.floor(total / 60); const s = total % 60;
     return m >= 60 ? Math.floor(m / 60) + ':' + String(m % 60).padStart(2, '0') + ':' + String(s).padStart(2, '0') : m + ':' + String(s).padStart(2, '0');
@@ -449,16 +450,98 @@
       const changed = (live.queue.active ? live.queue.active.id : null) !== before || live.queue.finished.some(r => !finishedBefore.has(r.id));
       if (state.job && (changed || !live.index)) {
         try { live.index = await api('/api/jobs/' + encodeURIComponent(state.job) + '/assistant'); } catch { live.index = null; }
+        await loadFrontend();
         if (changed && finishedBefore.size) loadList().catch(() => null);
       }
       renderQueue();
+      renderFrontend();
     } catch (error) { setStatus(error.message); }
     live.timer = setTimeout(pollQueue, active ? 1000 : 5000);
   }
   live.ticker = setInterval(() => { if (live.queue && live.queue.active) {
     const first = document.querySelector('#queue .live .stat b'); if (first) first.textContent = clock(elapsed(live.queue.active)); } }, 1000);
 
-  $('job').addEventListener('change', event => { state.job = event.target.value; state.task = ''; state.exchange = ''; updateUrl(); live.index = null; refresh(); pollQueue(); });
+  // ---------------------------------------------------------------- the optional frontend rewrite
+  async function loadFrontend() {
+    if (!state.job) { live.frontend = null; return; }
+    try { live.frontend = await api('/api/jobs/' + encodeURIComponent(state.job) + '/frontend-assistant'); }
+    catch (error) { live.frontend = {error: error.message}; }
+  }
+  function fitText(fit, current) {
+    return '~' + fit.input_tokens + ' token kérés + ~' + fit.output_tokens + ' token válasz: num_ctx ≥ ' + fit.required_num_ctx
+      + ', num_predict ≥ ' + fit.required_num_predict + ' kell (most ' + current.num_ctx + ' / ' + current.num_predict + ').';
+  }
+  async function showFrontendProposal(id) {
+    try {
+      const value = await api('/api/jobs/' + encodeURIComponent(state.job) + '/frontend-assistant/proposals/' + encodeURIComponent(id));
+      clearTimeout(state.timer);
+      render($('detail'),
+        el('div', {class: 'row'}, el('h2', {text: value.name + ' — frontend-javaslat'}), badge(value.status),
+          value.applied ? badge('applied') : null, el('span', {class: 'meta', text: (value.mode === 'whole' ? 'teljes fájl' : 'részenként') + ' · ' + value.calls + ' AI-hívás'})),
+        el('p', {text: value.summary}),
+        messages(value.problems, 'bad'), messages(value.warnings, 'warn'), messages(value.notes, ''),
+        el('p', {class: 'meta', text: 'TypeScript-szintaxis: ' + ({passed: 'rendben', failed: 'hibás', not_available: 'nem ellenőrizhető (nincs TypeScript a gépen)'}[value.validation.typescript_syntax] || '—')}),
+        el('div', {class: 'row'}, el('button', {type: 'button', class: 'primary', disabled: value.status !== 'proposal' || value.applied ? true : null,
+          onclick: () => { if (window.confirm('Beilleszted az átírt komponenst? Az eredeti fájl mentése a javaslat mellé kerül.'))
+            act(() => post('/api/jobs/' + encodeURIComponent(state.job) + '/frontend-assistant/proposals/' + encodeURIComponent(id) + '/apply', {reviewed: true})
+              .then(() => showFrontendProposal(id))); }}, 'Beillesztés a képernyőbe')),
+        textBlock('Változások (diff)', value.patch, true, (value.patch || '').split('\n').length + ' sor'),
+        textBlock('Az új fájl', value.text, false, (value.text || '').length + ' karakter'));
+    } catch (error) { $('detail').replaceChildren(el('div', {class: 'notice bad', text: error.message})); }
+  }
+  async function previewFrontend(task, mode) {
+    try {
+      const value = await post('/api/jobs/' + encodeURIComponent(state.job) + '/frontend-assistant/prompt', {task_id: task.id, mode});
+      clearTimeout(state.timer);
+      render($('detail'),
+        el('div', {class: 'row'}, el('h2', {text: task.name + ' — ' + (mode === 'whole' ? 'teljes fájl' : 'első rész (fej)') + ', előnézet'}), el('span', {class: 'badge run', text: 'nem lett elküldve'})),
+        textBlock('Rendszerprompt (system)', value.system, false, null, true),
+        textBlock('Felhasználói prompt (user)', value.user, true, value.user.length + ' karakter'));
+    } catch (error) { setStatus(error.message); }
+  }
+  function renderFrontend() {
+    const target = $('frontend');
+    const data = live.frontend;
+    if (!state.job || !data) { render(target); target.hidden = true; return; }
+    target.hidden = false;
+    if (data.error) { render(target, el('h2', {text: 'Frontend AI-átírás (opcionális)'}), el('div', {class: 'notice warn', text: data.error})); return; }
+    const settings = (live.queue && live.queue.settings) || {};
+    const ready = data.enabled && data.connected;
+    const run = (task, mode) => act(() => post('/api/jobs/' + encodeURIComponent(state.job) + '/frontend-assistant', {task_id: task.id, mode}));
+    render(target,
+      el('div', {class: 'head'}, el('h2', {text: 'Frontend AI-átírás (opcionális)'}),
+        el('label', {class: 'switch'}, el('input', {type: 'checkbox', checked: data.enabled ? true : null,
+          onchange: event => act(() => post('/api/assistant/settings', {frontend_ai: event.target.checked}).then(loadFrontend))}),
+          'Engedélyezve: a képernyő elküldhető az AI-nak (standalone, signalok, kommentezett kód)')),
+      el('p', {class: 'meta', text: 'Sosem fut automatikusan, és átnézés nélkül sem kerül a fájlba. ' + data.notice}),
+      !data.connected ? el('div', {class: 'notice warn', text: 'Nincs mentett AI-kapcsolat (Ollama-cím és modell).'}) : null,
+      (data.tasks || []).map(task => {
+        if (task.error) return el('div', {class: 'task'}, el('span', {class: 'title', text: task.name}), el('span', {class: 'notice bad', text: task.error}));
+        const whole = task.whole, parts = task.parts, current = {num_ctx: data.num_ctx, num_predict: data.num_predict};
+        return el('div', {class: 'live'},
+          el('div', {class: 'row'}, el('b', {text: task.name}),
+            el('span', {class: 'badge ' + (whole.fits ? 'ok' : parts.fits ? 'warn' : 'bad'),
+              text: whole.fits ? 'egyben belefér' : parts.fits ? 'részenként fér bele (' + parts.count + ' kérés)' : 'nem fér bele'}),
+            task.busy ? el('span', {class: 'badge run', text: 'sorban / fut'}) : null),
+          el('span', {class: 'meta', text: task.bytes + ' byte; az AI ' + task.sent_bytes + ' byte-ot kap' + (task.kept ? ' (' + task.kept + ' nagy állandó értéket a migrátor tart meg és tesz vissza)' : '') + '.'}),
+          el('span', {class: 'meta', text: 'Teljes fájl: ' + fitText(whole, current)}),
+          !whole.fits ? el('span', {class: 'meta', text: parts.fits ? 'Részenként: ' + parts.count + ' kérés (előbb a fej a signalokkal, utána a metódusok csoportokban), mindegyik elfér.'
+            : 'Részenként sem fér el: ' + (parts.too_big.length ? 'túl nagy metódus: ' + parts.too_big.join(', ') + '; ' : '') + 'num_ctx ≥ ' + parts.required_num_ctx + ', num_predict ≥ ' + parts.required_num_predict + ' kellene.'}) : null,
+          el('div', {class: 'row'},
+            el('button', {type: 'button', class: whole.fits ? 'primary' : '', disabled: !ready || !whole.fits || task.busy || live.busy ? true : null,
+              title: whole.fits ? 'A teljes fájl egy kérésben' : 'Nem fér a kontextusba: ' + fitText(whole, current), onclick: () => run(task, 'whole')}, 'Teljes fájl átírása AI-val'),
+            el('button', {type: 'button', class: !whole.fits && parts.fits ? 'primary' : '', disabled: !ready || !parts.fits || task.busy || live.busy ? true : null,
+              onclick: () => run(task, 'parts')}, 'Részenként (' + parts.count + ' kérés)'),
+            el('button', {type: 'button', class: 'small', onclick: () => previewFrontend(task, whole.fits ? 'whole' : 'parts')}, 'Prompt előnézete')));
+      }),
+      (data.proposals || []).length ? el('details', {open: true}, el('summary', {}, 'Frontend-javaslatok (' + data.proposals.length + ')'),
+        el('div', {class: 'body'}, el('ul', {class: 'runs'}, data.proposals.map(item => el('li', {}, el('span', {class: 'row'},
+          item.name, badge(item.status), item.applied ? badge('applied') : null,
+          el('span', {class: 'meta', text: (item.mode === 'whole' ? 'teljes fájl' : 'részenként') + ' · ' + item.calls + ' hívás'}),
+          el('button', {type: 'button', class: 'small', onclick: () => showFrontendProposal(item.id)}, 'Megnyitás'))))))) : null);
+  }
+
+  $('job').addEventListener('change', event => { state.job = event.target.value; state.task = ''; state.exchange = ''; updateUrl(); live.index = null; live.frontend = null; refresh(); pollQueue(); });
   $('task').addEventListener('change', event => { state.task = event.target.value; updateUrl(); loadList().catch(error => setStatus(error.message)); });
   $('refresh').addEventListener('click', refresh);
   $('preview').addEventListener('click', previewPrompt);
