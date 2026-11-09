@@ -37,7 +37,7 @@ import org.springframework.web.server.ResponseStatusException;
  */
 public final class CommonMigrateTools {
     /** A változat, amelyet a generált modulok várnak. */
-    public static final String VERSION = "6";
+    public static final String VERSION = "7";
 
     private CommonMigrateTools() {
         // Csak statikus segédek.
@@ -394,6 +394,7 @@ public final class CommonMigrateTools {
     }
 
     /** Gombkérés értékei (Oracle-nevek, szövegként) és a PL/SQL-kötések típusos értékei között. */
+    // frm:legacy-begin (backend_trigger_mode plsql/java only)
     /**
      * A Forms-emuláció rögzített PL/SQL-segédeljárásai (frm_msg, frm_cmd ...).
      *
@@ -487,6 +488,8 @@ public final class CommonMigrateTools {
         }
     }
 
+    // frm:legacy-end
+
     public static final class PlsqlValues {
         private PlsqlValues() {
         }
@@ -544,6 +547,7 @@ public final class CommonMigrateTools {
                             : value.toString());
         }
 
+        // frm:legacy-begin (backend_trigger_mode plsql/java only)
         /** A PL/SQL üzenetpuffer nem üres sorai. */
         public static List<String> lines(Object messages) {
             if (!(messages instanceof String)) {
@@ -618,12 +622,15 @@ public final class CommonMigrateTools {
                     : value instanceof BigDecimal ? ((BigDecimal) value).toPlainString()
                     : value.toString());
         }
+        // frm:legacy-end
     }
 
     /**
-     * LOV (rekordcsoport) lekérdezése.
+     * LOV (rekordcsoport) végpontok segédei.
      *
-     * <p>A beírt szöveggel szűrve, a Forms-kötésekkel, korlátozott sorszámmal.
+     * <p>A lekérdezés a modul repositoryjában van (natív @Query, a beírt szöveggel szűrve,
+     * korlátozott sorszámmal); itt a kérés értékei és a sorok képernyőnek szóló alakja. A
+     * JDBC-sablont váró rows a régi backend_trigger_mode (plsql, java) generált kódjáé.
      */
     public static final class LovQuery {
         /** Az alapértelmezett sorszám. */
@@ -635,6 +642,120 @@ public final class CommonMigrateTools {
         private LovQuery() {
         }
 
+        /**
+         * A beírt szöveg szűrése (LIKE 'term%' a megjelenített oszlopon); üres: nincs szűrés.
+         *
+         * <p>Sosem null: az Oracle az üres szöveget NULL-nak olvassa, a natív lekérdezés
+         * paramétere pedig így szöveges marad.
+         *
+         * @param term a beírt szöveg
+         * @return a szűrő, vagy üres szöveg
+         */
+        public static String term(String term) {
+            return term == null ? "" : term;
+        }
+
+        /**
+         * A kért sorszám.
+         *
+         * @param limit a kérés limitje (null: DEFAULT_LIMIT)
+         * @return 1..MAX_LIMIT
+         */
+        public static int limit(Integer limit) {
+            int rows = limit == null ? DEFAULT_LIMIT : limit;
+            if (rows < 1 || rows > MAX_LIMIT) {
+                throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                        "limit: 1.." + MAX_LIMIT + " szükséges.");
+            }
+            return rows;
+        }
+
+        /**
+         * Egy Forms-kötés szöveges értéke a kérésből.
+         *
+         * @param parameters a kötések BLOKK.MEZŐ szerint
+         * @param source     a BLOKK.MEZŐ név
+         * @return az érték, vagy null
+         */
+        public static String text(Map<String, String> parameters, String source) {
+            String raw = parameters == null ? null : parameters.get(source);
+            return raw == null || raw.isEmpty() ? null : raw;
+        }
+
+        /**
+         * Egy Forms-kötés szöveges értéke, hiányzó helyett a megadottal (natív lekérdezéshez: "").
+         *
+         * @param parameters a kötések BLOKK.MEZŐ szerint
+         * @param source     a BLOKK.MEZŐ név
+         * @param missing    az érték, ha a kérésben nincs
+         * @return az érték
+         */
+        public static String text(Map<String, String> parameters, String source, String missing) {
+            String value = text(parameters, source);
+            return value == null ? missing : value;
+        }
+
+        /**
+         * Egy Forms-kötés számértéke a kérésből.
+         *
+         * @param parameters a kötések BLOKK.MEZŐ szerint
+         * @param source     a BLOKK.MEZŐ név
+         * @return az érték, vagy null
+         */
+        public static BigDecimal number(Map<String, String> parameters, String source) {
+            String raw = text(parameters, source);
+            try {
+                return raw == null ? null : new BigDecimal(raw.trim());
+            } catch (NumberFormatException e) {
+                throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                        source + ": hibás szám.", e);
+            }
+        }
+
+        /**
+         * Egy Forms-kötés dátumértéke a kérésből (ISO, helyi idő).
+         *
+         * @param parameters a kötések BLOKK.MEZŐ szerint
+         * @param source     a BLOKK.MEZŐ név
+         * @return az érték, vagy null
+         */
+        public static LocalDateTime datetime(Map<String, String> parameters, String source) {
+            String raw = text(parameters, source);
+            try {
+                return raw == null ? null : LocalDateTime.parse(raw.trim());
+            } catch (DateTimeParseException e) {
+                throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                        source + ": hibás dátum.", e);
+            }
+        }
+
+        /**
+         * A repository sorai oszlopnév szerint, a képernyő szerződése szerint.
+         *
+         * @param rows   a natív lekérdezés sorai
+         * @param labels a select-lista oszlopnevei, sorrendben
+         * @return a sorok, oszlopnév szerint
+         */
+        public static List<Map<String, Object>> rows(List<Object[]> rows, String... labels) {
+            List<Map<String, Object>> result = new ArrayList<>();
+            for (Object[] row : rows) {
+                Map<String, Object> copy = new LinkedHashMap<>();
+                for (int i = 0; i < labels.length && i < row.length; i++) {
+                    Object v = row[i];
+                    copy.put(labels[i], v instanceof BigDecimal
+                            ? ((BigDecimal) v).toPlainString()
+                            : v instanceof Timestamp
+                            ? ((Timestamp) v).toLocalDateTime().toString()
+                            : v instanceof LocalDateTime
+                            ? v.toString()
+                            : v);
+                }
+                result.add(copy);
+            }
+            return result;
+        }
+
+        // frm:legacy-begin (backend_trigger_mode plsql/java only)
         /**
          * A LOV sorai: az Oracle NUMBER tizedes szövegként, a dátum ISO-szövegként.
          *
@@ -694,6 +815,7 @@ public final class CommonMigrateTools {
                         source + ": hibás " + type + " érték.", e);
             }
         }
+        // frm:legacy-end
     }
 
     /**

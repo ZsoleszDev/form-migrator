@@ -20,7 +20,7 @@ ITEMS = {'CTRL.KOD': 'text', 'CTRL.DB': 'number', 'RENDELES.ID': 'number', 'REND
          'RENDELES.DATUM': 'datetime'}
 
 
-def method(name, signature, statement, kind, arguments, repository='RendelesRendelesRepository'):
+def method(name, signature, statement, kind, arguments, repository='RendelesRepository'):
     return jpa_sql.Method(repository, repository[:1].lower() + repository[1:], name, signature, '', statement, kind,
                           tuple(arguments))
 
@@ -29,7 +29,7 @@ UPDATE = method('updateStatuszById', 'int updateStatuszById(BigDecimal id)', "UP
                 'update', [':RENDELES.ID'])
 DELETE = method('deleteByRendelesId', 'int deleteByRendelesId(BigDecimal rendelesId)',
                 'DELETE FROM rendeles_tetel WHERE rendeles_id = :RENDELES.ID', 'delete', [':RENDELES.ID'],
-                'RendelesRendelesTetelRepository')
+                'RendelesTetelRepository')
 GENERATED = {'calls': {jpa_sql.statement_key(m.statement): m for m in (UPDATE, DELETE)}, 'methods': [UPDATE, DELETE]}
 
 
@@ -54,7 +54,7 @@ class TranslateTests(unittest.TestCase):
             '    context.message("Válasszon rendelést.");',
             '    context.abort();',
             '}',
-            'rendelesRendelesRepository.updateStatuszById(screen.rendelesId);',
+            'rendelesRepository.updateStatuszById(screen.rendelesId);',
             'screen.rendelesStatusz = "L";',
             'context.message("Lezárva");',
             'commands.add(List.of("GO_BLOCK", "RENDELES"));',
@@ -76,7 +76,7 @@ class TranslateTests(unittest.TestCase):
                       '"KERDES", SqlValues.concat(SqlValues.concat("Törli a(z) ", ', body)
         self.assertIn('local.alButton = new BigDecimal(alertAnswer);\n'
                       'if (SqlValues.truth(SqlValues.compare(local.alButton, new BigDecimal("1"), "="))) {\n'
-                      '    rendelesRendelesTetelRepository.deleteByRendelesId(screen.rendelesId);\n}', body)
+                      '    rendelesTetelRepository.deleteByRendelesId(screen.rendelesId);\n}', body)
         inline = translate("BEGIN\n  IF SHOW_ALERT('BIZTOS') = ALERT_BUTTON2 THEN\n    RAISE FORM_TRIGGER_FAILURE;\n  END IF;\n"
                            "  UPDATE rendeles SET statusz = 'L' WHERE id = :RENDELES.ID;\nEND;")
         self.assertIn('List.of(List.of("SHOW_ALERT", "BIZTOS"))', inline)
@@ -106,7 +106,7 @@ class HookDmlTests(unittest.TestCase):
         hook = {'block': 'RENDELES', 'table': 'RENDELES', 'fields': [
             {'item': 'RENDELES.ID', 'field': 'id', 'type': 'number', 'column': 'ID', 'database': True}]}
         body, reason = hook_java.translate('BEGIN\n  DELETE FROM rendeles_tetel\n   WHERE rendeles_id = :RENDELES.ID;\nEND;', hook, GENERATED)
-        self.assertEqual((body, reason), ('rendelesRendelesTetelRepository.deleteByRendelesId(row.id);', ''))
+        self.assertEqual((body, reason), ('rendelesTetelRepository.deleteByRendelesId(row.id);', ''))
         body, reason = hook_java.translate("BEGIN\n  UPDATE rendeles SET statusz = 'Z';\nEND;", hook, GENERATED)
         self.assertIsNone(body)
         self.assertIn('SQL generált repository-metódus nélkül', reason)
@@ -136,7 +136,7 @@ class ReplicaTests(unittest.TestCase):
         body = result['response']['body']
         self.assertIn('return new ActionResult(Map.of(), List.of(), List.of(List.of("SHOW_ALERT", "KERDES", '
                       '"Biztosan lezárja a rendelést?")), Map.of());', body)
-        self.assertIn('rendelesRendelesRepository.updateStatuszById(screen.rendelesId);\n    screen.rendelesStatusz = "L";\n'
+        self.assertIn('rendelesRepository.updateStatuszById(screen.rendelesId);\n    screen.rendelesStatusz = "L";\n'
                       '} else {\n    context.abort();\n}', body)
         engine.apply_proposal(self.out, result['id'], reviewed=True)
         # A form package procedure and a DO_KEY key trigger: outside the subset, the model's as before.
@@ -146,7 +146,7 @@ class ReplicaTests(unittest.TestCase):
         compile_java(self, self.root, list((self.out / 'backend').rglob('*.java')))
 
     def test_the_usual_slips_of_a_model_answer_are_repaired_and_compile(self):
-        """row.getX(), a repository without the module prefix, findById/save: one call, no correction round."""
+        """row.getX(), an entity named RendelesEntity, findById/save: one call, no correction round."""
         from test_backend_assistant import Client
         answer = ('''```java
 // SERVICE
@@ -167,15 +167,15 @@ private void triggerOnUpdateRendeles(RendelesRow row, RuleContext context) {
             result = engine.propose(self.out, self.tasks()['triggerOnUpdateRendeles']['id'], self.options)
         self.assertEqual((result['status'], result['calls'], len(client.requests)), ('proposal', 1, 1))
         notes = ' '.join(result['extraction']['notes'])
-        self.assertIn('rendelesRepository -> rendelesRendelesRepository, RendelesEntity -> RendelesRendelesEntity', notes)
+        self.assertIn('RendelesEntity -> RendelesDomain', notes)  # the company names the entity <Table>Domain
         self.assertIn('a rekord mezői (id, osszeg, statusz) getter/setter helyett', notes)
-        self.assertTrue(any('save() INSERT vagy UPDATE (merge)' in w for w in result['extraction']['warnings']))
-        self.assertIn('RendelesRendelesEntity record = rendelesRendelesRepository.findById(row.id).orElse(null);',
+        self.assertIn('RendelesDomain record = rendelesRepository.findById(row.id).orElse(null);',
                       result['response']['body'])
         engine.apply_proposal(self.out, result['id'], reviewed=True)
-        repository = (self.out / 'backend/DPS/RendelesRendelesRepository.java').read_text(encoding='utf-8')
-        self.assertIn('public Optional<RendelesRendelesEntity> findById(BigDecimal id) {', repository)
-        self.assertIn('import java.util.Optional;', repository)
+        repository = (self.out / 'backend/DPS/RendelesRepository.java').read_text(encoding='utf-8')
+        # findById and save are JpaRepository's: nothing is written for them
+        self.assertIn('public interface RendelesRepository extends JpaRepository<RendelesDomain, BigDecimal> {', repository)
+        self.assertNotIn('findById(', repository)
         compile_java(self, self.root, list((self.out / 'backend').rglob('*.java')))
 
 

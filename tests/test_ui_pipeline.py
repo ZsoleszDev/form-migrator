@@ -86,9 +86,10 @@ class UiPipelineTests(unittest.TestCase):
         out,m=self.good('<Item Name="S" ItemType="Text Item" LOVName="LOOK"/>',extra='<LOV Name="LOOK" RecordGroupName="RG"><LOVColumnMapping Name="M" ColumnName="CODE" ReturnItem="B.S" Title="Kód"/></LOV><RecordGroup Name="RG" RecordGroupQuery="SELECT CODE FROM T WHERE X=:B.S"/>')
         lov=m['blocks'][0]['items'][0]['lov'];self.assertEqual(m['blocks'][0]['items'][0]['widget'],'autocomplete')
         self.assertEqual((out/lov['sql_file']).read_text(),'SELECT CODE FROM T WHERE X=:B.S\n');self.assertIsNone(m['endpoints'][0]['path']);self.assertTrue(m['endpoints'][0]['declaration_only'])
-        # Default: one generated LOV endpoint runs the unchanged query with the Forms bind as a typed parameter.
+        # The LOV query is a repository method (jpa_lov): this module has no database block, so no repository to hold it -
+        # the endpoint answers 501 and says why; the query stays in the analysis (sql_file).
         service=(out/'backend/DPS/TesztServiceImpl.java').read_text()
-        self.assertIn('SELECT CODE FROM T WHERE X=:p0',service);self.assertIn('{"p0", "B.S", "text"}',service)
+        self.assertIn('nincs repository',service);self.assertIn('HttpStatus.NOT_IMPLEMENTED',service);self.assertNotIn('jdbc',service)
     def test_7_lov_backend_endpoints_can_be_switched_off(self):
         out,_=self.good('<Item Name="S" ItemType="Text Item" LOVName="LOOK"/>',extra='<LOV Name="LOOK" RecordGroupName="RG"><LOVColumnMapping Name="M" ColumnName="CODE" ReturnItem="B.S" Title="Kód"/></LOV><RecordGroup Name="RG" RecordGroupQuery="SELECT CODE FROM T WHERE X=:B.S"/>',config={'backend_lov_endpoints':False})
         self.assertFalse(any('SELECT CODE FROM T' in p.read_text() for p in (out/'backend').rglob('*.java')))
@@ -124,7 +125,9 @@ class UiPipelineTests(unittest.TestCase):
         report=(out/'migration-report.md').read_text();self.assertIn('B.TREE',report);self.assertIn('MAIN',report)
     def test_10_report_inference_counts_and_endpoint_list(self):
         out,m=self.good('<Item Name="C" CheckedValue="1" UncheckedValue="0"/>',block='QueryDataSourceName="T"')
-        report=(out/'migration-report.md').read_text();self.assertIn('heurisztikából: 1/1',report);self.assertIn('b_read',report)
+        report=(out/'migration-report.md').read_text();self.assertIn('heurisztikából: 1/1',report)
+        # No primary key, no JPA Domain: the block has no endpoint, and the report says why.
+        self.assertIn('| B | b | nem készül | nem készül | nem készül | nem készül |',report);self.assertIn('NO_PRIMARY_KEY',report)
     def test_same_input_byte_identical_and_reject_before_java_ai(self):
         out,m=self.good();first={str(p.relative_to(out)):p.read_bytes() for p in out.rglob('*') if p.is_file()}
         other,_=self.good(label='other');self.assertEqual(first,{str(p.relative_to(other)):p.read_bytes() for p in other.rglob('*') if p.is_file()})

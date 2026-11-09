@@ -77,8 +77,11 @@ class QueryParser(Parser):
 
 
 class QueryCompiler:
-    def __init__(self, model, block):
+    """jpql=True: the same tree as JPQL over the block's Domain (alias d, field = column in camelCase), with the same
+    parameter names (:q0 ...): COALESCE for NVL, CONCAT for ||; NULLS FIRST/LAST is not JPQL (Unsupported)."""
+    def __init__(self, model, block, jpql=False):
         self.block = block
+        self.jpql = jpql
         self.binds = {}
         self.fields = {b['name']+'.'+i['name']: i for b in model['blocks'] for i in b['items'] if i['kind'] != 'button'}
         self.columns = {i['column']: i for i in block['db_items']}
@@ -104,7 +107,7 @@ class QueryCompiler:
                 raise Unsupported('Ismeretlen SQL-minősítő: '+parts[0])
             col = parts[-1]
             if col not in self.columns: raise Unsupported('Nem leképezett SQL-oszlop: '+n['name'])
-            return col, self.columns[col]['type']
+            return ('d.' + domain_field(col) if self.jpql else col), self.columns[col]['type']
         if op == 'ref':
             ref = n['name']
             if ref.split('.')[0] in {'SYSTEM', 'GLOBAL', 'PARAMETER'} or ref not in self.fields:
@@ -136,6 +139,7 @@ class QueryCompiler:
             elif operator == 'LIKE' and {lt,rt} <= {'text','null'}: typ='boolean'
             elif operator in {'+','-','*','/'} and {lt,rt} <= {'number','null'}: typ='number'
             elif operator == '||' and {lt,rt} <= {'text','null'}: typ='text'
+            if typ == 'text' and self.jpql: return 'CONCAT('+left+', '+right+')', typ
             if typ: return '('+left+' '+operator+' '+right+')', typ
         if op == 'function':
             args = [self.expression(a) for a in n['args']]; fun = n['name']; typ = None
@@ -144,7 +148,8 @@ class QueryCompiler:
             elif fun in {'UPPER','LOWER','TRIM','LENGTH'} and len(args)==1 and args[0][1] in {'text','null'}:
                 typ = 'number' if fun=='LENGTH' else 'text'
             elif fun == 'ABS' and len(args)==1 and args[0][1] in {'number','null'}: typ='number'
-            if typ and typ != 'boolean': return fun+'('+', '.join(s for s,_ in args)+')',typ
+            if typ and typ != 'boolean':
+                return ('COALESCE' if fun == 'NVL' and self.jpql else fun)+'('+', '.join(s for s,_ in args)+')',typ
         raise Unsupported('Nem támogatott SQL-szemantika: '+str(n.get('name',op)))
 
     def predicate(self, source):
@@ -165,11 +170,18 @@ class QueryCompiler:
             if parser.peek('ASC') or parser.peek('DESC'): column += ' '+parser.take().value
             if parser.accept('NULLS'):
                 if not (parser.peek('FIRST') or parser.peek('LAST')): raise Unsupported('NULLS FIRST/LAST szükséges.')
+                if self.jpql: raise Unsupported('NULLS FIRST/LAST: JPQL-ben nincs ilyen.')
                 column += ' NULLS '+parser.take().value
             result.append(column)
             if not parser.accept(','): break
         parser.need('<EOF>')
         return ', '.join(result)
+
+
+def domain_field(column):
+    """The Domain field of a column (jpa_crud uses the same name)."""
+    from .common import name
+    return name(column)
 
 
 def clause_body(source, *keywords):
@@ -267,6 +279,11 @@ def prepare_queries(model):
             try:
                 where_sql = compiler.predicate(effective_where); order_sql = compiler.order(order)
                 plan['translation'] = 'compiled'
+                try:  # the JPQL of the same clause (jpa_crud); without it the repository runs the SQL natively
+                    jpql = QueryCompiler(model, b, jpql=True)
+                    plan['where_jpql'], plan['order_jpql'] = jpql.predicate(effective_where), jpql.order(order)
+                except (Unsupported, RecursionError, IndexError) as reason:
+                    plan['jpql_reason'] = str(reason)
             except (Unsupported, RecursionError, IndexError) as closed:
                 # Not in the closed SQL subset: the original clause runs in Oracle, as in Forms.
                 compiler.binds = {}

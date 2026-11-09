@@ -3,11 +3,11 @@
 ## A cél
 
 A szerveroldali Oracle-triggereket Java-kódra írni a már elkészült DPS ServiceImpl metódusaiban,
-saját entity-alapú repositoryval. 4.35-től (`backend_trigger_mode: "ai"`, ez az alapértelmezés) a
+a táblák repositoryjaival (`interface <Tábla>Repository extends JpaRepository<<Tábla>Domain, ID>`, `@Query`). 4.35-től (`backend_trigger_mode: "ai"`, ez az alapértelmezés) a
 generátor a metódus keretét és a kikommentezett eredeti Forms-kódot adja, a törzset a Java asszisztens
 tölti ki. A Java-alkalmazás csak adatbázismunkát kap: a képernyő munkája (indítás, mezőértékek,
 navigáció) a képernyőé. Az adatbázisréteget a migrátor írja, ahol pontosan tudja: a trigger SQL-jéből
-repository-metódus lesz (Criteria API, az eredeti SQL a kommentjében), az egyszerű rekordtriggerekhez
+`@Query` repository-metódus lesz (JPQL, az eredeti SQL a kommentjében), az egyszerű rekordtriggerekhez
 pedig AI sem kell. Az AI így csak a valódi üzleti logikát írja, és csak a generált metódusokat hívja.
 
 ## Mit generál a migrátor a triggerekhez?
@@ -65,22 +65,29 @@ Modulszintű kapcsoló (`MODULE_REVIEWED`) nincs: hogy mikor kész a modul, azt 
 A kis helyi modell leggyakrabban a repositoryn hibázott: EntityManagert írt a service-be, vagy olyan
 repository-metódust hívott, amelyet nem írt meg — mindkettő újabb, javító AI-hívást jelentett. Ezért a feladat
 kódjának minden SQL-utasításából, amelyet az alábbi részhalmaz pontosan lefed, a migrátor írja meg a tábla
-repositoryjának metódusát (`frm_forms/jpa_sql.py`), az eredeti SQL-lel a kommentjében:
+repositoryjának metódusát (`frm_forms/jpa_sql.py`), az eredeti SQL-lel a kommentjében.
+
+A repository a cég mintája: `public interface RendelesRepository extends JpaRepository<RendelesDomain, BigDecimal>`,
+`@Query` metódusokkal, és a service `@Autowired` mezőn hívja. Egy blokk táblájához a Domain és a Repository már a
+generáláskor elkészül (a CRUD-váz is ezt használja); az asszisztens ebbe teszi a metódusait. Más táblához ugyanilyen
+Domain és Repository készül a megadott táblaszerkezetből. A blokk Domain-je csak a blokk oszlopait képezi le: egy
+SQL, amely a tábla más oszlopát használja, nem kap generált metódust (az AI-é, az okkal együtt).
 
 | Forms-SQL | Generált metódus |
 | --- | --- |
-| `SELECT nev INTO :B.NEV FROM vevo WHERE kod = :B.KOD` | `String findNevByKod(String kod)` — `getSingleResult()`: nincs sor → `NoResultException` (NO_DATA_FOUND), több sor → `NonUniqueResultException` (TOO_MANY_ROWS) |
-| több oszlop `INTO`-val | az entity (`findBy…`), a service a getterekkel olvassa |
+| `SELECT nev INTO :B.NEV FROM vevo WHERE kod = :B.KOD` | `String findNevByKod(String kod)` — `default` metódus egy `@Query` sorai fölött: nincs sor → `NoResultException` (NO_DATA_FOUND), több sor → `NonUniqueResultException` (TOO_MANY_ROWS) |
+| több oszlop `INTO`-val | a Domain (`findBy…`), a service a getterekkel olvassa |
 | `COUNT(*)`, `SUM`, `MIN`, `MAX` | `countBy…` (BigDecimal), `sum…By…`; sor nélkül null, ahogy az Oracle-ben |
-| `SELECT seq.NEXTVAL INTO … FROM DUAL` | `BigDecimal next<Szekvencia>()` (az egyetlen engedett natív lekérdezés) |
+| `SELECT seq.NEXTVAL INTO … FROM DUAL` | `BigDecimal next<Szekvencia>()` — natív `@Query`, ugyanaz, mint a CRUD-vázé |
 | kurzor `SELECT 1 …` (`%FOUND`) | `boolean existsBy…` |
-| kurzor / `FOR r IN (SELECT …)` | `List<Entity> findAllBy…`, az `ORDER BY` megmarad |
-| `INSERT INTO t (a tábla minden oszlopa) VALUES (…)` | `void insert<Tábla>(…)` — `persist`; `seq.NEXTVAL`, `SYSDATE` is |
-| `UPDATE t SET … WHERE …`, `DELETE FROM t WHERE …` | `int update…By…` / `int deleteBy…` (CriteriaUpdate / CriteriaDelete, SQL%ROWCOUNT) |
+| kurzor / `FOR r IN (SELECT …)` | `List<Domain> findAllBy…`, az `ORDER BY` megmarad |
+| `INSERT INTO t (a tábla minden oszlopa) VALUES (…)` | `default void insert<Tábla>(…)` — `saveAndFlush`; létező kulcsra `EntityExistsException` (DUP_VAL_ON_INDEX); `seq.NEXTVAL`, `SYSDATE` is |
+| `UPDATE t SET … WHERE …`, `DELETE FROM t WHERE …` | `int update…By…` / `int deleteBy…` — `@Modifying` JPQL `@Query` (SQL%ROWCOUNT) |
 
 Feltételben: `AND`, `OR`, `NOT`, összehasonlítás, `IS [NOT] NULL`, `[NOT] LIKE`, `[NOT] IN (lista)`,
 `[NOT] BETWEEN`, `UPPER`/`LOWER`/`TRIM`, `||` szövegen. Minden érték kötött paraméter, így a NULL érték semmivel sem
-egyezik, mint az Oracle-ben; a `SYSDATE` az alkalmazásszerver órája, másodpercre. Ami nincs benne (join,
+egyezik, mint az Oracle-ben; a `SYSDATE` a lekérdezésben `CURRENT_TIMESTAMP` (az adatbázis órája), új rekordban
+az alkalmazásszerver órája, másodpercre. Ami nincs benne (join,
 allekérdezés, `GROUP BY`, `DISTINCT`, Oracle-függvény, implicit konverzió, olyan `INSERT`, amely nem ad értéket
 minden oszlopnak — az Oracle a kihagyottakba az alapértéküket írná), azt a prompt név szerint felsorolja, és csak
 arra kér repository-metódust. A generált metódusok a javaslattal együtt kerülnek a repositoryba; a már ott lévő,
@@ -144,7 +151,8 @@ gombot (a második kérésben ugyanúgy lefut). A form saját eljárása, a `DO_
 
 A lekérdező gomb (saját `DEFAULT_WHERE` + `EXECUTE_QUERY`) AI-feladat, mint a többi gomb: a keretben (`PageResult`
 a cél blokk soraival) az eredeti Forms-kód áll, a törzs üres. A migrátor nem másolja át a Forms WHERE-szövegépítését
-Javába: a gomb Java-szerkezetű megvalósítását (repository, Criteria API) az AI írja meg.
+Javába: az AI egy `@Query` metódust ír, amely a kód minden lehetséges feltételét tartalmazza, paraméterrel
+kapcsolva (`(:szuroKod = FALSE OR d.kod = :kod)`), ahogy a cég repositoryjai is.
 
 ## Automatikus AI-sor
 
@@ -238,8 +246,8 @@ az `/ai-log` oldal ugyanilyen gombja, vagy a CLI `--show-prompt` kapcsolója.
 <a teljes átírt metódus, utána az esetleges privát segédmetódusok>
 ```
 ```java
-// REPOSITORY LookupAppAccountRepository
-<csak a repository új public metódusai, az entityManager mezővel>
+// REPOSITORY AccountRepository
+<csak a repository új metódusai: @Query (JPQL, vagy nativeQuery = true az eredeti SQL-lel), törzs nélkül>
 ```
 MISSING:            (csak ha tényleg hiányzik valami, pl. egy hívott adatbázis-csomag forrása)
 - <mi hiányzik>
@@ -256,7 +264,7 @@ A feldolgozó ennél engedékenyebb, mert a kis modellek nem mindig követik bet
 | Az AI ezt adja | A migrátor ezt teszi |
 | --- | --- |
 | teljes `LookupServiceImpl` osztály | csak a kiválasztott metódust és az új privát segédmetódusokat veszi át; a többi végpont nem változik |
-| teljes repository-osztály saját `em` mezővel és konstruktorral | a metódusokat veszi át, `em` → `entityManager`, a konstruktort elhagyja |
+| teljes repository-interfész vagy -osztály | a metódusokat veszi át; a törzses metódusból `default` metódus lesz, a mezőt és a konstruktort elhagyja |
 | csak a metódustörzs, címke nélkül | a log1x-keretbe teszi |
 | címsor (`### LookupAppAccountRepository.java`) a `//` címke helyett | ugyanúgy besorolja |
 | `<think>…</think>` | a gondolkodást külön mutatja, a kódot feldolgozza |
@@ -265,12 +273,13 @@ A feldolgozó ennél engedékenyebb, mert a kis modellek nem mindig követik bet
 | meglévő repository-metódus ugyanúgy | a meglévőt használja |
 | meglévő metódusnév más tartalommal | átnevezi (`onCtrlRunFindAccount`), a hívást is |
 | régi JSON-válasz | ugyanígy ellenőrzi |
-| JPQL-szöveg | figyelmeztet (a projekt Criteria API-t ír elő) |
+| `@Query(..., nativeQuery = true)` | átveszi, figyelmeztet: ellenőrizd, hogy JPQL-ben nem írható-e le |
+| `EntityManager` egy repository-metódusban | javítást kér: a repository interfész, `@Query` kell |
 | `request.getBlocks()`, `request.getParameters()` | helyben javítja: `request.blocks()`, `request.parameters()` (a DTO record-stílusú) |
 | `row.getVevo()`, `row.setId(x);` egy hookban | helyben javítja: `row.vevo`, `row.id = x;` (a Row DTO-nak nyilvános mezői vannak) |
-| `rendelesRepository`, `RendelesEntity` (a modul előtagja nélkül) | helyben javítja, ha pontosan egy repository / entity végződik így |
-| `findById`, `save`, `delete`, `existsById`, `findAll`, `count` egy generált metódus nélküli repositoryn | a migrátor írja meg (find/merge/remove, azonnali `flush`, mint egy SQL-utasítás), figyelmeztetéssel: a `save()` INSERT vagy UPDATE |
-| `interface XRepository extends JpaRepository<…> {}` saját metódus nélkül | elhagyja; a hívott alapmetódusokat a migrátor írja |
+| `RendelesEntity` a `RendelesDomain` helyett, vagy előtag nélküli repositorynév | helyben javítja, ha pontosan egy Domain / repository illik rá |
+| `findById`, `save`, `delete`, `existsById`, `findAll`, `count` | rendben: a `JpaRepository` része, nincs mit írni |
+| `interface XRepository extends JpaRepository<…> {}` | a saját metódusait veszi át (az örökölteket elhagyja) |
 | a generált repository-metódus újraírva | elhagyja, a generált marad |
 | címke nélküli második blokk csak privát metódusokkal | a service segédmetódusai |
 | `String record = …` | rendben (csak a `record Név(…)` deklaráció tilos) |
@@ -278,9 +287,9 @@ A feldolgozó ennél engedékenyebb, mert a kis modellek nem mindig követik bet
 Ezekért nem megy újabb kérés: egy javító kör egy teljes modellhívás (CPU-n percek), és a kis modell gyakran
 ugyanazt a hibát ismétli. Javítást csak az kér (a második hívásban az előző válaszával együtt), aminek nincs
 egyértelmű javítása: a service nem létező metódust hív (generált metódusok mellett a javítókérés felsorolja őket a
-pontos aláírásukkal, és nem kér repository-kódot); a generált metódusok mellett `findById`/`save`-et hív; Spring Data
-interfészt saját lekérdezőmetódussal ír; EntityManagert használ a service-ben; benne maradt a PL/SQL-hívás vagy a
-`NOT_IMPLEMENTED` helyőrző; natív SQL-t/JDBC-t használ; vagy a Java-kód nem szintaktikus (a hibás sorral együtt).
+pontos aláírásukkal, és nem kér repository-kódot); EntityManagert használ a service-ben vagy a repositoryban;
+benne maradt a PL/SQL-hívás vagy a `NOT_IMPLEMENTED` helyőrző; JDBC-t használ; vagy a Java-kód nem szintaktikus
+(a hibás sorral együtt).
 
 ## Az AI-napló
 
@@ -312,13 +321,17 @@ időadatait, és hogy melyik kódblokkot hova sorolta a migrátor, mit hagyott e
 ## A visszakapott kód
 
 A service megtartja a meglévő metódus aláírását, log1x/tranzakciós keretét és az eredeti
-Forms-kommentet. Az üzleti logika a service-be, az adatbázis-műveletek a saját Spring repositoryba
-kerülnek: a generált metódusok (Criteria API, persist, szekvencia), és ha kellett, az AI által a lefedetlen
-SQL-hez írt metódusok (EntityManager: find/persist/merge/remove vagy Criteria API). Az importokat a migrátor
-teszi be a használt JDK/Spring/JPA-típusokhoz (a service-be a `NoResultException`-t is).
+Forms-kommentet. Az üzleti logika a service-be, az adatbázis-műveletek a tábla repository-interfészébe
+kerülnek: a generált `@Query` metódusok, és ha kellett, az AI által a lefedetlen SQL-hez írt `@Query` metódusok.
+Az importokat a migrátor teszi be a használt JDK/Spring/JPA-típusokhoz (a service-be a `NoResultException`-t is).
 
-Az entityk oszlopai és kulcsai a megadott adatbázis-metaadatból készülnek. Összetett PK esetén
-IdClass is készül. A NUMBER BigDecimal marad. A repositoryk Spring-bekötését a migrátor teszi a service-be.
+A Forms-kód által hívott tárolt eljárások és függvények a modul rutin-osztályában vannak (`<Modul>DbRoutines`,
+`@Repository`, JDBC CallableStatement: OUT és IN OUT paraméter, író függvény is); a service `@Autowired` mezőn hívja
+őket, a migrátor adja hozzá őket az első hívásnál.
+
+A Domain oszlopai és kulcsai a blokkból, más táblánál a megadott adatbázis-metaadatból készülnek. Összetett PK
+esetén a Domain beágyazott `Key` osztálya az id (`@IdClass`). A NUMBER BigDecimal marad. A repository a service
+`@Autowired` mezője; a JPA-annotációk csomagja a `jpa_namespace` beállítás (javax vagy jakarta).
 A Controller, az URL, a service-interface és a meglévő request/result DTO API-ja megmarad.
 
 ## Ha az AI adatot kér

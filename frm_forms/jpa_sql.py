@@ -3,26 +3,30 @@
 backend_trigger_mode=ai, data access jpa. A small local model fails most often on the repository: it writes
 EntityManager code into the service, or calls a repository method it never wrote, and every such answer costs a
 correction call. So every SQL statement of the task's code that the subset below translates exactly becomes a
-method of its table's repository (Criteria API, persist, the sequence query), with the original statement in its
-comment. The prompt lists these methods as the database access of the code and the model writes the service's
+@Query method of its table's repository (an interface extending JpaRepository: JPQL over the Domain, @Modifying for
+UPDATE/DELETE, a default method for INSERT and SELECT INTO, the sequence as the one native query), with the original
+statement in its comment. The prompt lists these methods as the database access of the code and the model writes the service's
 logic only; a statement outside the subset is listed with its reason, and the model writes that one method.
 
-The subset: one table, no join, subquery, grouping or hierarchy - what the Criteria API runs as Oracle would.
-- SELECT columns or one aggregate (COUNT, SUM, MIN, MAX) INTO ... FROM t [WHERE]: getSingleResult, so no row is
-  NoResultException (NO_DATA_FOUND) and several rows NonUniqueResultException (TOO_MANY_ROWS), as in PL/SQL. One
-  column returns its value, several the entity; COUNT returns a BigDecimal (an Oracle NUMBER), an aggregate
-  always one value (null over no row, as in Oracle);
+The subset: one table, no join, subquery, grouping or hierarchy - what JPQL runs as Oracle would.
+- SELECT columns or one aggregate (COUNT, SUM, MIN, MAX) INTO ... FROM t [WHERE]: a default method over the rows of
+  its @Query, so no row is NoResultException (NO_DATA_FOUND) and several rows NonUniqueResultException
+  (TOO_MANY_ROWS), as in PL/SQL. One column returns its value, several the Domain; COUNT returns a BigDecimal (an
+  Oracle NUMBER), an aggregate always one value (null over no row, as in Oracle);
 - SELECT seq.NEXTVAL INTO ... FROM DUAL: the sequence value (the one native query the project allows);
 - the query of a cursor or of a FOR loop: the entities in a List, ORDER BY kept; a constant select list
   (SELECT 1 ...) is an existence test: true when a row is found (cursor%FOUND);
-- INSERT INTO t (every column of t) VALUES (...): persist of a new entity. With fewer columns Oracle would fill
-  the others with their defaults, which the entity does not know: outside the subset;
-- UPDATE t SET column = value, ... [WHERE] / DELETE FROM t [WHERE]: CriteriaUpdate / CriteriaDelete, returning the
-  number of rows (SQL%ROWCOUNT).
+- INSERT INTO t (every column of t) VALUES (...): a default method that saves a new Domain (an existing key is
+  EntityExistsException, the DUP_VAL_ON_INDEX: save would update it). With fewer columns Oracle would fill the
+  others with their defaults, which the Domain does not know: outside the subset;
+- UPDATE t SET column = value, ... [WHERE] / DELETE FROM t [WHERE]: a @Modifying JPQL @Query, returning the number
+  of rows (SQL%ROWCOUNT).
 Conditions: AND, OR, NOT, comparisons, IS [NOT] NULL, [NOT] LIKE, [NOT] IN (list), [NOT] BETWEEN, UPPER / LOWER /
 TRIM and || on text, between a column and a column, a bind (:BLOCK.ITEM), a PL/SQL variable or a literal. Every
-value is a bound parameter: a NULL value matches nothing, as in Oracle. SYSDATE is the application server's clock
-(seconds, like an Oracle DATE).
+value is a bound parameter: a NULL value matches nothing, as in Oracle. SYSDATE is CURRENT_TIMESTAMP (the
+database's clock) in a query, the application server's clock (seconds, like an Oracle DATE) in a new record. A column
+of the table that the Domain does not map (a block's Domain maps the block's columns) is refused, never read as a
+PL/SQL variable.
 """
 from __future__ import annotations
 
@@ -62,7 +66,8 @@ NOTES = {
              "the rows as entities (getters) in the query's order; no row: an empty list"),
     'count': ('mindig egy szám (Oracle NUMBER), sor nélkül 0', 'always one number (Oracle NUMBER), 0 when no row'),
     'aggregate': ('mindig egy érték; sor nélkül null, ahogy az Oracle-ben', 'always one value; null when no row (as in Oracle)'),
-    'insert': ('új rekord (persist); a tranzakció végén íródik az adatbázisba', 'inserts the new record (persist)'),
+    'insert': ('új rekord (save, azonnal íródik); létező kulcsra EntityExistsException (DUP_VAL_ON_INDEX)',
+               'inserts the new record; an existing key throws EntityExistsException (DUP_VAL_ON_INDEX)'),
     'update': ('a módosított sorok száma (SQL%ROWCOUNT)', 'the number of updated rows (SQL%ROWCOUNT)'),
     'delete': ('a törölt sorok száma (SQL%ROWCOUNT)', 'the number of deleted rows (SQL%ROWCOUNT)'),
     'sequence': ('a szekvencia következő értéke', 'the next value of the sequence'),
@@ -485,51 +490,54 @@ def comment(lines: list[str]) -> list[str]:
 
 
 class Builder:
-    """One generated method: the table's entity, its parameters (bound values), the Criteria expressions."""
+    """One generated method: the table's Domain, its parameters (bound values), the JPQL of the statement."""
 
     def __init__(self, descriptor: dict, statement: dict):
         self.d = descriptor
         self.entity = descriptor['entity']
-        self.columns = descriptor['columns']  # COLUMN -> field
+        self.columns = descriptor['columns']  # COLUMN -> field, the columns the Domain maps
+        # columns of the table the Domain does not map (a block's Domain maps the block's columns): never a variable
+        self.unmapped = {c.upper() for c in descriptor.get('all_columns', ())} - set(self.columns)
         self.types = {f: SIMPLE.get(t, t) for f, t in descriptor['fields'].items()}
         self.statement = statement
         self.table, self.alias = statement['table'], statement['alias']
         self.params = []    # [source, java name, type]
-        self.lines = []     # declarations before the query
         self.sequences = []  # sequences the method uses (the repository gets their method)
-        self.uses_now = False
+        self.uses_now = False  # an INSERT's SYSDATE (the default method's clock)
         self.where_fields = []
 
     # names
     def column_field(self, node):
-        """The entity field of a column reference, or None (a PL/SQL variable)."""
+        """The Domain field of a column reference, or None (a PL/SQL variable)."""
         if node['op'] != 'name':
             return None
         qualifier = node['qualifier']
         if qualifier and qualifier not in {self.alias, self.table.rsplit('.', 1)[-1]}:
             raise Refused('ismeretlen tábla-előtag: ' + qualifier)
         field = self.columns.get(node['name'])
+        if field is None and node['name'] in self.unmapped:
+            raise Refused('a(z) ' + node['name'] + ' oszlopot a ' + self.entity + ' nem képezi le')
         if field is None and qualifier:
             raise Refused('a táblában nincs ' + node['name'] + ' oszlop')
         return field
 
     def param(self, source: str, typ: str, hint: str) -> str:
+        """The JPQL named parameter of a bound value (:name), one per source."""
         for known in self.params:
             if known[0] == source:
                 if known[2] != typ:
                     raise Refused(source + ' két különböző típusú oszloppal szerepel')
-                return known[1] + 'Value'
-        base = hint if re.fullmatch(r'[a-z][A-Za-z0-9]*', hint) else camel(hint)  # an entity field is camelCase already
-        if base in {'cb', 'query', 'update', 'delete', 'root', 'entity', 'now', 'entityManager'}:
+                return ':' + known[1]
+        base = hint if re.fullmatch(r'[a-z][A-Za-z0-9]*', hint) else camel(hint)  # a Domain field is camelCase already
+        if base in {'d', 'entity', 'now', 'rows', 'value'}:
             base += 'Param'
         java, counter = base, 2
         while java in {p[1] for p in self.params}:
             java, counter = base + str(counter), counter + 1
         self.params.append([source, java, typ])
-        self.lines.append(f'ParameterExpression<{typ}> {java}Value = cb.parameter({typ}.class);')
-        return java + 'Value'
+        return ':' + java
 
-    # expressions: (Java Criteria expression, type)
+    # expressions: (JPQL text, type)
     def expression(self, node, expected: str | None = None, hint: str = 'value'):
         op = node['op']
         if op == 'name':
@@ -538,7 +546,7 @@ class Builder:
                 typ = self.types[field]
                 if typ == 'byte[]':
                     raise Refused('bináris oszlop')
-                return f'root.<{typ}>get({jstr(field)})', typ
+                return 'd.' + field, typ
             source = node['name']
             if expected is None:
                 raise Refused('a(z) ' + source + ' változó típusa nem dönthető el (nincs mellette oszlop)')
@@ -553,32 +561,31 @@ class Builder:
                 raise Refused('NULL érték összehasonlításban vagy kifejezésben')
             typ = expected or ('String' if node['type'] == 'text' else 'BigDecimal')
             if node['type'] == 'text' and typ == 'String':
-                return f'cb.literal({jstr(node["value"])})', 'String'
+                return "'" + node['value'].replace("'", "''") + "'", 'String'
             if node['type'] == 'number' and typ == 'BigDecimal':
-                return f'cb.literal(new BigDecimal({jstr(node["value"])}))', 'BigDecimal'
+                return node['value'], 'BigDecimal'
             raise Refused('implicit típuskonverzió (' + node['type'] + ' → ' + typ + ')')
         if op == 'sysdate':
             if expected not in {None, 'LocalDateTime'}:
                 raise Refused('SYSDATE nem dátum oszloppal')
-            self.uses_now = True
-            return self.param('SYSDATE', 'LocalDateTime', 'now'), 'LocalDateTime'
+            return 'CURRENT_TIMESTAMP', 'LocalDateTime'  # the database's clock, like SYSDATE
         if op == 'function':
             value, typ = self.expression(node['value'], 'String', hint)
             if typ != 'String':
                 raise Refused(node['name'] + ' nem szövegen')
-            return f'cb.{TEXT_FUNCTIONS[node["name"]]}({value})', 'String'
+            return f'{node["name"]}({value})', 'String'
         if op == 'concat':
             left, lt = self.expression(node['left'], 'String', hint)
             right, rt = self.expression(node['right'], 'String', hint)
             if lt != 'String' or rt != 'String':
                 raise Refused('|| nem szövegen (implicit konverzió)')
-            return f'cb.concat({left}, {right})', 'String'
+            return f'CONCAT({left}, {right})', 'String'
         if op == 'arithmetic':
             left, lt = self.expression(node['left'], expected, hint)
             right, rt = self.expression(node['right'], lt, hint)
             if lt != 'BigDecimal' or rt != 'BigDecimal':
                 raise Refused('aritmetika nem NUMBER oszlopon')
-            return f'cb.{"sum" if node["operator"] == "+" else "diff"}({left}, {right})', 'BigDecimal'
+            return f'({left} {node["operator"]} {right})', 'BigDecimal'
         if op == 'nextval':
             raise Refused('szekvencia a feltételben')
         raise Refused('nem támogatott érték: ' + op)
@@ -620,18 +627,17 @@ class Builder:
     def condition(self, node) -> str:
         op = node['op']
         if op in {'and', 'or'}:
-            return f'cb.{op}(' + ', '.join(self.condition(p) for p in node['parts']) + ')'
+            return '(' + f' {op.upper()} '.join(self.condition(p) for p in node['parts']) + ')'
         if op == 'not':
-            return f'cb.not({self.condition(node["value"])})'
+            return f'NOT ({self.condition(node["value"])})'
         if op == 'compare':
             if node['right']['op'] == 'name' and self.column_field(node['right']) is not None \
                     and self.column_field(node['left']) is None:
                 node = dict(node, operator=MIRROR[node['operator']], left=node['right'], right=node['left'])
             left, right, typ = self.pair(node['left'], node['right'])
-            method = COMPARE[node['operator']]
-            if method not in {'equal', 'notEqual'} and typ not in COMPARABLE:
+            if node['operator'] not in {'=', '<>', '!='} and typ not in COMPARABLE:
                 raise Refused('nem rendezhető típus: ' + typ)
-            return f'cb.{method}({left}, {right})'
+            return f'{left} {"<>" if node["operator"] == "!=" else node["operator"]} {right}'
         if op == 'is_null':
             field = self.field_of(node['value'])
             if field is None:
@@ -639,12 +645,12 @@ class Builder:
             value, _ = self.expression(node['value'], None, field)
             if field not in self.where_fields:
                 self.where_fields.append(field)
-            return f'cb.{"isNotNull" if node["negated"] else "isNull"}({value})'
+            return f'{value} IS {"NOT " if node["negated"] else ""}NULL'
         if op == 'like':
             left, right, typ = self.pair(node['value'], node['pattern'])
             if typ != 'String':
                 raise Refused('LIKE nem szövegen')
-            return f'cb.{"notLike" if node["negated"] else "like"}({left}, {right})'
+            return f'{left} {"NOT " if node["negated"] else ""}LIKE {right}'
         if op == 'in':
             field = self.field_of(node['value'])
             if field is None:
@@ -653,8 +659,7 @@ class Builder:
             items = [self.expression(item, typ, field)[0] for item in node['items']]
             if field not in self.where_fields:
                 self.where_fields.append(field)
-            test = f'{value}.in(' + ', '.join(items) + ')'
-            return f'cb.not({test})' if node['negated'] else test
+            return f'{value} {"NOT " if node["negated"] else ""}IN (' + ', '.join(items) + ')'
         if op == 'between':
             field = self.field_of(node['value'])
             if field is None:
@@ -666,8 +671,7 @@ class Builder:
             high = self.expression(node['high'], typ, field + 'To')[0]
             if field not in self.where_fields:
                 self.where_fields.append(field)
-            test = f'cb.between({value}, {low}, {high})'
-            return f'cb.not({test})' if node['negated'] else test
+            return f'{value} {"NOT " if node["negated"] else ""}BETWEEN {low} AND {high}'
         raise Refused('nem támogatott feltétel: ' + op)
 
     # the method
@@ -675,39 +679,29 @@ class Builder:
         return self.condition(self.statement['where']) if self.statement.get('where') else None
 
     def signature_params(self):
-        return ', '.join(f'{typ} {java}' for source, java, typ in self.params if source != 'SYSDATE')
+        """The parameters of the @Query method (@Param = the JPQL name)."""
+        return ', '.join(f'@Param("{java}") {typ} {java}' for source, java, typ in self.params)
 
-    def binds(self, indent='                '):
-        return [f'{indent}.setParameter({java}Value, {"now" if source == "SYSDATE" else java})' for source, java, typ in self.params]
+    def plain_params(self):
+        """The same parameters without annotations: a default method's, and the prompt's signature."""
+        return ', '.join(f'{typ} {java}' for source, java, typ in self.params)
 
-    def head(self, query: str, root: str):
-        """cb, the clock (SYSDATE), the query, its root, the parameters: in the order Java needs them."""
-        lines = ['        CriteriaBuilder cb = entityManager.getCriteriaBuilder();']
-        if self.uses_now:
-            lines.append('        LocalDateTime now = LocalDateTime.now().withNano(0);  // Oracle SYSDATE: másodpercre')
-        return lines + [query, root] + ['        ' + line for line in self.lines]
+    def arguments(self):
+        return ', '.join(java for source, java, typ in self.params)
 
 
-def wrapped(line: str) -> list[str]:
-    """A where(...) line over the width: the arguments of its outermost cb.and / cb.or one per line."""
-    match = re.match(r'(\s*)(\w+\.where\(cb\.(?:and|or)\()(.*)(\)\);)$', line)
-    if len(line) <= 120 or not match:
-        return [line]
-    indent, head, inner, tail = match.groups()
-    parts, depth, current, quoted = [], 0, '', False
-    for char in inner:
-        if char == '"' and not current.endswith('\\'):
-            quoted = not quoted
-        if not quoted:
-            depth += {'(': 1, ')': -1}.get(char, 0)
-            if char == ',' and depth == 0:
-                parts.append(current.strip())
-                current = ''
-                continue
-        current += char
-    parts.append(current.strip())
-    return [indent + head] + [indent + '        ' + part + (',' if k < len(parts) - 1 else tail)
-                              for k, part in enumerate(parts)]
+def single(returns: str, method: str, builder: 'Builder') -> list[str]:
+    """SELECT INTO: the rows of the @Query method <method>Rows, one row as PL/SQL wants it."""
+    return ['', f'    default {returns} {method}({builder.plain_params()}) {{',
+            f'        List<{returns}> rows = {method}Rows({builder.arguments()});',
+            '        if (rows.isEmpty()) {',
+            '            throw new NoResultException("NO_DATA_FOUND");',
+            '        }',
+            '        if (rows.size() > 1) {',
+            '            throw new NonUniqueResultException("TOO_MANY_ROWS");',
+            '        }',
+            '        return rows.get(0);',
+            '    }']
 
 
 def by(fields: list[str]) -> str:
@@ -717,51 +711,69 @@ def by(fields: list[str]) -> str:
     return 'By' + 'And'.join(f[:1].upper() + f[1:] for f in shown) + ('Etc' if len(fields) > 3 else '')
 
 
+def literal(text: str, indent: str = '            ') -> str:
+    """A JPQL text as a Java string, in pieces of at most WIDTH characters (+ on the next lines)."""
+    pieces, rest = [], text
+    while len(rest) > WIDTH:
+        cut = rest.rfind(' ', 0, WIDTH)
+        cut = cut if cut > 20 else WIDTH
+        pieces.append(rest[:cut + 1])
+        rest = rest[cut + 1:]
+    pieces.append(rest)
+    return ('\n' + indent + '+ ').join(jstr(piece) for piece in pieces)
+
+
+def query(jpql: str, modifying: bool = False) -> list[str]:
+    """The annotation lines of a JPQL method (an UPDATE / DELETE flushes before and clears after, so the entities this
+    transaction holds stay true to the database)."""
+    lines = ['    @Modifying(flushAutomatically = true, clearAutomatically = true)'] if modifying else []
+    return lines + [f'    @Query({literal(jpql)})']
+
+
 def select_method(builder: Builder, found: Found) -> tuple[str, str, list[str], str]:
-    """(name, return type, body lines, NOTES kind) of a SELECT / cursor / loop query."""
+    """(name, return type, member lines, NOTES kind) of a SELECT / cursor / loop query."""
     statement = builder.statement
     entity = builder.entity
     where = builder.where()
     items = statement['items']
     constant = all(i['op'] == 'literal' for i in items)
     listing = found.kind in {'cursor', 'loop'}
-    root = f'        Root<{entity}> root = query.from({entity}.class);'
     order = []
     for column, direction in statement['order']:
         field = builder.column_field(column) if column['op'] == 'name' else None
         if field is None:
             raise Refused('ORDER BY nem oszlopon')
-        order.append(f'cb.{"desc" if direction == "DESC" else "asc"}(root.get({jstr(field)}))')
-    filters = (['        query.where(' + where + ');'] if where else []) + (['        query.orderBy(' + ', '.join(order) + ');'] if order else [])
+        order.append(f'd.{field} {"DESC" if direction == "DESC" else "ASC"}')
+    tail = (' WHERE ' + where if where else '') + (' ORDER BY ' + ', '.join(order) if order else '')
+    params = builder.signature_params()
     if listing and constant:
         # SELECT 1 FROM ... in a cursor: is there a row (cursor%FOUND)?
-        lines = builder.head(f'        CriteriaQuery<{entity}> query = cb.createQuery({entity}.class);', root)
-        lines += ['        query.select(root);'] + filters
-        lines += ['        return !entityManager.createQuery(query)'] + builder.binds() + ['                .setMaxResults(1)', '                .getResultList()', '                .isEmpty();']
-        return 'exists' + (by(builder.where_fields) or 'Any'), 'boolean', lines, 'exists'
+        name_ = 'exists' + (by(builder.where_fields) or 'Any')
+        lines = query(f'SELECT CASE WHEN COUNT(d) > 0 THEN true ELSE false END FROM {entity} d' + (' WHERE ' + where if where else ''))
+        return name_, 'boolean', lines + [f'    boolean {name_}({params});'], 'exists'
     if listing:
         if not all(i['op'] in {'star', 'name'} and (i['op'] == 'star' or builder.column_field(i) is not None) for i in items):
             raise Refused('a kurzor kifejezést is lekérdez (csak oszlopok támogatottak)')
-        lines = builder.head(f'        CriteriaQuery<{entity}> query = cb.createQuery({entity}.class);', root)
-        lines += ['        query.select(root);'] + filters
-        lines += ['        return entityManager.createQuery(query)'] + builder.binds() + ['                .getResultList();']
-        return 'findAll' + by(builder.where_fields), f'List<{entity}>', lines, 'list'
+        name_ = 'findAll' + by(builder.where_fields)
+        return name_, f'List<{entity}>', query(f'SELECT d FROM {entity} d' + tail) + [f'    List<{entity}> {name_}({params});'], 'list'
     if not statement['into']:
         raise Refused('SELECT INTO nélkül')
     if len(items) == 1 and items[0]['op'] == 'aggregate':
         aggregate = items[0]
         function, value = aggregate['function'], aggregate['value']
         if function == 'COUNT':
-            target = 'cb.count(root)' if value['op'] == 'star' else None
+            target = 'COUNT(d)' if value['op'] == 'star' else None
             if target is None:
                 field = builder.column_field(value)
                 if field is None:
                     raise Refused('COUNT nem oszlopon')
-                target = f'cb.count(root.get({jstr(field)}))'
-            lines = builder.head('        CriteriaQuery<Long> query = cb.createQuery(Long.class);', root)
-            lines += [f'        query.select({target});'] + filters
-            lines += ['        return BigDecimal.valueOf(entityManager.createQuery(query)'] + builder.binds() + ['                .getSingleResult());']
-            return 'count' + (by(builder.where_fields) or 'All'), 'BigDecimal', lines, 'count'
+                target = f'COUNT(d.{field})'
+            name_ = 'count' + (by(builder.where_fields) or 'All')
+            lines = query(f'SELECT {target} FROM {entity} d' + (' WHERE ' + where if where else ''))
+            lines += [f'    long {name_}Value({params});', '',
+                      f'    default BigDecimal {name_}({builder.plain_params()}) {{',
+                      f'        return BigDecimal.valueOf({name_}Value({builder.arguments()}));', '    }']
+            return name_, 'BigDecimal', lines, 'count'
         field = builder.column_field(value)
         if field is None:
             raise Refused(function + ' nem oszlopon')
@@ -770,26 +782,21 @@ def select_method(builder: Builder, found: Found) -> tuple[str, str, list[str], 
             raise Refused('SUM nem NUMBER oszlopon')
         if typ not in COMPARABLE:
             raise Refused(function + ': nem rendezhető típus')
-        call = {'SUM': 'sum', 'MAX': 'max' if typ == 'BigDecimal' else 'greatest',
-                'MIN': 'min' if typ == 'BigDecimal' else 'least'}[function]
-        lines = builder.head(f'        CriteriaQuery<{typ}> query = cb.createQuery({typ}.class);', root)
-        lines += [f'        query.select(cb.{call}(root.<{typ}>get({jstr(field)})));'] + filters
-        lines += ['        return entityManager.createQuery(query)'] + builder.binds() + ['                .getSingleResult();']
-        return function.lower() + pascal_field(field) + by(builder.where_fields), typ, lines, 'aggregate'
+        name_ = function.lower() + pascal_field(field) + by(builder.where_fields)
+        lines = query(f'SELECT {function}(d.{field}) FROM {entity} d' + (' WHERE ' + where if where else ''))
+        return name_, typ, lines + [f'    {typ} {name_}({params});'], 'aggregate'
     if any(i['op'] not in {'name', 'star'} for i in items) or any(i['op'] == 'name' and builder.column_field(i) is None for i in items):
         raise Refused('a lekérdezés kifejezést is ad vissza (csak oszlopok, egy aggregátum vagy NEXTVAL támogatott)')
-    single = len(items) == 1 and items[0]['op'] == 'name'
-    if single:
+    single_column = len(items) == 1 and items[0]['op'] == 'name'
+    if single_column:
         field = builder.column_field(items[0])
         typ = builder.types[field]
-        lines = builder.head(f'        CriteriaQuery<{typ}> query = cb.createQuery({typ}.class);', root)
-        lines += [f'        query.select(root.<{typ}>get({jstr(field)}));'] + filters
-        lines += ['        return entityManager.createQuery(query)'] + builder.binds() + ['                .getSingleResult();']
-        return 'find' + pascal_field(field) + by(builder.where_fields), typ, lines, 'value'
-    lines = builder.head(f'        CriteriaQuery<{entity}> query = cb.createQuery({entity}.class);', root)
-    lines += ['        query.select(root);'] + filters
-    lines += ['        return entityManager.createQuery(query)'] + builder.binds() + ['                .getSingleResult();']
-    return 'find' + (by(builder.where_fields) or entity_short(builder)), entity, lines, 'entity'
+        name_ = 'find' + pascal_field(field) + by(builder.where_fields)
+        lines = query(f'SELECT d.{field} FROM {entity} d' + tail) + [f'    List<{typ}> {name_}Rows({params});']
+        return name_, typ, lines + single(typ, name_, builder), 'value'
+    name_ = 'find' + (by(builder.where_fields) or entity_short(builder))
+    lines = query(f'SELECT d FROM {entity} d' + tail) + [f'    List<{entity}> {name_}Rows({params});']
+    return name_, entity, lines + single(entity, name_, builder), 'entity'
 
 
 def pascal_field(field: str) -> str:
@@ -801,7 +808,7 @@ def entity_short(builder: Builder) -> str:
 
 
 def write_method(builder: Builder, found: Found, sequences: dict) -> tuple[str, str, list[str], str, str]:
-    """(name, return type, body lines, NOTES kind, parameters) of an INSERT / UPDATE / DELETE."""
+    """(name, return type, member lines, NOTES kind, parameters) of an INSERT / UPDATE / DELETE."""
     statement, entity = builder.statement, builder.entity
     if statement['op'] == 'insert':
         fields = []
@@ -811,9 +818,9 @@ def write_method(builder: Builder, found: Found, sequences: dict) -> tuple[str, 
                 raise Refused('az INSERT oszloplistájában nem oszlop áll')
             fields.append(field)
         missing = sorted(set(builder.columns.values()) - set(fields))
-        if missing:
-            raise Refused('az INSERT nem ad értéket minden oszlopnak (' + ', '.join(missing) + '): az Oracle a kihagyottakba az '
-                          'alapértéküket írná, az entity nem ismeri őket')
+        if missing or builder.unmapped:
+            raise Refused('az INSERT nem ad értéket minden oszlopnak (' + ', '.join(missing or sorted(builder.unmapped))
+                          + '): az Oracle a kihagyottakba az alapértéküket írná, a Domain nem ismeri őket')
         if len(set(fields)) != len(fields):
             raise Refused('az INSERT egy oszlopot többször ír')
         sets = []
@@ -828,13 +835,20 @@ def write_method(builder: Builder, found: Found, sequences: dict) -> tuple[str, 
                 sets.append(f'        {setter}({sequences.setdefault(value["sequence"], sequence_name(value["sequence"]))}());')
                 continue
             sets.append(f'        {setter}({plain_value(builder, value, typ, field)});')
-        params = ', '.join(f'{typ} {java}' for source, java, typ in builder.params if source != 'SYSDATE')
-        lines = []
+        params = builder.plain_params()
+        key = builder.d.get('primary_key') or []
+        key_args = ', '.join('entity.get' + pascal_field(k) + '()' for k in key)
+        exists = (key_args if len(key) == 1 else f'new {entity}.Key({key_args})') if key else ''
+        name_ = 'insert' + entity_short(builder)
+        lines = [f'    default void {name_}({params}) {{']
         if builder.uses_now:
             lines.append('        LocalDateTime now = LocalDateTime.now().withNano(0);  // Oracle SYSDATE: másodpercre')
-        lines += [f'        {entity} entity = new {entity}();'] + sets + ['        entityManager.persist(entity);']
-        return 'insert' + entity_short(builder), 'void', lines, 'insert', params
-    root = f'        Root<{entity}> root = {"update" if statement["op"] == "update" else "delete"}.from({entity}.class);'
+        lines += [f'        {entity} entity = new {entity}();'] + sets
+        if exists:
+            # save() of an existing key would update that row: DUP_VAL_ON_INDEX, like the INSERT
+            lines += [f'        if (existsById({exists})) {{', '            throw new EntityExistsException("DUP_VAL_ON_INDEX");', '        }']
+        lines += ['        saveAndFlush(entity);', '    }']
+        return name_, 'void', lines, 'insert', params
     if statement['op'] == 'update':
         assignments, set_fields = [], []
         for column, value in statement['sets']:
@@ -844,25 +858,22 @@ def write_method(builder: Builder, found: Found, sequences: dict) -> tuple[str, 
             typ = builder.types[field]
             set_fields.append(field)
             if value['op'] == 'literal' and value['type'] == 'null':
-                assignments.append(f'        update.set(root.<{typ}>get({jstr(field)}), cb.nullLiteral({typ}.class));')
+                assignments.append(f'd.{field} = NULL')
                 continue
             if value['op'] == 'nextval':
                 raise Refused('szekvencia az UPDATE-ben')
             expression, vt = builder.expression(value, typ, field)
             if vt != typ:
                 raise Refused('eltérő típusú érték (' + vt + ' → ' + typ + ')')
-            assignments.append(f'        update.set(root.<{typ}>get({jstr(field)}), {expression});')
+            assignments.append(f'd.{field} = {expression}')
         where = builder.where()
-        lines = builder.head(f'        CriteriaUpdate<{entity}> update = cb.createCriteriaUpdate({entity}.class);', root)
-        lines += assignments + ([f'        update.where({where});'] if where else [])
-        lines += ['        return entityManager.createQuery(update)'] + builder.binds() + ['                .executeUpdate();']
         name_ = 'update' + 'And'.join(pascal_field(f) for f in set_fields[:3]) + ('Etc' if len(set_fields) > 3 else '') + by(builder.where_fields)
-        return name_, 'int', lines, 'update', builder.signature_params()
+        lines = query(f'UPDATE {entity} d SET ' + ', '.join(assignments) + (' WHERE ' + where if where else ''), modifying=True)
+        return name_, 'int', lines + [f'    int {name_}({builder.signature_params()});'], 'update', builder.plain_params()
     where = builder.where()
-    lines = builder.head(f'        CriteriaDelete<{entity}> delete = cb.createCriteriaDelete({entity}.class);', root)
-    lines += ([f'        delete.where({where});'] if where else [])
-    lines += ['        return entityManager.createQuery(delete)'] + builder.binds() + ['                .executeUpdate();']
-    return 'delete' + (by(builder.where_fields) or 'All'), 'int', lines, 'delete', builder.signature_params()
+    name_ = 'delete' + (by(builder.where_fields) or 'All')
+    lines = query(f'DELETE FROM {entity} d' + (' WHERE ' + where if where else ''), modifying=True)
+    return name_, 'int', lines + [f'    int {name_}({builder.signature_params()});'], 'delete', builder.plain_params()
 
 
 def plain_value(builder: Builder, node: dict, typ: str, field: str) -> str:
@@ -901,12 +912,11 @@ def sequence_name(sequence: str) -> str:
 
 
 def sequence_method(sequence: str) -> tuple[str, str]:
+    """The sequence's next value: the one native query (jpa_crud writes the same method for a block's key)."""
     method = sequence_name(sequence)
     lines = comment(['Forms-SQL: SELECT ' + sequence + '.NEXTVAL FROM DUAL', NOTES['sequence'][0][:1].upper() + NOTES['sequence'][0][1:] + '.'])
-    lines += [f'    public BigDecimal {method}() {{',
-              f'        Object value = entityManager.createNativeQuery("SELECT {sequence}.NEXTVAL FROM DUAL").getSingleResult();',
-              '        return value instanceof BigDecimal ? (BigDecimal) value : new BigDecimal(value.toString());',
-              '    }']
+    lines += [f'    @Query(value = {jstr("SELECT " + sequence + ".NEXTVAL FROM DUAL")}, nativeQuery = true)',
+              f'    BigDecimal {method}();']
     return method, '\n'.join(lines)
 
 
@@ -948,17 +958,15 @@ def translate(found: Found, persistence: list[dict], host: dict | None) -> list[
     sequences = {}
     if tree['op'] == 'select':
         method, returns, lines, kind = select_method(builder, found)
-        params = builder.signature_params()
     else:
-        method, returns, lines, kind, params = write_method(builder, found, sequences)
+        method, returns, lines, kind, _ = write_method(builder, found, sequences)
     note = NOTES[kind][0]
-    arguments = tuple(source for source, _, _ in builder.params if source != 'SYSDATE')
+    arguments = tuple(source for source, _, _ in builder.params)
     columns = (tuple((field, builder.types[field]) for field in (builder.column_field(i) for i in tree['items']))
                if kind == 'entity' and tree['op'] == 'select' and all(i['op'] == 'name' for i in tree['items']) else ())
     head = comment(['Forms-SQL: ' + statement_text, note[:1].upper() + note[1:] + '.'])
-    lines = [part for line in lines for part in wrapped(line)]
-    source = '\n'.join(head + [f'    public {returns} {method}({params}) {{'] + lines + ['    }'])
-    result = [(descriptor, method, f'{returns} {method}({params})', source, statement_text, kind, arguments, columns)]
+    source = '\n'.join(head + lines)
+    result = [(descriptor, method, f'{returns} {method}({builder.plain_params()})', source, statement_text, kind, arguments, columns)]
     for sequence in sequences:
         name_, text = sequence_method(sequence)
         result.append((descriptor, name_, f'BigDecimal {name_}()', text, 'SELECT ' + sequence + '.NEXTVAL FROM DUAL', 'sequence',
@@ -1019,7 +1027,7 @@ def attach(packet: dict, persistence: list[dict], own_table: str | None = None) 
             for descriptor, method, signature, source, statement, kind, arguments, columns in parts:
                 final, new = place(descriptor, method, source)
                 if final != method:
-                    source = re.sub(r'\b' + re.escape(method) + r'\(', final + '(', source, count=1)
+                    source = renamed(source, method, final)
                     signature = signature.replace(' ' + method + '(', ' ' + final + '(')
                 if new:
                     repository_path = 'backend/DPS/' + descriptor['repository'] + '.java'
@@ -1052,23 +1060,36 @@ def statement_key(text: str) -> str:
     return one_line(text).upper()
 
 
+def renamed(source: str, method: str, final: str) -> str:
+    """A generated method under another name: its helper members too (<name>Rows, <name>Value)."""
+    return re.sub(r'\b' + re.escape(method) + r'(Rows|Value)?\(', lambda m: final + (m.group(1) or '') + '(', source)
+
+
+def members(source: str) -> dict[str, list[str]]:
+    """Name -> the member texts (whitespace-normalized, comments left out) of a repository or of a generated method."""
+    from .java_scan import methods_by_name
+    return methods_by_name(re.sub(r'/\*[\s\S]*?\*/|//[^\n]*', '', source))
+
+
 def place(descriptor: dict, method: str, source: str) -> tuple[str, bool]:
     """The method's name in the repository and whether it is new: the same method already there is reused."""
-    from .java_scan import methods_by_name
-    existing = methods_by_name(descriptor['existing_repository'])  # name -> the methods' text, whitespace-normalized
-    normal = ' '.join(source.split('*/', 1)[-1].split())
+    existing = members(descriptor['existing_repository'])
     candidate, counter = method, 2
-    while candidate in existing:
-        body = re.sub(r'\b' + re.escape(method) + r'\(', candidate + '(', normal, count=1)
-        if body in existing[candidate]:
+    while True:
+        own = members(renamed(source, method, candidate))
+        if all(name in existing and texts[0] in existing[name] for name, texts in own.items()):
             return candidate, False
+        if not set(own) & set(existing):
+            return candidate, True
         candidate, counter = method + str(counter), counter + 1
-    return candidate, True
 
 
-# The JDK names of the generated methods (the JPA ones: jpa_assistant.persistence_imports).
+# The JDK and Spring Data names of the generated methods (the JPA ones: jpa_assistant.persistence_imports).
 JDK_IMPORTS = {'BigDecimal': 'java.math.BigDecimal', 'LocalDateTime': 'java.time.LocalDateTime',
-               'OffsetDateTime': 'java.time.OffsetDateTime', 'List': 'java.util.List'}
+               'OffsetDateTime': 'java.time.OffsetDateTime', 'List': 'java.util.List', 'Optional': 'java.util.Optional',
+               'Query': 'org.springframework.data.jpa.repository.Query',
+               'Modifying': 'org.springframework.data.jpa.repository.Modifying',
+               'Param': 'org.springframework.data.repository.query.Param'}
 
 
 def with_imports(source: str, namespace: str) -> str:

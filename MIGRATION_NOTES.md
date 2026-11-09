@@ -101,6 +101,47 @@
   - *Rövid kommentek.* A metódusok fölött egy segítő sor (tiltott műveletnél még egy: az ok); a „Triggerek: …”,
     „SQL és triggerkód: … backend-evidence.md”, a nem generált végpontok listája és a többi státuszsor a riportokban
     van (analysis/backend-plan.json, backend-evidence.md). A replika-űrlap DPS-e 1029 sorról 967-re rövidült.
+- **Adatbázis-hozzáférés a cég mintájára: Domain + `JpaRepository`, `@Query`; a ServiceImpl-ben nincs SQL és JDBC.**
+  (`backend_trigger_mode: "ai"`.)
+  - *Táblánként egy Domain és egy Repository, táblanévvel:* `RENDELES_TETEL` → `RendelesTetelDomain` (`@Entity`) és
+    `public interface RendelesTetelRepository extends JpaRepository<RendelesTetelDomain, BigDecimal>`. A ServiceImpl
+    `@Autowired` mezőn hívja. Ugyanannak a táblának a blokkjai közösen használják, mindegyik a saját lekérdező
+    metódusával (`frm_forms/jpa_crud.py`).
+  - *A blokk lekérdezése JPQL `@Query`:* a DEFAULT_WHERE és az ORDER BY ugyanabból az elemzésből JPQL-re fordul
+    (a Domain mezőivel, a Forms-bindek nevesített paraméterek). Ami JPQL-ben nem írható le (Oracle-függvény, a blokk
+    által nem használt oszlop), az az eredeti szöveggel natív `@Query`. A lapozás `Slice` + `PageRequest`
+    (`hasNext` = maradt-e ki sor).
+  - *Zárolás és írás:* módosítás és törlés előtt `@Lock(PESSIMISTIC_WRITE)` 0 várakozással (Forms `FOR UPDATE NOWAIT`,
+    továbbra is 409). Az írás a Domain mentése és törlése (`saveAndFlush`, `delete`). Új rekordnál a létező kulcs
+    409, mert a `save` felülírná. A szekvenciás kulcs natív `NEXTVAL`.
+  - *Kulcs nélküli tábla:* nem kap Domain-t, a blokk nem kap adatvégpontot (`NO_PRIMARY_KEY`). Nincs ROWID-pótlás:
+    a schema.json-ban kell megadni a kulcsot (nézetnél egy egyedi oszlopot).
+  - *LOV:* a rekordcsoport lekérdezése natív `@Query` a modul egy repositoryjában (a FROM táblájáé, különben a blokké),
+    `List<Object[]>` eredménnyel. A képernyő továbbra is oszlopnév szerint kapja a sorokat: a nevek a lekérdezés
+    select-listájából jönnek. Adatbázisblokk nélküli modulban nincs repository: a LOV 501-et ad, és megmondja, miért.
+  - *Java asszisztens:* a trigger SQL-jéből generált metódusok is `@Query` metódusok ugyanebben a repositoryban: JPQL,
+    `@Modifying` az UPDATE/DELETE-hez, `default` metódus a SELECT INTO-hoz (NO_DATA_FOUND / TOO_MANY_ROWS) és az
+    INSERT-hez. A modell is `@Query` metódust ír, `EntityManager` nélkül. A `findById` / `save` / `delete` a
+    `JpaRepository` része, ezeket nem kell megírni. A lekérdező gomb egy `@Query` metódus, amely minden feltételt
+    tartalmaz, paraméterrel kapcsolva (`(:szuro = FALSE OR d.kod = :kod)`).
+  - *Telepítés:* ha a projektben már van ugyanilyen nevű Domain vagy Repository, a migrátor azt használja. A sajátját
+    nem másolja be, a modul fájljai a meglévőt importálják; a getter/setter-neveknek egyezniük kell.
+  - *Adatbázis-rutinok:* a Forms-kód által hívott tárolt eljárások és függvények a modul rutin-osztályába kerülnek
+    (`<Modul>DbRoutines`, `@Repository`), a service `@Autowired` mezőn hívja őket. A hívás JDBC CallableStatement
+    (`DbCalls`), így az OUT és IN OUT paraméter, valamint az adatbázisba író függvény is úgy fut, mint a PL/SQL-ben.
+    A service-ben nincs JDBC. Ha a modell előtag nélkül hívja a rutint, a migrátor helyben javítja.
+  - *Beállítás:* `jpa_namespace` (`javax` vagy `jakarta`), a JPA-annotációk csomagja. `CommonMigrateTools.VERSION` = 7:
+    a `LovQuery` JDBC nélküli segédeket kapott. AI-módban a projekt CommonMigrateTools-a nem tartalmazza a régi módok
+    részeit (`FormsPlsql`, a PL/SQL-kimenetek olvasása, a JDBC-s `LovQuery.rows`); a `DbCalls` a rutin-osztályé.
+  - *A régi `plsql` / `java` mód* megmaradt, de nem ajánlott: a felületen nem választható, csak a configban vagy a
+    `FRM_BACKEND_TRIGGER_MODE` változóval.
+- **A Forms-paraméter az URL-ből jön, nincs `@Input` a képernyőn.** A generált képernyő eddig
+  `@Input() migrationParameters`-t kapott, „a szülő komponens adja át” megjegyzéssel. A képernyő viszont útvonalon
+  nyílik, nincs szülője, a migrátor saját navigációja (CALL_FORM / OPEN_FORM / NEW_FORM) pedig `queryParams`-ban küldi
+  a paramétereket. Most a `:PARAMETER.<név>` a kérésben alapból `this.migrationParameter('<név>')`: a `ServiceBase`
+  routeréből olvasott URL-paraméter, kis- és nagybetűtől függetlenül, ahogy Formsban. A bekötési panel
+  „Modulparaméter” forrása „URL-paraméter” lett. A `migrationParameter` és a `migrationInputText` segédmetódus csak
+  akkor kerül a fájlba, ha egy kérés használja, és a bekötések mentése hozzáadja vagy kiveszi őket.
 - **Frontend AI-átírás (opcionális).** A generált képernyő elküldhető a helyi modellnek: standalone komponens,
   signalok az állapotra (`signal`, `computed`, `input()`, `output()`), olvasható, magyarul kommentezett kód,
   ugyanazzal a működéssel (HTTP-hívások, metódusnevek, lépések). Bekapcsolni a Java asszisztens fül új paneljén vagy

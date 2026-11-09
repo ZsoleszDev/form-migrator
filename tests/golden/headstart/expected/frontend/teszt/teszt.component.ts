@@ -1,5 +1,5 @@
 // CREATE_ONCE: szerkeszthető képernyő. Migrációs részletek: MIGRATION_NOTES.md.
-import { Component, Input, inject } from '@angular/core';
+import { Component, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { FormGroup } from '@angular/forms';
 import { EMPTY, catchError, tap } from 'rxjs';
@@ -22,9 +22,6 @@ export class TesztComponent extends ServiceBase {
   protected readonly toast = inject(ToastService);
   protected readonly toastLife = { success: 3000, warning: 8000, danger: 6000 };
   private readonly http = inject(HttpClient);
-
-  // A szülő komponens adja át: [migrationParameters]="{ kod: value }". Nem jogosultsági kontextus.
-  @Input() migrationParameters: Readonly<Record<string, string | null>> = {};
 
   // A FormBlock-régiók FormGroupjai (onFormGroupGenerated).
   protected readonly forms: Record<string, FormGroup> = {};
@@ -122,20 +119,5 @@ export class TesztComponent extends ServiceBase {
     if (res?.hasMore) {
       this.toast.warning('Lekérdezés', block + ': több rekord van, mint amennyi megjelent; szűkítsd a feltételt.', false, this.toastLife.warning);
     }
-  }
-
-  // Forms szöveges kérésérték: a dátum helyi idő, nincs UTC-eltolás.
-  protected migrationInputText(value: unknown, checked?: string, unchecked?: string): string | null {
-    if (value === null || value === undefined) { return null; }
-    if (typeof value === 'boolean' && checked !== undefined) { return value ? checked : unchecked ?? null; }
-    if (value instanceof Date) {
-      if (Number.isNaN(value.getTime())) { throw new Error('Érvénytelen dátum'); }
-      const pad = (part: number) => String(part).padStart(2, '0');
-      return String(value.getFullYear()).padStart(4, '0') + '-' + pad(value.getMonth() + 1) + '-' + pad(value.getDate())
-        + 'T' + pad(value.getHours()) + ':' + pad(value.getMinutes()) + ':' + pad(value.getSeconds())
-        + '.' + String(value.getMilliseconds()).padStart(3, '0');
-    }
-    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') { return String(value); }
-    throw new Error('A bemenethez skalár érték szükséges');
   }
 }

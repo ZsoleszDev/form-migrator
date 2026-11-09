@@ -58,10 +58,10 @@ class RoutinePlanTests(unittest.TestCase):
         # by name: the omitted P_FORCE keeps its database default
         self.assertIn('"BEGIN PKG.LOAD(P_ID => ?, P_NEV => ?, P_DATUM => ?); END;"', named['source'])
         self.assertIn('DbCalls.inOut(pDatum, Types.TIMESTAMP)', named['source'])
-        self.assertEqual(named['header'], 'private PkgLoadOut pkgLoad(BigDecimal pId, LocalDateTime pDatum)')
-        self.assertIn('static final class PkgLoadOut', named['source'])
+        self.assertEqual(named['header'], 'public PkgLoadOut pkgLoad(BigDecimal pId, LocalDateTime pDatum)')  # of the routine class
+        self.assertIn('public static final class PkgLoadOut', named['source'])
         self.assertIn('"{call PKG.LOAD(?, ?, ?, ?)}"', positional['source'])
-        self.assertEqual(positional['header'], 'private PkgLoad2Out pkgLoad2(BigDecimal pId, LocalDateTime pDatum, String pForce)')
+        self.assertEqual(positional['header'], 'public PkgLoad2Out pkgLoad2(BigDecimal pId, LocalDateTime pDatum, String pForce)')
 
     def test_what_has_no_method_is_named_with_the_reason(self):
         signature = dict(SIGNATURE, arguments=SIGNATURE['arguments'][:2])
@@ -93,11 +93,11 @@ class RoutineAssistantTests(unittest.TestCase):
 
     def test_the_prompt_offers_the_routine_methods_and_names_the_rest(self):
         insert = engine.preview(self.output, self.tasks['triggerPreInsertB']['id'], engine.Options())['user']
-        self.assertIn('- String kodPkgCheckInsert(String pKod, LocalDateTime pDatum) = KOD_PKG.CHECK_INSERT(P_KOD, P_DATUM, '
-                      'OUT P_NEV): returns P_NEV', insert)
-        self.assertIn('call those methods (the only allowed PL/SQL calls)', insert)
+        self.assertIn('- String dbcallDbRoutines.kodPkgCheckInsert(String pKod, LocalDateTime pDatum) = '
+                      'KOD_PKG.CHECK_INSERT(P_KOD, P_DATUM, OUT P_NEV): returns P_NEV', insert)
+        self.assertIn("(on the service's routine field): call those (the only allowed PL/SQL calls)", insert)
         query = engine.preview(self.output, self.tasks['triggerPostQueryB']['id'], engine.Options())['user']
-        self.assertIn('- String kodPkgGetNev(String pKod) = KOD_PKG.GET_NEV(P_KOD)', query)
+        self.assertIn('- String dbcallDbRoutines.kodPkgGetNev(String pKod) = KOD_PKG.GET_NEV(P_KOD)', query)
         delete = engine.preview(self.output, self.tasks['triggerPreDeleteB']['id'], engine.Options())['user']
         self.assertIn('Called database routines without a method: UNDOCUMENTED_PKG.PURGE: no reviewed signature.', delete)
         self.assertNotIn('Database routine methods', delete)
@@ -116,15 +116,20 @@ private void triggerPreInsertB(BRow row, RuleContext context) {
         self.assertEqual(result['status'], 'proposal', result)
         engine.apply_proposal(self.output, result['id'], reviewed=True)
         service = (self.output / SERVICE).read_text(encoding='utf-8')
-        self.assertIn('row.nev = kodPkgCheckInsert(row.kod, row.datum);', method_text(service, 'triggerPreInsertB'))
-        routine = re.sub(r'"\s*\+\s*"', '', method_text(service, 'kodPkgCheckInsert'))  # the formatter wraps long literals
+        # the model's bare call goes to the routine class's field; the service has no JDBC
+        self.assertIn('row.nev = dbcallDbRoutines.kodPkgCheckInsert(row.kod, row.datum);', method_text(service, 'triggerPreInsertB'))
+        self.assertIn('private DbcallDbRoutines dbcallDbRoutines;', service)
+        self.assertNotIn('kodPkgCheckInsert(String', service)
+        routines = (self.output / 'backend/DPS/DbcallDbRoutines.java').read_text(encoding='utf-8')
+        routine = re.sub(r'"\s*\+\s*"', '', method_text(routines, 'kodPkgCheckInsert'))  # the formatter wraps long literals
         self.assertIn('DbCalls.call(jdbc, "{call KOD_PKG.CHECK_INSERT(?, ?, ?)}"', routine)
-        self.assertEqual(service.count('private String kodPkgCheckInsert('), 1)
+        self.assertIn('@Repository\npublic class DbcallDbRoutines {', routines)
+        self.assertEqual(routines.count('public String kodPkgCheckInsert('), 1)
         if shutil.which('java'):
             work = self.root / 'compile'
             compile_module(self, self.output, work)
 
-    def test_an_action_only_module_gets_the_jdbc_template_with_its_first_routine(self):
+    def test_an_action_only_module_gets_the_routine_class_with_its_first_routine(self):
         form = self.root / 'nevkeres.xml'
         form.write_text(ACTION_ONLY, encoding='utf-8')
         schema = self.root / 'procedures.json'
@@ -153,8 +158,12 @@ public ActionResult onCtrlBtn(UserDto user, ActionRequest request) throws Except
         self.assertEqual(result['status'], 'proposal', result)
         engine.apply_proposal(output, result['id'], reviewed=True)
         service = service_path.read_text(encoding='utf-8')
-        self.assertIn('private NamedParameterJdbcTemplate jdbc;', service)
-        self.assertIn('private String kodPkgGetNev(String pKod) {', service)
+        self.assertNotIn('NamedParameterJdbcTemplate', service)  # the JDBC is the routine class's
+        self.assertIn('private NevkeresDbRoutines nevkeresDbRoutines;', service)
+        self.assertIn('String nev = nevkeresDbRoutines.kodPkgGetNev(request.blocks().get("CTRL").get("KOD"));', service)
+        routines = (output / 'backend/DPS/NevkeresDbRoutines.java').read_text(encoding='utf-8')
+        self.assertIn('public String kodPkgGetNev(String pKod) {', routines)
+        self.assertIn('private final NamedParameterJdbcTemplate jdbc;', routines)
         if shutil.which('java'):
             compile_module(self, output, self.root / 'compile-nevkeres')
 

@@ -629,12 +629,30 @@ def common_tools_package(config) -> str:
     return config.get('common_migrate_tools_package') or config['java_package'] + '.cl'
 
 
+LEGACY = re.compile(r'^[ \t]*// frm:legacy-begin[^\n]*\n.*?^[ \t]*// frm:legacy-end\n', re.S | re.M)
+LEGACY_MARKS = re.compile(r'^[ \t]*// frm:legacy-(?:begin|end)[^\n]*\n', re.M)
+
+
+def common_tools_source(config) -> str:
+    """The CommonMigrateTools of the project's mode: backend_trigger_mode=ai leaves out what only the old plsql/java modes
+    use (the PL/SQL emulation, its output buffers, the JDBC LOV query); the same file for every module either way."""
+    text = (Path(__file__).with_name('templates') / 'CommonMigrateTools.java.tpl').read_text(encoding='utf-8')
+    if config.get('backend_trigger_mode', 'ai') == 'ai':
+        text = LEGACY.sub('', text)
+        body = text[text.index('public final class'):]
+        # an import only the left-out parts used (MapSqlParameterSource of the JDBC LOV query)
+        text = re.sub(r'^import [\w.]+\.(\w+);\n', lambda m: m[0] if re.search(r'\b' + m[1] + r'\b', body) else '', text, flags=re.M)
+    else:
+        text = LEGACY_MARKS.sub('', text)
+    # the seams of the left-out parts: no blank line before a closing brace, never two blank lines
+    text = re.sub(r'\n{3,}', '\n\n', re.sub(r'\n\n+([ \t]*\}\n)', r'\n\1', text))
+    return text.replace('@@PACKAGE@@', common_tools_package(config))
+
+
 def write_common_tools(output: Path, config) -> str:
     """CommonMigrateTools (CL): one helper file for every module of the project; identical each time."""
-    package = common_tools_package(config)
-    text = (Path(__file__).with_name('templates') / 'CommonMigrateTools.java.tpl').read_text(encoding='utf-8')
-    write(output / 'backend' / 'CL' / 'CommonMigrateTools.java', text.replace('@@PACKAGE@@', package))
-    return package
+    write(output / 'backend' / 'CL' / 'CommonMigrateTools.java', common_tools_source(config))
+    return common_tools_package(config)
 
 
 def value_class(declaration, fields, extra_constructors=()):
@@ -900,10 +918,26 @@ public class {cls}ControllerImpl extends {controller_base} implements {cls}Contr
     support, operation_bodies = [], {}
     from .service_inline import inline_block
     vals = {b['name']: block_values(model, b) for b in blocks}
+    # backend_trigger_mode=ai: the blocks' data access is Spring Data JPA (jpa_crud), a Domain and a Repository per table.
+    from . import jpa_crud
+    tables = jpa_crud.plan(blocks) if blocks and jpa_crud.ai_mode(model) else {}
     for b in blocks:
         # Only the internals of generated endpoints: no create() for InsertAllowed=false.
         sections = set().union(*(OPERATION_SECTIONS[op] for op in OPERATION_SECTIONS if b['endpoint_plan'].get(op)))
-        source = template('CompactBlock.java.tpl', {**vals[b['name']], 'RULE_METHODS': rule_methods(model, b)}, config, sections)
+        if tables:
+            entry = tables[b['table'].upper()]
+            reads = b['endpoint_plan'].get('list') or b['endpoint_plan'].get('search')
+            query = jpa_crud.block_query(b, entry) if reads else None
+            if query:
+                entry['queries'].append(query)
+            values = {**vals[b['name']], **jpa_crud.block_values(b, entry, query), 'SEARCH_METHOD': ''}
+            if query and query['search']:
+                from .generate import check_lines
+                checks = '\n'.join('            ' + line for line in check_lines((v['item'], 'criteria.' + v['field']) for v in query['binds']))
+                values['SEARCH_METHOD'] = jpa_crud.search_method(b, query, checks, entry['variable'])
+            source = template('CompactBlockJpa.java.tpl', {**values, 'RULE_METHODS': rule_methods(model, b)}, config, sections)
+        else:
+            source = template('CompactBlock.java.tpl', {**vals[b['name']], 'RULE_METHODS': rule_methods(model, b)}, config, sections)
         bodies, helpers = inline_block(source, b, b['endpoint_plan'])
         operation_bodies[b['name']] = bodies
         support.append(helpers)
@@ -917,7 +951,14 @@ public class {cls}ControllerImpl extends {controller_base} implements {cls}Contr
     public {o['returns']} {o['method']}({user_type} user, {o['args']}) throws Exception {{
         {log1x(o, '() -> client.' + o['method'] + '(' + o['call'] + ')')}
     }}''')
-        if o['op'] == 'lov':
+        if o['op'] == 'lov' and jpa_crud.ai_mode(model):
+            # The record group's query is a native @Query of a repository (jpa_lov): no JDBC in the service.
+            from . import jpa_lov
+            entry = jpa_lov.prepare(o['lov'], tables, blocks)
+            dps_methods.append(jpa_lov.service_method(o['lov'], comment_lines, log1x(o, '() -> {'), user_type, o['method'],
+                                                      entry['variable'] if entry else None))
+            evidence.append((o['method'], '\n'.join(lov_evidence(o['lov'], gated))))
+        elif o['op'] == 'lov':
             dps_methods.append(lov_method(o['lov'], gated, comment_lines, log1x(o, '() -> {'), user_type, o['method']))
             evidence.append((o['method'], '\n'.join(lov_evidence(o['lov'], gated))))
         elif o['op'] == 'action' and o.get('ai'):
@@ -981,10 +1022,14 @@ public class {cls}ControllerImpl extends {controller_base} implements {cls}Contr
     write(output/'analysis/backend-evidence.md', '# Backend-bizonyíték\n\nA DPS ServiceImpl metódusai mögötti eredeti Forms SQL és PL/SQL, '
                                                  'és a generált SQL. A kódban csak rövid összefoglaló áll; a részletek itt vannak.\n\n'
           + ''.join('## ' + method + '\n\n```text\n' + text.strip() + '\n```\n\n' for method, text in evidence))
-    dps_fields = []
-    dps_fields += ['    private final NamedParameterJdbcTemplate jdbc;'] if blocks or lovs or runnable_actions else []
-    ctor_args = 'NamedParameterJdbcTemplate jdbc' if blocks or lovs or runnable_actions else ''
-    ctor_body = '\n'.join(['        this.jdbc = Objects.requireNonNull(jdbc);'] if blocks or lovs or runnable_actions else [])
+    # JPA blocks: the repositories, @Autowired like the company services; JDBC only for what still runs SQL itself.
+    jdbc = bool(((blocks or lovs) and not jpa_crud.ai_mode(model)) or runnable_actions)
+    if tables:
+        jpa_crud.write_files(tables, output, layer_package(config, package, 'DPS'), config.get('jpa_namespace') or 'javax')
+    dps_fields = jpa_crud.service_fields(tables)
+    dps_fields += ['    private final NamedParameterJdbcTemplate jdbc;'] if jdbc else []
+    ctor_args = 'NamedParameterJdbcTemplate jdbc' if jdbc else ''
+    ctor_body = '\n'.join(['        this.jdbc = Objects.requireNonNull(jdbc);'] if jdbc else [])
     # SqlValues, RuleContext, DbCalls, PlsqlValues, LovQuery, FormsChecks, FormsErrors: nested classes of the
     # one CL helper file CommonMigrateTools, shared by every module - not copied into each ServiceImpl.
     tools_package = write_common_tools(output, config)
@@ -1043,15 +1088,19 @@ import org.springframework.transaction.annotation.Transactional;
                                                                    f'backend/DPS/{cls}ServiceImpl.java')
     dps_imports += variable_imports
     variable_fields += '\n' if variable_fields else ''
-    emit('DPS', 'ServiceImpl', f'''/** CREATE_ONCE: --regenerate preserves this file. SQL/PLSQL and private helpers are kept here; no domain/repository layer. */
+    constructor = f'''
+    public {cls}ServiceImpl({ctor_args}) {{
+{ctor_body}
+    }}
+''' if ctor_args else ''
+    header = ('CREATE_ONCE: --regenerate preserves this file. The data access is in the repositories (Spring Data JPA).'
+              if tables else 'CREATE_ONCE: --regenerate preserves this file. SQL/PLSQL and private helpers are kept here; no domain/repository layer.')
+    emit('DPS', 'ServiceImpl', f'''/** {header} */
 @XSlf4j
 @Service
 public class {cls}ServiceImpl extends {service_base} implements {cls}Service {{
 {variable_fields}{module_header(model, cls)}{chr(10).join(dps_fields)}
-
-    public {cls}ServiceImpl({ctor_args}) {{
-{ctor_body}
-    }}
+{constructor}
 
 {(chr(10) + chr(10)).join(dps_methods)}
 

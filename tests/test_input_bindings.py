@@ -53,8 +53,14 @@ class BindingTests(unittest.TestCase):
         sheet, _ = self.mapping()
         self.assertFalse(sheet['file_changed'])
         rows = {r['source']: r for r in sheet['rows']}
-        for source in ('GLOBAL.FILTER', 'PARAMETER.NAME', 'HIDDEN.ID'):
+        for source in ('GLOBAL.FILTER', 'HIDDEN.ID'):
             self.assertEqual(rows[source]['status'], 'missing')
+        # Forms :PARAMETER.NAME: the query parameter the opening navigation sends, no parent component
+        self.assertEqual(rows['PARAMETER.NAME']['status'], 'connected')
+        self.assertEqual(rows['PARAMETER.NAME']['expression'], "this.migrationParameter('NAME')")
+        source = (self.output / sheet['target']).read_text()
+        self.assertNotIn('@Input', source)
+        self.assertIn(bindings.HELPERS['migrationParameter'], source)
         self.assertEqual(rows['CTRL.ID']['status'], 'connected')
         self.assertNotIn('HIDDEN.ID', [s['owner'] for s in sheet['sources']])
 
@@ -63,10 +69,11 @@ class BindingTests(unittest.TestCase):
         saved = bindings.save(self.output, config, sheet['revision'])
         rows = {r['source']: r for r in saved['rows']}
         self.assertEqual(rows['GLOBAL.FILTER']['status'], 'connected')
-        self.assertEqual(rows['PARAMETER.NAME']['status'], 'host_required')
+        self.assertEqual(rows['PARAMETER.NAME']['status'], 'connected')
         self.assertEqual(rows['HIDDEN.ID']['status'], 'manual')
         source = (self.output / saved['target']).read_text()
-        self.assertIn("this.migrationParameters['customerName'] ?? null", source)
+        self.assertIn("this.migrationParameter('customerName')", source)
+        self.assertEqual(source.count('protected migrationParameter('), 1)
         self.assertIn(bindings.marked(rows['GLOBAL.FILTER']['id'], rows['GLOBAL.FILTER']['expression']), source)
         exported = self.root / 'config.json'; exported.write_text(json.dumps({bindings.CONFIG: config}))
         self.generate(self.root / 'again', exported)
@@ -77,14 +84,16 @@ class BindingTests(unittest.TestCase):
     def test_generated_request_runs_in_node_and_preserves_string_values(self):
         if not shutil.which('node'): self.skipTest('Node required')
         sheet, config = self.mapping(); bindings.save(self.output, config, sheet['revision'])
-        members = [screen_method(self.output, name) for name in ('onRunClick', 'migrationInputText')]
+        members = [screen_method(self.output, name) for name in ('onRunClick', 'migrationInputText', 'migrationParameter')]
         self.assertNotIn(None, members)
         script = self.root / 'binding-request.ts'
         script.write_text('''import assert from 'node:assert/strict';
 const sent = [];
 class Screen {
   forms = {ctrl: {getRawValue() { return {id: '12345678901234567890.25', name: 'Ügyfél'}; }}};
-  migrationParameters = {customerName: 'Külső név'};
+  query = new Map<string, string>([['CUSTOMERNAME', 'Külső név']]);  // Forms names: any letter case
+  router = {routerState: {snapshot: {root: {queryParamMap: (query => ({
+    get keys() { return [...query.keys()]; }, get: (key: string) => query.get(key) ?? null}))(this.query)}}}};
   actionOnctrlrun(body: unknown) { sent.push(body); return {subscribe() {}}; }
 __MEMBERS__
 }
@@ -94,7 +103,7 @@ assert.deepEqual(sent[0], {blocks:{CTRL:{NAME:'Ügyfél',ID:'1234567890123456789
 assert.equal(screen.migrationInputText(true, 'I', 'N'), 'I');
 assert.equal(screen.migrationInputText(false, 'I', 'N'), 'N');
 assert.equal(screen.migrationInputText(new Date(2026, 0, 2, 3, 4, 5, 6)), '2026-01-02T03:04:05.006');
-delete screen.forms.ctrl; delete screen.migrationParameters.customerName;
+delete screen.forms.ctrl; screen.query.delete('CUSTOMERNAME');
 screen.onRunClick(); assert.equal(sent[1].blocks.CTRL.ID, null);
 assert.equal(sent[1].parameters['PARAMETER.NAME'], null);
 '''.replace('__MEMBERS__', '\n'.join(members)))

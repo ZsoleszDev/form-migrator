@@ -35,7 +35,7 @@
   </Block>
   <Block Name="RENDELES" DatabaseDataBlock="true" QueryDataSourceType="Table" QueryDataSourceName="RENDELES" RecordsDisplayCount="1"
          WhereClause="WHERE   (&amp;#10;RENDELES.STATUSZ IN ( SELECT KOD FROM STATUSZ_KODTAR )&amp;#10;)" OrderByClause="RENDELES.DATUM DESC">
-   <Item Name="ID" ItemType="Text Item" DataType="Number" ColumnName="ID" Prompt="Azonosító" CanvasName="C" XPosition="10" YPosition="80" Width="80" Height="20"/>
+   <Item Name="ID" ItemType="Text Item" DataType="Number" ColumnName="ID" PrimaryKey="true" Prompt="Azonosító" CanvasName="C" XPosition="10" YPosition="80" Width="80" Height="20"/>
    <Item Name="VEVO" ItemType="Text Item" DataType="Char" MaximumLength="30" ColumnName="VEVO" Prompt="Vevő" CanvasName="C" XPosition="100" YPosition="80" Width="100" Height="20">
     <Trigger Name="POST-CHANGE" TriggerText="BEGIN&amp;#10;  SELECT nev INTO :RENDELES.VEVO_NEV FROM vevo WHERE kod = :RENDELES.VEVO;&amp;#10;EXCEPTION&amp;#10;  WHEN NO_DATA_FOUND THEN :RENDELES.VEVO_NEV := NULL;&amp;#10;END;"/>
    </Item>

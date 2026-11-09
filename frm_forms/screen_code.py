@@ -27,7 +27,7 @@ CONTROL = {'text', 'textarea', 'password', 'display', 'number', 'date', 'datetim
 NAVIGATION_STEPS = {'goItem', 'nextRecord', 'previousRecord', 'firstRecord', 'lastRecord', 'nextBlock', 'previousBlock',
                     'nextItem', 'previousItem', 'listValues', 'enterQuery'}
 # Members of the component (and of ServiceBase) the endpoint methods must not shadow.
-RESERVED = {'migrationParameters', 'migrationInputText', 'constructor', 'url', 'http', 'toast', 'toastLife', 'labels', 'router', 'route', 'modName', 'forms', 'structures', 'onFormGroupGenerated',
+RESERVED = {'migrationParameter', 'migrationInputText', 'constructor', 'url', 'http', 'toast', 'toastLife', 'labels', 'router', 'route', 'modName', 'forms', 'structures', 'onFormGroupGenerated',
             'onRowAction', 'save', 'windowVisible', 'canvasVisible', 'activeContentCanvas', 'applyActionResult', 'migrationQuery',
             'migrationMoreRows', 'migrationLoaded', 'migrationChanges', 'migrationInvalid'}
 # Local names of a method: a region's values never take them.
@@ -213,10 +213,14 @@ class ScreenCode:
         return self.owner_value(block + '.' + items[key], body) if key in items else None
 
     def input_value(self, endpoint, owner, source, location, transport='string', *, automatic=True, inferred=False, timing='event'):
-        from .input_bindings import slot, selected_expression, marked
+        from .input_bindings import slot, selected_expression, marked, parameter_read
         choice = next((s for s in self.input_sources if s['owner'] == source), None)
-        default = (choice['text_expression'] if transport == 'string' else choice['expression']) if choice else \
-            sq(self.startup_globals[source]) if source in self.startup_globals else 'null'  # set by the start-up code
+        if choice:
+            default = choice['text_expression'] if transport == 'string' else choice['expression']
+        elif source in self.startup_globals:  # set by the start-up code
+            default = sq(self.startup_globals[source])
+        else:  # Forms :PARAMETER.X: what the opening navigation sent (form_calls: queryParams)
+            default = parameter_read(source.split('.', 1)[1]) if source.startswith('PARAMETER.') else 'null'
         row = slot(endpoint, owner, source, location, default, transport, automatic=automatic, inferred=inferred)
         row['timing'] = timing
         previous = self.input_rows.get(row['id'])
@@ -591,10 +595,6 @@ class ScreenCode:
             fields[-1] += '\n  private readonly http = inject(HttpClient);'
         if labels:
             fields.append('  protected readonly labels = ' + record(labels) + ';')
-        if self.input_rows:
-            self.core.add('Input')
-            fields.append('  // A szülő komponens adja át: [migrationParameters]="{ kod: value }". Nem jogosultsági kontextus.\n'
-                          '  @Input() migrationParameters: Readonly<Record<string, string | null>> = {};')
         fields.extend(tab_fields)
         if self.forms:
             self.angular_forms.add('FormGroup')
@@ -665,23 +665,6 @@ class ScreenCode:
     const changed = Object.keys(values).some(field => String(value[field] ?? '') !== String(original[field] ?? ''));
     return { inserted: [], updated: changed ? [{ original, value }] : [], deleted: [] };
   }''']
-
-    @staticmethod
-    def input_helper() -> str:
-        return """  // Forms szöveges kérésérték: a dátum helyi idő, nincs UTC-eltolás.
-  protected migrationInputText(value: unknown, checked?: string, unchecked?: string): string | null {
-    if (value === null || value === undefined) { return null; }
-    if (typeof value === 'boolean' && checked !== undefined) { return value ? checked : unchecked ?? null; }
-    if (value instanceof Date) {
-      if (Number.isNaN(value.getTime())) { throw new Error('Érvénytelen dátum'); }
-      const pad = (part: number) => String(part).padStart(2, '0');
-      return String(value.getFullYear()).padStart(4, '0') + '-' + pad(value.getMonth() + 1) + '-' + pad(value.getDate())
-        + 'T' + pad(value.getHours()) + ':' + pad(value.getMinutes()) + ':' + pad(value.getSeconds())
-        + '.' + String(value.getMilliseconds()).padStart(3, '0');
-    }
-    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') { return String(value); }
-    throw new Error('A bemenethez skalár érték szükséges');
-  }"""
 
     def form_group_method(self) -> str | None:
         if not self.forms:

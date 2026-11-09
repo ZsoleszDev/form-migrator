@@ -29,7 +29,9 @@ KNOWN = {name.rsplit('.', 1)[1]: name for name in (
     'org.springframework.web.client.RestClientResponseException',
     'org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate',
     'org.springframework.jdbc.core.namedparam.MapSqlParameterSource', 'org.springframework.jdbc.core.CallableStatementCallback',
-    'org.springframework.dao.DataAccessException', 'com.fasterxml.jackson.annotation.JsonFormat')}
+    'org.springframework.dao.DataAccessException', 'com.fasterxml.jackson.annotation.JsonFormat',
+    'org.springframework.data.domain.PageRequest', 'org.springframework.data.domain.Slice',
+    'org.springframework.data.domain.Pageable', 'java.util.Optional')}
 # Annotation-only names: imported only when used as @Name (the word alone may be anything).
 ANNOTATIONS = {name.rsplit('.', 1)[1]: name for name in (
     'org.springframework.stereotype.Service', 'org.springframework.transaction.annotation.Transactional',

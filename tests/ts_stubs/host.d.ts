@@ -33,7 +33,8 @@ declare module '@angular/forms' { import { Observable } from 'rxjs';
     getRawValue(): any; reset(v?: unknown, o?: unknown): void; get(name: string): AbstractControl | null; contains(name: string): boolean;
     valueChanges: Observable<unknown>; }
 }
-declare module '@angular/router' { export class Router { url: string; navigate(commands: unknown[], extras?: unknown): Promise<boolean>; } }
+declare module '@angular/router' { export class Router { url: string; navigate(commands: unknown[], extras?: unknown): Promise<boolean>;
+  routerState: { snapshot: { root: { queryParamMap: { keys: string[]; get(name: string): string | null } } } }; } }
 declare module '@angular/common/http' { import { Observable } from 'rxjs';
   export class HttpClient { get<T = unknown>(url: string, o?: unknown): Observable<T>; post<T = unknown>(url: string, body: unknown): Observable<T>;
     put<T = unknown>(url: string, body: unknown): Observable<T>; delete<T = unknown>(url: string, o?: unknown): Observable<T>; } }

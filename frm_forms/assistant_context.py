@@ -38,22 +38,24 @@ RULES = """Rules:
    Show an error to the user with throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "text").
 6. Do not create new classes and do not change other methods. Private helper methods are allowed."""
 
-JPA_RULE = ("Database access only through the repositories listed below. Write their new methods with the\n"
-            "   existing `entityManager` field: find/persist/merge/remove or the Criteria API. No SQL or JPQL\n"
-            "   strings, no JDBC, no PL/SQL calls; the only native query allowed is a sequence value:\n"
-            "   entityManager.createNativeQuery(\"SELECT SEQ_NAME.NEXTVAL FROM DUAL\").getSingleResult().\n"
-            "   The repository fields are already injected into the service.")
+JPA_RULE = ("Database access only through the repositories listed below. Each one is an interface extending\n"
+            "   JpaRepository<Domain, ID> (findById, save, delete are inherited). Write a new method without a body,\n"
+            "   with @Query: JPQL over the Domain (SELECT d FROM XDomain d WHERE d.field = :name, @Param(\"name\")), or\n"
+            "   for SQL that JPQL cannot express @Query(value = \"<the original SQL>\", nativeQuery = true); an UPDATE or\n"
+            "   DELETE also gets @Modifying. A default method may combine them. No EntityManager, no JDBC, no PL/SQL\n"
+            "   calls in the service. The repository fields are already injected into the service.")
 NO_TABLE_RULE = ("No database table is available to this method. If the logic needs database access (a table or\n"
                  "   a sequence), write MISSING: and name it.")
 # Every SQL statement of the code has a generated repository method (jpa_sql): the model writes the logic only.
 GENERATED_RULE = ("Database access only through the generated repository methods listed below: the code's SQL is\n"
-                  "   already written there. Do not write repository code, SQL, JPQL or EntityManager code. The repository\n"
-                  "   fields are already injected into the service.")
+                  "   already written there (@Query methods of the repository interfaces). Do not write repository\n"
+                  "   code, SQL or JPQL. The repository fields are already injected into the service.")
 PARTLY_GENERATED = ("\n   The generated repository methods listed below already run part of the SQL: call them. Write\n"
                     "   repository methods only for the SQL listed without one.")
 # The database routines the Forms code calls (db_routines): the migrator adds their typed methods to the service.
-ROUTINE_RULE = ("\n   The database routines of the Forms code run in Oracle through the generated methods listed below:\n"
-                "   call those methods (the only allowed PL/SQL calls); never re-implement or skip a routine.")
+ROUTINE_RULE = ("\n   The database routines of the Forms code run in Oracle through the generated methods listed below\n"
+                "   (on the service's routine field): call those (the only allowed PL/SQL calls); never re-implement\n"
+                "   or skip a routine.")
 JDBC_RULE = ("Database access: use the service's existing `jdbc` field (NamedParameterJdbcTemplate) with named,\n"
              "   bound parameters{jdbc_helpers}; never concatenate values into SQL.")
 PLSQL_VALUES = ("\n   Helpers: PlsqlValues.text(request.blocks(), \"BLOCK\", \"ITEM\"), PlsqlValues.number(...) returns\n"
@@ -71,9 +73,10 @@ OTHER_RESULT = """4. Keep the return type and the request type. Read the request
 QUERY_RESULT = """4. Screen values: request.blocks().get("BLOCK").get("ITEM") (a String or null); parameters:
    request.parameters().get("NAME"); paging: request.offset(), request.limit().
 5. This button queries the {block} block: build the filter (and the order) the Forms code builds with
-   SET_BLOCK_PROPERTY DEFAULT_WHERE / ORDER_BY, run it through a repository method (Criteria API with the same
-   conditions, bound values, never string concatenation), map every entity to a new {row_class} (its fields
-   are listed below) and return new PageResult<>(rows, messages). MESSAGE texts go to messages; an error:
+   SET_BLOCK_PROPERTY DEFAULT_WHERE / ORDER_BY, run it through one repository @Query method (JPQL over the
+   Domain) that holds every condition the code can add, each switched by a parameter, e.g.
+   (:withKod = FALSE OR d.kod = :kod); bound values, never string concatenation. Map every Domain to a new
+   {row_class} (its fields are listed below) and return new PageResult<>(rows, messages). MESSAGE texts go to messages; an error:
    throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "text")."""
 
 # A plain button (ActionResult): the shape of a body the migrator can insert as it is. Small local models copy a
@@ -158,12 +161,12 @@ ACTION_HINTS = [
     (r"\bSYNCHRONIZE\b|\bSET_APPLICATION_PROPERTY\b|\bFORMS_DDL\b|\bqms\$|\bcgte\$", 'SYNCHRONIZE, SET_APPLICATION_PROPERTY, FORMS_DDL(ALTER SESSION ...), qms$/cgte$ framework calls: leave them out.'),
 ]
 COMMON_HINTS = [
-    (r"\.\s*NEXTVAL\b", 'SEQ.NEXTVAL: a repository method with entityManager.createNativeQuery("SELECT SEQ.NEXTVAL FROM DUAL").'),
+    (r"\.\s*NEXTVAL\b", 'SEQ.NEXTVAL: a repository method @Query(value = "SELECT SEQ.NEXTVAL FROM DUAL", nativeQuery = true) BigDecimal nextSeq();'),
     (r"\bNVL\s*\(", 'NVL(a, b): a != null ? a : b.'),
     (r"\bSYSDATE\b", 'SYSDATE: LocalDateTime.now(); TRUNC(SYSDATE): LocalDate.now().atStartOfDay().'),
     (r"\bCURSOR\b|\bFOR\s+\w+\s+IN\s*\(", 'CURSOR / FOR r IN (SELECT ...): a repository method that returns the list (or exists()/count()).'),
     (r"\bSELECT\b[\s\S]*?\bINTO\b", 'SELECT ... INTO: a repository method; no row = NO_DATA_FOUND (handle it where the Forms code does).'),
-    (r"\b(?:UPDATE|INSERT\s+INTO|DELETE\s+FROM)\b", 'UPDATE / INSERT / DELETE of a table: a repository method (find + setters, persist, remove or CriteriaUpdate).'),
+    (r"\b(?:UPDATE|INSERT\s+INTO|DELETE\s+FROM)\b", 'UPDATE / INSERT / DELETE of a table: a repository method (@Modifying @Query UPDATE/DELETE over the Domain; an INSERT: save of a new Domain).'),
     (r"\bTO_NUMBER\s*\(", 'TO_NUMBER(s): new BigDecimal(s.trim()) (null stays null); the decimal character is the '
                           'session\'s (a Hungarian session reads 1,5): replace it with . first.'),
     (r"\bTO_CHAR\s*\(", 'TO_CHAR(n): n.toPlainString() (Oracle writes the session\'s decimal character and no leading '
@@ -327,8 +330,8 @@ def field_lines(descriptor: dict, method: str) -> list[str]:
             hidden += 1
     lines = ["  fields: " + ", ".join(shown) + (f" (+{hidden} more columns not used here)" if hidden else "")]
     if len(keys) > 1:
-        lines.append(f"  composite key class {descriptor['entity']}Id with public fields "
-                     + ", ".join(descriptor["primary_key"]) + " (use it with entityManager.find)")
+        lines.append(f"  composite key class {descriptor['entity']}.Key(" + ", ".join(descriptor["primary_key"])
+                     + ") (the id of findById)")
     lines.append("  getters/setters for every field, public no-arg constructor")
     return lines
 
@@ -341,8 +344,13 @@ def existing_methods(source: str, limit: int = 30) -> list[str]:
             for inner in scan_members(source, mask, member.body[0] + 1, member.body[1]):
                 if inner.kind == "method":
                     header = " ".join(strip_annotations(mask[inner.start:inner.body[0] if inner.body else inner.end]).split())
-                    found.append(re.sub(r"^(?:public|protected|private)\s+", "", header).replace("java.math.", "").replace("java.time.", ""))
-    return found[:limit]
+                    header = re.sub(r"^(?:(?:public|protected|private|default)\s+)+", "", header).rstrip(";").strip()
+                    header = re.sub(r"\(\s+", "(", re.sub(r"\s+([,)])", r"\1", header))  # where an @Param was
+                    found.append((inner.name, header.replace("java.math.", "").replace("java.time.", "")))
+    # a generated method's helper member (<name>Rows, <name>Value) is not one to call
+    names = {name for name, _ in found}
+    return [header for name, header in found if not (re.sub(r"(?:Rows|Value)$", "", name) in names
+                                                     and re.sub(r"(?:Rows|Value)$", "", name) != name)][:limit]
 
 
 def query_fields(packet: dict) -> list[str]:

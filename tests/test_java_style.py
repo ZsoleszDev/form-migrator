@@ -224,6 +224,16 @@ class A {
         self.assertEqual(self.layout(text), text)
         self.assertLessEqual(max(len(line) for line in text.split('\n')), 100)
         self.assertIn('import java.util.stream.Collectors;\n\nimport org.springframework.dao.DataAccessException;', text)
+        # the copy of an AI-mode project (without the old modes' parts) and of the old modes: in layout too
+        from frm_forms.compact_backend import common_tools_source
+        for mode in ('ai', 'plsql'):
+            with self.subTest(mode=mode):
+                copy = common_tools_source({'backend_trigger_mode': mode, 'common_migrate_tools_package': 'hu.ceg.cl',
+                                            'java_package': 'hu.ceg'})
+                self.assertEqual(self.layout(copy), copy)
+                self.assertNotIn('frm:legacy', copy)
+                self.assertEqual('class FormsPlsql' in copy, mode == 'plsql')
+                self.assertEqual('MapSqlParameterSource' in copy, mode == 'plsql')
 
 
 class GeneratedLayoutTests(unittest.TestCase):

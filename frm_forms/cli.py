@@ -46,8 +46,10 @@ DEFAULTS = {"java_package": "hu.company.features", "api_prefix": "/api/forms", "
             "backend_live": False,
             # "ai" (4.35): no deterministic translation of server-side trigger code. Every trigger gets its method
             # frame (endpoint/hook, DTOs, transaction, log1x) with the original Forms code commented in its body;
-            # the Java assistant (local AI) writes that body. "plsql" runs the original PL/SQL in Oracle (4.34),
-            # "java" is the earlier Java-first compiler with PL/SQL fallback.
+            # the Java assistant (local AI) writes that body; the data access is Spring Data JPA (jpa_crud).
+            # Old modes, kept but not offered (the web UI has no choice for them; config or FRM_BACKEND_TRIGGER_MODE
+            # only): "plsql" runs the original PL/SQL in Oracle over JDBC (4.34), "java" is the earlier Java-first
+            # compiler with PL/SQL fallback. Their CommonMigrateTools has the PL/SQL emulation and the JDBC LOV query.
             "backend_trigger_mode": "ai",
             # Query buttons (DEFAULT_WHERE builders): "java" = the SQL request only, in readable Java (query_java);
             # "plsql" = the 4.x adapter that runs the original builder in Oracle and matches precompiled variants.
@@ -75,6 +77,9 @@ DEFAULTS = {"java_package": "hu.company.features", "api_prefix": "/api/forms", "
             "wbs_package": "",
             # true: module Java files without package line (the IDE sets it where the files are copied). The web turns it on.
             "java_empty_package": False,
+            # The JPA annotations of the generated Domain/Repository classes (backend_trigger_mode=ai): javax (Spring
+            # Boot 2) or jakarta (Spring Boot 3).
+            "jpa_namespace": "javax",
             # Forms CALL_FORM/OPEN_FORM/NEW_FORM target -> Angular route; default "/<form name in lower case>".
             "form_routes": {},
             # Checkstyle layout of every generated Java file (java_style): braces, blank lines, import
@@ -170,6 +175,8 @@ def configuration(args) -> dict:
     result["form_routes"] = {k.upper(): v.strip() for k, v in result["form_routes"].items()}
     if type(result["java_empty_package"]) is not bool:
         raise MigrationError("java_empty_package: true vagy false szükséges.")
+    if result["jpa_namespace"] not in ("javax", "jakarta"):
+        raise MigrationError("jpa_namespace: javax vagy jakarta szükséges.")
     if type(result["java_checkstyle_format"]) is not bool:
         raise MigrationError("java_checkstyle_format: true vagy false szükséges.")
     result["java_import_order"] = validate_import_order(result["java_import_order"])

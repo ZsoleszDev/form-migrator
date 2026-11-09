@@ -193,7 +193,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 public class ActionSmoke {
  public static void main(String[] args) throws Exception {
-  var service=new TestServiceImpl(new org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate());
+  var service=new TestServiceImpl();  // the repositories are @Autowired fields: no JDBC in the constructor
   // The frame waits empty under its Forms code; written here (return null) it compiles and runs.
   if (service.METHOD(new UserDto(), new ActionRequest(java.util.Map.of(), java.util.Map.of())) != null) throw new AssertionError();
   System.out.println("unported action frame passed");

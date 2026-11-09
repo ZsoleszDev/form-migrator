@@ -491,8 +491,8 @@ def generate(resolution, ui, output, config, module, discovery):
     methods += code.validate_methods()
     methods += code.changes_methods()
     fields = code.class_fields(tab_fields, labels, toast_symbol, form_type, structures)
-    if code.input_rows:
-        methods.append(code.input_helper())
+    # migrationParameter / migrationInputText: only when a request calls them (a binding save adds or drops them).
+    methods += [input_bindings.HELPERS[name] for name in input_bindings.used_helpers('\n'.join(methods))]
     body = '\n\n'.join(fields) + '\n\n' + '\n\n'.join(methods)
 
     # ---------------------------------------------------------------- the source

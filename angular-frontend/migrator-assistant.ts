@@ -424,8 +424,8 @@ ORDER BY column_id;</pre>
               A mentés ezután ezt az értéket teszi a Java-nak küldött kérésbe.</p>
             <div class="grid gap-2 text-sm md:grid-cols-3">
               <p class="m-0"><strong>Képernyőmező:</strong> az űrlap vagy a kijelölt táblázatsor már tartalmazza az értéket.</p>
-              <p class="m-0"><strong>Modulparaméter:</strong> a modult megnyitó oldal adja át, például az ügyfél azonosítóját.
-                Ezt a szülő komponensben is be kell kötni.</p>
+              <p class="m-0"><strong>URL-paraméter:</strong> a képernyőt megnyitó navigáció küldi (queryParams), például az ügyfél
+                azonosítóját. A Forms :PARAMETER.X értéke alapból innen jön.</p>
               <p class="m-0"><strong>Kézi / szerveroldali:</strong> például a bejelentkezett felhasználó hiteles azonosítója.
                 A megjegyzés rögzíti a teendőt; a szerveroldali bekötést fejlesztő végzi el.</p>
             </div>
@@ -451,7 +451,7 @@ ORDER BY column_id;</pre>
                         ariaLabel="Képernyőmező" [disabled]="bindingLocked()" class="min-w-40" />
                     } @else if (bindingDraft()[row.id]?.kind === 'parameter') {
                       <input pInputText [ngModel]="bindingDraft()[row.id]?.source ?? ''" (ngModelChange)="setBinding(row.id,'source',$event)"
-                        [disabled]="bindingLocked()" maxlength="128" placeholder="például ugyfelKod" aria-label="Modulparaméter neve" />
+                        [disabled]="bindingLocked()" maxlength="128" placeholder="például UGYFEL_KOD" aria-label="URL-paraméter neve" />
                     }
                   </td>
                   <td><input pInputText [ngModel]="bindingDraft()[row.id]?.note ?? ''" (ngModelChange)="setBinding(row.id,'note',$event)"
@@ -803,11 +803,11 @@ export class MigratorAssistant implements OnChanges, OnDestroy {
   bindingKinds(row: InputRow): {label: string; value: string}[] {
     const choices = [{label: 'Generált alapérték', value: ''}];
     if (row.automatic && row.timing !== 'constructor' && !row.source.startsWith('SYSTEM.'))
-      choices.push({label: 'Képernyőmező', value: 'field'}, {label: 'Modulparaméter', value: 'parameter'});
+      choices.push({label: 'Képernyőmező', value: 'field'}, {label: 'URL-paraméter', value: 'parameter'});
     return [...choices, {label: 'Kézi / szerveroldali', value: 'manual'}];
   }
   bindingStatus(status: string): string {
-    return ({connected: 'Bekötve', missing: 'Hiányzó érték', host_required: 'Szülőoldali input szükséges', manual: 'Kézi feladat',
+    return ({connected: 'Bekötve', missing: 'Hiányzó érték', manual: 'Kézi feladat',
       unwired: 'Hívó kód szükséges', review: 'Bemenetirány ellenőrzendő', lifecycle: 'Indítás időzítése kézi feladat',
       file_changed: 'Kód kézzel módosult', contract_changed: 'Szerződés megváltozott'} as Record<string, string>)[status] ?? status;
   }
@@ -824,7 +824,7 @@ export class MigratorAssistant implements OnChanges, OnDestroy {
     this.mutating.set(true); this.error.set('');
     try {
       await this.post('/bindings', {revision, bindings: this.bindingDraft()});
-      this.bindingsDirty.set(false); await this.reload(); this.notice.set('A bekötések és a generált kérésértékek mentve. A modulparaméter szülőoldali átadása és a kézi feladatok még ellenőrzendők.');
+      this.bindingsDirty.set(false); await this.reload(); this.notice.set('A bekötések és a generált kérésértékek mentve. A kézi feladatok még ellenőrzendők.');
       this.moduleUpdated.emit(this.jobId());
     } catch (error) { this.failure(error); }
     finally { this.mutating.set(false); }

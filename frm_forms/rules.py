@@ -465,7 +465,12 @@ def apply_metadata(model: dict, metadata: dict) -> None:
                 model["issues"].append({"code": "SQL_MAPPING", "owner": b["name"], "scope": "all", "detail": str(exc)})
             if not b["db_items"]:
                 model["issues"].append({"code": "NO_COLUMNS", "owner": b["name"], "scope": "all", "detail": "Nincs leképezhető adatbázismező."})
-            if not b["pk"] and b["db_items"]:
+            if not b["pk"] and b["db_items"] and model.get("options", {}).get("backend_trigger_mode") == "ai":
+                # JPA (jpa_crud): the Domain needs an @Id. No ROWID stand-in and no guess from names: the block gets
+                # no data endpoint until the schema names the key.
+                b["no_key"] = True
+                model["issues"].append({"code": "NO_PRIMARY_KEY", "owner": b["name"], "scope": "all", "detail": NO_KEY})
+            elif not b["pk"] and b["db_items"]:
                 # Forms itself identifies a row of a block without a primary key by its ROWID (Key Mode
                 # Automatic/Unique): the generated operations do the same, nothing is guessed from names.
                 fields = {i["field"] for i in b["items"]}
@@ -1368,6 +1373,10 @@ def finalize_capabilities(model: dict) -> None:
         b["endpoint_plan"], b["skipped_operations"] = endpoint_plan(b)
 
 
+NO_KEY = ("Nincs elsődleges kulcs: a JPA Domain-osztályhoz kell (@Id). Add meg a schema.json primary_key értékét "
+          "(nézetnél egy egyedi oszlopot), és generáld újra; addig a blokkhoz nem készül adatvégpont.")
+
+
 def endpoint_plan(block: dict) -> tuple[dict, list[dict]]:
     """Only operations the Forms block itself allows become endpoints.
 
@@ -1377,6 +1386,9 @@ def endpoint_plan(block: dict) -> tuple[dict, list[dict]]:
     """
     if not block["database"]:
         return {}, []
+    if block.get("no_key"):
+        return ({op: False for op in ("list", "search", "create", "update", "delete")},
+                [{"operation": op, "reason": NO_KEY} for op in ("list", "create", "update", "delete")])
     runtime = set(block.get("runtime_operations", []))
     plan = block.get("query_plan", {})
     search = plan.get("status") == "compiled" and bool(plan.get("binds"))

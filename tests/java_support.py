@@ -129,6 +129,9 @@ def write_stubs(root: Path) -> list[Path]:
     files['hu.company.common.ModuleServiceBase'] = 'public abstract class ModuleServiceBase<H> { ' + log1x + ' }'
     files['hu.company.common.ModuleControllerBase'] = ('public abstract class ModuleControllerBase<H> { ' + log1x
                                                        + ' protected UserDto getUser() { return new UserDto(); } }')
+    files.update(SPRING_DATA)
+    files.update({'javax.persistence.' + name: body for name, body in JPA_API.items()})
+    files.update({'javax.persistence.criteria.' + name: body for name, body in CRITERIA_API.items()})
     paths = []
     for fullname, source in files.items():
         package, cls = fullname.rsplit('.', 1)
@@ -137,6 +140,29 @@ def write_stubs(root: Path) -> list[Path]:
         path.write_text('package ' + package + ';\n' + source + '\n', encoding='utf-8')
         paths.append(path)
     return paths
+
+
+# Spring Data JPA as the generated repositories (jpa_crud) and the ServiceImpl use it, with the real signatures.
+SPRING_DATA = {
+    'org.springframework.data.domain.Pageable': 'public interface Pageable { int getPageNumber(); int getPageSize(); }',
+    'org.springframework.data.domain.PageRequest': ('public class PageRequest implements Pageable { private final int page, size; '
+                                                    'private PageRequest(int page, int size) { this.page = page; this.size = size; } '
+                                                    'public static PageRequest of(int page, int size) { return new PageRequest(page, size); } '
+                                                    'public int getPageNumber() { return page; } public int getPageSize() { return size; } }'),
+    'org.springframework.data.domain.Slice': ('public interface Slice<T> extends Iterable<T> { java.util.List<T> getContent(); '
+                                              'boolean hasNext(); }'),
+    'org.springframework.data.repository.query.Param': 'public @interface Param { String value(); }',
+    'org.springframework.data.jpa.repository.Query': ('public @interface Query { String value() default ""; '
+                                                      'boolean nativeQuery() default false; String countQuery() default ""; }'),
+    'org.springframework.data.jpa.repository.Modifying': ('public @interface Modifying { boolean clearAutomatically() default false; '
+                                                          'boolean flushAutomatically() default false; }'),
+    'org.springframework.data.jpa.repository.Lock': 'public @interface Lock { javax.persistence.LockModeType value(); }',
+    'org.springframework.data.jpa.repository.QueryHints': 'public @interface QueryHints { javax.persistence.QueryHint[] value() default {}; }',
+    'org.springframework.data.jpa.repository.JpaRepository': (
+        'public interface JpaRepository<T, ID> { java.util.Optional<T> findById(ID id); boolean existsById(ID id); '
+        '<S extends T> S save(S entity); <S extends T> S saveAndFlush(S entity); void delete(T entity); void flush(); '
+        'java.util.List<T> findAll(); long count(); }'),
+}
 
 
 # The JPA 2.2 API surface the migrator's repositories use (entities, jpa_sql's Criteria methods, the sequence query):
@@ -148,10 +174,13 @@ JPA_API = {
               'int precision() default 0; int scale() default 0; }',
     'Id': 'public @interface Id {}', 'IdClass': 'public @interface IdClass { Class<?> value(); }',
     'Lob': 'public @interface Lob {}', 'PersistenceContext': 'public @interface PersistenceContext {}',
+    'LockModeType': 'public enum LockModeType { NONE, OPTIMISTIC, PESSIMISTIC_READ, PESSIMISTIC_WRITE }',
+    'QueryHint': 'public @interface QueryHint { String name(); String value(); }',
     'Parameter': 'public interface Parameter<T> {}',
-    'PersistenceException': 'public class PersistenceException extends RuntimeException {}',
-    'NoResultException': 'public class NoResultException extends PersistenceException {}',
-    'NonUniqueResultException': 'public class NonUniqueResultException extends PersistenceException {}',
+    'PersistenceException': 'public class PersistenceException extends RuntimeException { public PersistenceException() {} public PersistenceException(String m) { super(m); } }',
+    'NoResultException': 'public class NoResultException extends PersistenceException { public NoResultException() {} public NoResultException(String m) { super(m); } }',
+    'NonUniqueResultException': 'public class NonUniqueResultException extends PersistenceException { public NonUniqueResultException() {} public NonUniqueResultException(String m) { super(m); } }',
+    'EntityExistsException': 'public class EntityExistsException extends PersistenceException { public EntityExistsException() {} public EntityExistsException(String m) { super(m); } }',
     'Query': 'public interface Query { Object getSingleResult(); java.util.List getResultList(); int executeUpdate(); '
              'Query setMaxResults(int max); Query setParameter(String name, Object value); <T> Query setParameter(Parameter<T> p, T value); }',
     'TypedQuery': 'public interface TypedQuery<X> extends Query { X getSingleResult(); java.util.List<X> getResultList(); '
@@ -238,11 +267,14 @@ CRITERIA_API = {
 
 
 def write_jpa_stubs(root: Path) -> list[Path]:
-    """javax.persistence (+ .criteria) as the generated entities and repositories use it, for compile tests."""
+    """javax.persistence (+ .criteria) as the generated entities and repositories use it, for compile tests.
+    write_stubs already writes javax.persistence: a file it wrote is not listed twice for javac."""
     paths = []
     for package, files in (('javax.persistence', JPA_API), ('javax.persistence.criteria', CRITERIA_API)):
         for name, body in files.items():
             path = root.joinpath(*package.split('.'), name + '.java')
+            if path.is_file():
+                continue
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text('package ' + package + ';\n' + body + '\n', encoding='utf-8')
             paths.append(path)

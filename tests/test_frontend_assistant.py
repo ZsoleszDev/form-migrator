@@ -40,8 +40,6 @@ def signalize_head(code):
                   r"protected readonly \1 = signal<Record<string, unknown>[]>([]);", code)
     code = re.sub(r"protected (\w+Selection): Record<string, unknown> \| null = null;",
                   r"protected readonly \1 = signal<Record<string, unknown> | null>(null);", code)
-    code = code.replace("@Input() migrationParameters: Readonly<Record<string, string | null>> = {};",
-                        "readonly migrationParameters = input<Readonly<Record<string, string | null>>>({});")
     code = re.sub(r'\[value\]="(\w+Rows)"', r'[value]="\1()"', code)
     code = re.sub(r'\[\(selection\)\]="(\w+Selection)"', r'[selection]="\1()" (selectionChange)="\1.set($event)"', code)
     return code.replace("  constructor() {", "  // Az alaposztály (ServiceBase) beállítása.\n  constructor() {")
@@ -49,7 +47,7 @@ def signalize_head(code):
 
 def signalize_methods(code):
     code = re.sub(r"this\.(\w+Rows) = (.+);", r"this.\1.set(\2);", code)
-    return code.replace("this.migrationParameters[", "this.migrationParameters()[")
+    return code
 
 
 class Model:
@@ -162,11 +160,10 @@ class ReplicaTests(unittest.TestCase):
         head, methods = model.requests[0]["messages"][1]["content"], model.requests[1]["messages"][1]["content"]
         self.assertIn("Methods of the class (not shown, rewritten later):\n- rendelesList(offset = 0, limit = 200)", head)
         self.assertIn("- tetelRows (signal)\n- tetelSelection (signal)", methods)
-        self.assertIn("- migrationParameters (input)", methods)
         self.assertNotIn("template:", methods)  # the outline: fields only
         text = fa.proposal(self.out, parts["id"])["text"]
         self.assertEqual(text, fa.proposal(self.out, whole["id"])["text"])
-        self.assertIn("import { Component, inject, signal, input } from '@angular/core';", text)
+        self.assertIn("import { Component, inject, signal } from '@angular/core';", text)
         self.assertIn("protected readonly tetelRows = signal<Record<string, unknown>[]>([]);", text)
         self.assertIn("this.tetelRows.set(res.rows ?? []);", text)
         self.assertIn('[value]="tetelRows()"', text)

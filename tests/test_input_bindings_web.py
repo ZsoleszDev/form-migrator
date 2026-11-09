@@ -26,7 +26,7 @@ class BindingWebTests(unittest.TestCase):
         saved = self.client.post(self.base + '/bindings', headers=fixture.HEADERS, json=request)
         self.assertEqual(saved.status_code, 200, saved.text)
         changed = next(r for r in saved.json()['rows'] if r['id'] == row['id'])
-        self.assertEqual(changed['status'], 'host_required')
+        self.assertEqual(changed['status'], 'connected')
         self.assertEqual(self.client.post(self.base + '/bindings', headers=fixture.HEADERS, json=request).status_code, 409)
         index = self.client.get(self.base).json()
         self.assertNotEqual(old_index['tasks'][0]['fingerprint'], index['tasks'][0]['fingerprint'])
@@ -38,7 +38,8 @@ class BindingWebTests(unittest.TestCase):
         archive = self.client.get('/api/jobs/' + self.job + '/download?kind=frontend')
         with zipfile.ZipFile(io.BytesIO(archive.content)) as z:
             component = next(n for n in z.namelist() if n.endswith('.component.ts'))
-            self.assertIn(b"this.migrationParameters['recordId']", z.read(component))
+            self.assertIn(b"this.migrationParameter('recordId')", z.read(component))
+            self.assertIn(b'protected migrationParameter(name: string)', z.read(component))  # added with the binding
         retry = self.client.post('/api/jobs/' + self.job + '/retry', headers=fixture.HEADERS)
         self.assertEqual(retry.status_code, 202, retry.text)
         new_id = retry.json()['id']; self.wait_for_job(new_id)

@@ -409,7 +409,20 @@ def service_parts(block: Block, ctx: Context, reply: Reply, info: dict, existing
     return {"body": clean_body(body, reply), "helpers": helpers, "imports": imports}
 
 
+def as_default(text: str, name: str) -> str:
+    """A method with a body, as a default method of the repository interface (no access or static modifier)."""
+    mask = java_mask(text)
+    match = re.search(r"(?m)^([ \t]*)((?:(?:public|protected|private|static|final|synchronized|default)\s+)*)"
+                      r"(?=(?:<[^;{}()]*>\s*)?[\w.$<>?, \[\]]+\s+" + re.escape(name) + r"\s*\()", mask)
+    if not match:
+        return text
+    return text[:match.start(2)] + "default " + text[match.end(2):]
+
+
 def repository_parts(block: Block, repo: Repository, ctx: Context, reply: Reply, info: dict) -> dict | None:
+    """The model's additions to a repository: the repository is `interface X extends JpaRepository<Domain, ID>`, so
+    query methods without a body (@Query JPQL, or nativeQuery = true with the original SQL) and default methods."""
+    from .reply_repair import STANDARD
     imports, code = take_imports(block.code.replace("\r\n", "\n"))
     mask = java_mask(code)
     if not balanced(mask):
@@ -417,67 +430,43 @@ def repository_parts(block: Block, repo: Repository, ctx: Context, reply: Reply,
                       f"The REPOSITORY {repo.name} block has unbalanced braces. Send its complete methods again.")
         return None
     members = scan_members(code, mask)
-    types = [m for m in members if m.kind == "type"]
-    classes = [t for t in types if t.type_kind in {"class", "enum"} and t.body]
-    if any(t.type_kind == "interface" for t in types) and not classes:
-        from .reply_repair import STANDARD
-        declared = [m for t in types if t.type_kind == "interface" and t.body
-                    for m in scan_members(code, mask, t.body[0] + 1, t.body[1])]
-        if all(m.kind == "method" and m.name in STANDARD for m in declared):
-            # `interface XRepository extends JpaRepository<E, ID> {}`: only the CrudRepository methods, which the
-            # migrator writes on demand (reply_repair.standard_methods); nothing of the model's is lost.
-            reply.note(f"Az AI Spring Data interfészt írt a(z) {repo.name} helyett; elhagytuk, a hívott alapmetódusokat "
-                       "(findById, save ...) a migrátor írja.")
-            return {"methods": [], "constants": [], "imports": []}
-        reply.problem(f"A(z) {repo.name} Spring Data interfészként érkezett; a migrátor osztálymetódusokat vár entityManager-rel.",
-                      f"Do not write a Spring Data interface for {repo.name}. Write concrete public methods that use "
-                      "the existing `entityManager` field (find/persist/merge/remove or the Criteria API).")
-        return None
-    if classes:
-        container = next((t for t in classes if t.name == repo.name), classes[0])
+    containers = [m for m in members if m.kind == "type" and m.body]
+    if containers:
+        container = next((t for t in containers if t.name == repo.name), containers[0])
         if container.name != repo.name:
-            reply.warn(f"Az AI {container.name} osztályt írt; a metódusait a(z) {repo.name} repositoryba tettük.")
+            reply.warn(f"Az AI {container.name} típust írt; a metódusait a(z) {repo.name} repositoryba tettük.")
         members = scan_members(code, mask, container.body[0] + 1, container.body[1])
-        info["note"] = "teljes osztályból, csak a metódusok kellenek"
-    manager_names, methods, constants, dropped = set(), [], [], []
+        info["note"] = "teljes típusból, csak a metódusok kellenek"
+    methods, constants = [], []
     for member in members:
+        text = member_source(code, member)
         if member.kind == "field":
             if re.search(r"\bEntityManager\b", member.header):
-                manager_names.add(member.name)
-            elif re.search(r"(?<![\w$])static(?![\w$])", member.header) and re.search(r"(?<![\w$])final(?![\w$])", member.header):
-                constants.append(member_source(code, member))
+                reply.note(f"A(z) {repo.name} EntityManager-mezőjét elhagytuk: a repository interfész (extends JpaRepository).")
+            elif "=" in java_mask(code[member.start:member.end]):
+                constants.append(text)  # an interface field is a constant (static final)
             else:
-                dropped.append(member.name)
+                reply.warn(f"A(z) {repo.name} mezőjét ({member.name}) elhagytuk: egy repository interfésznek nincs mezője.")
         elif member.kind == "constructor":
-            manager_names |= set(re.findall(r"\bEntityManager\s+(\w+)", member.header))
-            reply.note(f"A(z) {repo.name} konstruktorát elhagytuk; az EntityManagert a migrátor injektálja.")
-        elif member.kind == "method" and member.body:
-            methods.append(with_access(member_source(code, member), "public"))
+            reply.note(f"A(z) {repo.name} konstruktorát elhagytuk: a repository interfész.")
+        elif member.kind == "method" and member.name in STANDARD:
+            reply.note(f"A(z) {member.name}() a JpaRepository része; a modell változatát elhagytuk.")
+        elif member.kind == "method" and not member.body:
+            methods.append(text)  # a @Query method, or a Spring Data method name
         elif member.kind == "method":
-            reply.problem(f"A(z) {repo.name} törzs nélküli metódust tartalmaz ({member.name}).",
-                          f"Every method of {repo.name} needs a complete body that uses `entityManager`; no abstract or "
-                          "Spring Data style declarations.")
+            if re.search(r"\b(?:entityManager|EntityManager|CriteriaBuilder)\b", java_mask(text)):
+                reply.problem(f"A(z) {repo.name} {member.name}() metódusa EntityManagert használ; a repository interfész.",
+                              f"{repo.name} is an interface extending JpaRepository<{repo.entity}, ...>: write "
+                              f"{member.name} as a method without a body with @Query (JPQL over {repo.entity}, or "
+                              "nativeQuery = true with the original SQL), or as a default method that calls such "
+                              "methods. No EntityManager.")
+                continue
+            methods.append(as_default(text, member.name))
         elif member.kind == "type":
             reply.warn(f"A(z) {repo.name} blokk belső típusát ({member.name}) elhagytuk.")
         elif code[member.start:member.end].strip():
             reply.warn(f"A(z) {repo.name} blokk egy nem metódus részét elhagytuk: " + " ".join(code[member.start:member.end].split())[:80])
-    manager_names.discard("entityManager")
-    renamed = []
-    for text in methods:
-        for old in sorted(manager_names):
-            text = replace_identifier(text, old, "entityManager")
-        renamed.append(text)
-    if manager_names:
-        reply.note(f"A(z) {repo.name} EntityManager-mezőjét ({', '.join(sorted(manager_names))}) entityManager névre igazítottuk.")
-    joined = java_mask("\n".join(renamed + constants))
-    for name in dropped:
-        if re.search(r"(?<![\w$.])" + re.escape(name) + r"(?![\w$])|(?<=this\.)" + re.escape(name) + r"(?![\w$])", joined):
-            reply.problem(f"A(z) {repo.name} metódusai a(z) {name} mezőt használják, amit a migrátor nem tud átvenni.",
-                          f"{repo.name} methods must not use the field `{name}`; use local variables and the existing "
-                          "`entityManager` field only.")
-        else:
-            reply.note(f"A(z) {repo.name} nem használt mezőjét ({name}) elhagytuk.")
-    return {"methods": renamed, "constants": constants, "imports": imports}
+    return {"methods": methods, "constants": constants, "imports": imports}
 
 
 def dto_parts(block: Block, reply: Reply) -> list[dict]:
@@ -600,8 +589,10 @@ def check_service_code(code: str, ctx: Context, reply: Reply, missing: bool) -> 
 def consistency(ctx: Context, service_code: str, new_methods: dict, reply: Reply) -> None:
     mask = java_mask(service_code)
     variables = {r.variable for r in ctx.repositories}
+    from .reply_repair import STANDARD
     for repo in ctx.repositories:
-        available = set(methods_by_name(repo.existing)) | new_methods.get(repo.name, set())
+        # JpaRepository's own methods (findById, save ...) are there in every repository
+        available = set(methods_by_name(repo.existing)) | new_methods.get(repo.name, set()) | STANDARD
         calls = re.finditer(r"(?:(?<=this\.)|(?<![\w$.]))" + re.escape(repo.variable) + r"\s*\.\s*([A-Za-z_$][\w$]*)\s*\(", mask)
         for name in dict.fromkeys(call.group(1) for call in calls):
             if name not in available:
@@ -611,7 +602,8 @@ def consistency(ctx: Context, service_code: str, new_methods: dict, reply: Reply
                                "generated methods (their SQL is the Forms code's SQL): " + "; ".join(generated) + ".")
                               if generated else
                               f"The service calls {repo.variable}.{name}(...), but the REPOSITORY {repo.name} block does "
-                              "not define it. Add the method with a complete body that uses `entityManager`.")
+                              "not define it. Add it there as an @Query method without a body (JPQL over "
+                              f"{repo.entity}, or nativeQuery = true with the original SQL).")
     for unknown in sorted(set(re.findall(r"(?:(?<=this\.)|(?<![\w$.]))([a-z][\w$]*Repository)\s*\.", mask)) - variables):
         names = ", ".join(sorted(variables))
         reply.problem(f"A service ismeretlen repositoryt használ: {unknown} (elérhető: {names or 'nincs'}).",
@@ -838,12 +830,12 @@ def finish(ctx: Context, reply: Reply, service, helpers, service_imports, repo_p
         parts = repo_parts[repo.name]
         if not parts["methods"] and not parts["constants"]: continue
         code = "\n\n".join(parts["constants"] + parts["methods"])
-        if any(re.search(r"\bcreateQuery\s*\(\s*\"", text) for text in parts["methods"]):
-            reply.warn(f"A(z) {repo.name} JPQL-szöveges lekérdezést használ; a projekt Criteria API-t ír elő, ellenőrizd.")
+        if any(re.search(r"\bnativeQuery\s*=\s*true\b", text) for text in parts["methods"]):
+            reply.warn(f"A(z) {repo.name} natív SQL-t is használ (@Query nativeQuery = true); ellenőrizd, hogy JPQL-ben nem írható-e le.")
         if NATIVE_DB.search(java_mask(without_sequence_queries(code))):
-            checks.problem(f"A(z) {repo.name} natív SQL-t vagy JDBC-t használ.",
-                           f"{repo.name} must use the Criteria API or find/persist/merge/remove; no native SQL, JDBC or "
-                           "stored procedure calls (only SELECT SEQ_NAME.NEXTVAL FROM DUAL is allowed).")
+            checks.problem(f"A(z) {repo.name} JDBC-t vagy EntityManager-natív hívást használ.",
+                           f"{repo.name} is an interface extending JpaRepository: write @Query methods (JPQL, or "
+                           "nativeQuery = true with the original SQL); no JDBC, createNativeQuery or stored procedure calls.")
         if SYSTEM_API.search(java_mask(code)):
             checks.problem(f"A(z) {repo.name} nem megengedett rendszer-API-t használ.",
                            "Do not use Runtime, ProcessBuilder, reflection, files or network APIs.")

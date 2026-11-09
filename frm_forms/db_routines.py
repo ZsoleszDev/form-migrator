@@ -5,8 +5,10 @@ the same name (synonyms and the current schema resolve it as before), the same p
 database defaults for the omitted ones. Only routines with a reviewed signature (schema.json "procedures": dictionary-sql
 and dictionary-import) get a method; the model is told the others are missing instead of guessing their logic.
 
-The methods are generated code of the DPS ServiceImpl (DbCalls on the service's NamedParameterJdbcTemplate), added
-when an applied proposal first calls them.
+The methods live in the module's routine class, <Module>DbRoutines (a @Repository next to the ServiceImpl, JDBC
+CallableStatement through CommonMigrateTools.DbCalls: OUT and IN OUT parameters, and functions that write, run as in
+PL/SQL), added when an applied proposal first calls them. The service calls them through its @Autowired field and has
+no JDBC itself.
 """
 from __future__ import annotations
 
@@ -20,6 +22,12 @@ NAMED = re.compile(r"^\s*([A-Za-z][\w$#]*)\s*=>")
 # Oracle-supplied packages exist in every database; the model knows them (DBMS_OUTPUT, UTL_FILE ...).
 STANDARD = ("DBMS_", "UTL_", "SYS.", "OWA_", "HTP.", "HTF.", "APEX_")
 CALL_KINDS = {"external_candidate", "unresolved", "ambiguous_local_program_unit"}
+
+
+def holder(module: str) -> tuple[str, str]:
+    """(class, the service's field) of the module's routine class: KodDbRoutines, kodDbRoutines."""
+    cls = java_name(module, "pascal") + "DbRoutines"
+    return cls, cls[0].lower() + cls[1:]
 
 
 def resolve(name: str, procedures: dict) -> tuple[str, dict] | None:
@@ -59,7 +67,7 @@ def call_parameters(arguments: list[str], signature: dict) -> list[dict] | str:
     return [dict(p, named=any(named)) for p in chosen]
 
 
-def method_source(method: str, routine: str, key: str, signature: dict, params: list[dict]) -> dict:
+def method_source(method: str, routine: str, key: str, signature: dict, params: list[dict], owner: str = "", field: str = "") -> dict:
     """One typed Java method (and its OUT holder class) for one call shape of a routine."""
     names, java_params, binds = [], [], []
     outs = [(i, p) for i, p in enumerate(params) if "OUT" in p["mode"]]
@@ -100,10 +108,10 @@ def method_source(method: str, routine: str, key: str, signature: dict, params: 
             returns = holder
             fields = "\n".join(f"        public {JAVA[p['type']]} {names[i]};" for i, p in outs)
             holder_source = (f"    /** {routine}: a kimenő (OUT, IN OUT) paraméterek értéke. */\n"
-                             f"    static final class {holder} {{\n{fields}\n    }}\n\n")
+                             f"    public static final class {holder} {{\n{fields}\n    }}\n\n")
             sets = "\n".join(f"        result.{names[i]} = ({JAVA[p['type']]}) out[{i}];" for i, p in outs)
             body = (f"        Object[] out = {call};\n        var result = new {holder}();\n{sets}\n        return result;")
-    header = f"private {returns} {method}({', '.join(java_params)})"
+    header = f"public {returns} {method}({', '.join(java_params)})"
     types = tuple(p.split(" ")[0] for p in java_params)
     described = ", ".join(("OUT " if p["mode"] == "OUT" else "IN OUT " if p["mode"] == "IN OUT" else "")
                           + (p["name"].upper() or "?") for p in params)
@@ -111,12 +119,17 @@ def method_source(method: str, routine: str, key: str, signature: dict, params: 
               f"    {header} {{\n{body}\n    }}\n")
     outs_text = ", ".join(p["name"].upper() for _, p in outs)
     returns_text = ("" if returns == "void" else f": returns {outs_text}" if signature["kind"] == "procedure" and len(outs) == 1
-                    else f": returns {holder} with the fields {', '.join(names[i] for i, _ in outs)}" if holder else "")
+                    else f": returns {owner + '.' if owner else ''}{holder} with the fields {', '.join(names[i] for i, _ in outs)}"
+                    if holder else "")
+    call = header.replace("public ", "", 1)
+    if field:  # the service calls it on its field: kodDbRoutines.kodPkgCheckInsert(...)
+        typ, rest = call.split(" ", 1)
+        call = (owner + "." + typ if holder and typ == holder else typ) + " " + field + "." + rest
     return {"method": method, "routine": routine, "key": key, "header": header, "types": types, "source": source,
-            "holder": holder, "describe": f"{header.replace('private ', '', 1)} = {routine}({described}){returns_text}"}
+            "holder": holder, "describe": f"{call} = {routine}({described}){returns_text}"}
 
 
-def plan(sources: list[dict], procedures: dict, catalog: dict | None = None) -> tuple[list[dict], list[str]]:
+def plan(sources: list[dict], procedures: dict, catalog: dict | None = None, module: str = "") -> tuple[list[dict], list[str]]:
     """(typed methods, "NAME: why it has none" for the prompt) of the calls of a task's Forms code.
 
     sources: the task's code (discovery entries with their calls); procedures: rules.procedure_signatures().
@@ -156,11 +169,41 @@ def plan(sources: list[dict], procedures: dict, catalog: dict | None = None) -> 
             # Overloads per call shape; the same parameter types (or OUT holder) under one name would not compile.
             base = java_name(name.lower().replace(".", "_"))
             method, n = base, 2
-            entry = method_source(method, name, key, signature, params)
+            owner, variable = holder(module) if module else ("", "")
+            entry = method_source(method, name, key, signature, params, owner, variable)
             while any((m["method"] == entry["method"] and m["types"] == entry["types"])
                       or (entry["holder"] and m["holder"] == entry["holder"]) for m in methods):
                 method, n = base + str(n), n + 1
-                entry = method_source(method, name, key, signature, params)
+                entry = method_source(method, name, key, signature, params, owner, variable)
             shapes[shape] = entry
             methods.append(entry)
     return methods, refused
+
+
+MARKER = "Forms migrator database routines"
+
+
+def class_source(package: str, cls: str, methods: list[dict], tools_package: str) -> str:
+    """The routine class with the given methods (a new file)."""
+    head = ("package " + package + ";\n\n" if package else "")
+    head += "".join(f"import {i};\n" for i in ("java.math.BigDecimal", "java.sql.Types", "java.time.LocalDateTime",
+                                                "java.util.Objects", "org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate",
+                                                "org.springframework.stereotype.Repository")
+                    + ((tools_package + ".CommonMigrateTools.DbCalls",) if tools_package else ()))
+    body = "\n".join(m["source"] for m in methods)
+    return (head + f"""
+/**
+ * {MARKER}: the stored procedures and functions the Forms code calls, run in Oracle as written
+ * (JDBC CallableStatement: OUT and IN OUT parameters, functions that write). The ServiceImpl calls them through its
+ * @Autowired field; it has no JDBC itself.
+ */
+@Repository
+public class {cls} {{
+    private final NamedParameterJdbcTemplate jdbc;
+
+    public {cls}(NamedParameterJdbcTemplate jdbc) {{
+        this.jdbc = Objects.requireNonNull(jdbc);
+    }}
+
+{body}}}
+""")
