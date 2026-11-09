@@ -172,8 +172,9 @@ class MigrationFidelityTests(unittest.TestCase):
         from frm_forms.runtime_coverage import coverage
         out = self.generate(fixture({'SAVE': 'UPDATE t SET a = 1;'}))
         rows = {r['owner']: r for r in self.read(out, 'runtime-coverage.json')['triggers']}
-        self.assertEqual(rows['B.SAVE']['status'], 'blocked')
-        self.assertTrue(rows['B.SAVE']['endpoints'][0]['ready_after_module_review'])
+        # No module switch: the endpoint of a ready button is live at once.
+        self.assertEqual(rows['B.SAVE']['status'], 'backend')
+        self.assertFalse(rows['B.SAVE']['endpoints'][0]['ready_after_module_review'])
         without_backend = coverage(self.read(out, 'form.ir.json'))
         self.assertEqual(next(r for r in without_backend['triggers'] if r['owner'] == 'B.SAVE')['status'], 'manual')
 

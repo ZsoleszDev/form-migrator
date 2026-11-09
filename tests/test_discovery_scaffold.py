@@ -12,7 +12,7 @@ from frm_forms.common import MigrationError
 from frm_forms.discovery import scan, build_map, write_map
 from frm_forms.rules import analyze
 from frm_forms.xmlmodel import parse_xml
-from java_support import COMPANY_IMPORTS, write_stubs
+from java_support import COMPANY_IMPORTS, compile_copies, write_stubs
 
 
 def fixture(extra_property=False):
@@ -133,7 +133,8 @@ END;""")
         status, out = self.migrate(path, '--scaffold')
         self.assertEqual(status, 0)
         info = json.loads((out/'analysis/summary.json').read_text())
-        self.assertEqual(info['readable_blocks'], 0); self.assertEqual(info['writable_blocks'], 0)
+        # No module switch: the scaffold's clean query is readable; writing still needs schema.json writable.
+        self.assertEqual(info['readable_blocks'], 1); self.assertEqual(info['writable_blocks'], 0)
         self.assertGreater(info['frontend_error_issues'], 0)
         self.assertEqual(info['ai']['attempted_calls'], 0)
         self.assertIn('UnrecognizedBehavior'.lower(), (out/'analysis/ui-model.json').read_text().lower())
@@ -175,7 +176,7 @@ END;""")
         self.assertEqual(sum(g['count'] for g in preview['groups']), len(full))
         self.assertLessEqual(len(preview['issues']), 100)
 
-    def test_unported_action_compiles_and_answers_501(self):
+    def test_unported_action_waits_empty_and_compiles_once_written(self):
         # The access hook and the <method>Reviewed extension point of the early scaffold are gone (compact backend:
         # one DPS ServiceImpl, test_company_backend); an action the migrator cannot port keeps its original code in a
         # comment region and answers HTTP 501. A Unicode escape in a PL/SQL comment must not break the Java source.
@@ -193,12 +194,16 @@ import org.springframework.web.server.ResponseStatusException;
 public class ActionSmoke {
  public static void main(String[] args) throws Exception {
   var service=new TestServiceImpl(new org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate());
-  try { service.METHOD(new UserDto(), new ActionRequest(java.util.Map.of(), java.util.Map.of())); throw new AssertionError("Expected 501"); }
-  catch(ResponseStatusException ex) { if(ex.status!=HttpStatus.NOT_IMPLEMENTED) throw new AssertionError(); }
-  System.out.println("unported action 501 assertion passed");
+  // The frame waits empty under its Forms code; written here (return null) it compiles and runs.
+  if (service.METHOD(new UserDto(), new ActionRequest(java.util.Map.of(), java.util.Map.of())) != null) throw new AssertionError();
+  System.out.println("unported action frame passed");
  }
 }'''.replace('METHOD', method))
-        sources = list(out.glob('backend/**/*.java')) + write_stubs(self.root/'stubs') + [smoke]
+        service = next(out.glob('backend/DPS/*ServiceImpl.java')).read_text()
+        frame = service[service.index(' ' + method + '('):]
+        self.assertRegex(frame[:frame.index('\n    }\n')], r'//endregion\n\s*\}\);')  # empty: nothing started
+        self.assertNotIn('NOT_IMPLEMENTED', frame[:frame.index('\n    }\n')])
+        sources = compile_copies(list(out.glob('backend/**/*.java')), self.root) + write_stubs(self.root/'stubs') + [smoke]
         argfile = self.root/'sources.args'; argfile.write_text('\n'.join('"'+str(p).replace('\\','/')+'"' for p in sources))
         classes = self.root/'classes'
         build = subprocess.run(['java','com.sun.tools.javac.Main','-encoding','UTF-8','--release','17','-d',str(classes),'@'+str(argfile)],capture_output=True,text=True,timeout=60)

@@ -167,11 +167,10 @@ fel az importálandó osztályokat.
 
 ## Azonnal éles backend (`backend_live`)
 
-Bekapcsolva a generált végpontok azonnal működnek. A `MODULE_REVIEWED` kapcsoló kezdőértéke
-`true`, az írás engedélyezett (hacsak a `schema.json` `writable: false`-t nem mond), és a
-WHERE-rel szűrt blokk írása ellenőrizendő jelzés, nem tiltás. Egyetlen kapcsoló
-(`MODULE_REVIEWED = false`) továbbra is mindent letilt. A webes felületen alapból be van
-kapcsolva (`FRM_BACKEND_LIVE`), parancssorból a konfigurációban: `"backend_live": true`.
+Bekapcsolva az írás engedélyezett (hacsak a `schema.json` `writable: false`-t nem mond), és a
+WHERE-rel szűrt blokk írása ellenőrizendő jelzés, nem tiltás. Modulszintű kapcsoló (`MODULE_REVIEWED`) nincs:
+a generált végpontok mindig működnek, a modult a fejlesztő veszi használatba, amikor kész. A webes felületen alapból
+be van kapcsolva (`FRM_BACKEND_LIVE`), parancssorból a konfigurációban: `"backend_live": true`.
 
 ## 4. LOV-végpontok
 
@@ -191,7 +190,6 @@ Minden LOV-hoz, amelynek RecordGroupQuery-je van, egy `POST .../lov/<név>` vég
   lekérdezést vagy a hiányzó rekordcsoportot tartalmazó LOV indoklással tiltott.
 - **Naptár:** a katalógusban szereplő naptárhívással kiváltott dátum-LOV nem kap végpontot.
 - **Kapcsolók:**
-  - Mint minden generált végpont, a LOV is a `MODULE_REVIEWED` kapcsoló mögött van.
   - A korábbi viselkedés (LOV-kód nélküli backend) a `"backend_lov_endpoints": false`
     beállítással kapható vissza.
 - **Hol látszik:** a végpontok listája a `BACKEND_TASKS.md` **LOV-végpontok**

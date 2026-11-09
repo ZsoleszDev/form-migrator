@@ -93,7 +93,7 @@ class CompactBackendTests(unittest.TestCase):
         self.assertEqual([e['lov'] for e in plan['endpoints'] if e.get('operation') == 'lov'], ['CODES'])
         self.assertEqual(sorted((s['block'], s['operation']) for s in plan['skipped_operations']),
                          sorted((b, op) for b in ['DETAIL', 'HEADER', 'SUMMARY'] for op in ['list', 'create', 'delete']))
-        self.assertFalse(any(e['implemented'] for e in plan['endpoints']))
+        self.assertFalse(any(e.get('ready_after_module_review') for e in plan['endpoints']))  # no module switch
         self.assertIsNone(plan['dto_selection'][-1]['dto'])
 
     def test_sql_trigger_lov_and_action_evidence_is_in_the_evidence_file(self):

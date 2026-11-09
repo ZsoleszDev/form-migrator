@@ -136,9 +136,9 @@ def region(title: str, sections: list[tuple[str, str]], indent: str, notes: list
 
 
 def placeholder(label: str, indent: str) -> str:
-    from .common import jstr
-    return (indent + "// TODO(AI): a fenti Forms-kód Java-változata ide kerül (Java asszisztens).\n"
-            + indent + "throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED, " + jstr(PLACEHOLDER + label) + ");")
+    """The body under the region: empty. The Java assistant writes it from the commented Forms code; a started or
+    placeholder body (a TODO, a NOT_IMPLEMENTED throw, half-translated code) only confuses the model."""
+    return ""
 
 
 def unit_sections(source: str, model: dict) -> list[tuple[str, str]]:
@@ -169,7 +169,7 @@ def hook_body(trigger: dict, model: dict, catalog: dict | None = None, indent: s
     """The body of a record/item trigger hook: the region and the placeholder."""
     source = (trigger.get("replacement") or {}).get("source", trigger["source"])
     title = trigger["owner"] + " / " + trigger["event"] + (" (form szintű, " + trigger["block"] + " blokkra)" if trigger.get("form_level") else "")
-    notes = ["AI-ra vár. Bemenet/kimenet: a rekord (row.<mező>), üzenet: context.message(...), hiba: context.abort() vagy kivétel."]
+    notes = ["Bemenet/kimenet: a rekord (row.<mező>), üzenet: context.message(...), hiba: context.abort() vagy kivétel."]
     notes += framework_note(source, catalog, trigger.get("framework_calls"))
     sections = [(trigger["owner"] + " / " + trigger["event"], source)] + unit_sections(source, model)
     return region(title, sections, indent, notes) + placeholder(trigger["owner"] + " / " + trigger["event"], indent)

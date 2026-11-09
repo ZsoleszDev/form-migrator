@@ -41,9 +41,7 @@ public class DbcallServiceImpl extends ModuleServiceBase<DpsLogHelper> implement
         this.jdbc = Objects.requireNonNull(jdbc);
     }
 
-    // Forms blokk: B (T_B) · lista · engedélyezett.
-    // Triggerek: POST-QUERY (Java).
-    // SQL és triggerkód: ebben a DPS ServiceImpl-ben; részletek: analysis/backend-evidence.md
+    // B blokk (T_B): lista.
     @Transactional(rollbackFor = Exception.class)
     @Override
     public PageResult<BRow> listB(UserDto user, int offset, int limit) throws Exception {
@@ -65,9 +63,7 @@ public class DbcallServiceImpl extends ModuleServiceBase<DpsLogHelper> implement
         });
     }
 
-    // Forms blokk: B (T_B) · új rekord · engedélyezett.
-    // Triggerek: POST-QUERY (Java), PRE-INSERT (Java).
-    // SQL és triggerkód: ebben a DPS ServiceImpl-ben; részletek: analysis/backend-evidence.md
+    // B blokk (T_B): új rekord.
     @Transactional(rollbackFor = Exception.class)
     @Override
     public RowResult<BRow> createB(UserDto user, BRow row) throws Exception {
@@ -88,9 +84,7 @@ public class DbcallServiceImpl extends ModuleServiceBase<DpsLogHelper> implement
         });
     }
 
-    // Forms blokk: B (T_B) · módosítás · engedélyezett.
-    // Triggerek: POST-QUERY (Java).
-    // SQL és triggerkód: ebben a DPS ServiceImpl-ben; részletek: analysis/backend-evidence.md
+    // B blokk (T_B): módosítás.
     @Transactional(rollbackFor = Exception.class)
     @Override
     public RowResult<BRow> updateB(UserDto user, BRow original, BRow value) throws Exception {
@@ -119,9 +113,7 @@ public class DbcallServiceImpl extends ModuleServiceBase<DpsLogHelper> implement
         });
     }
 
-    // Forms blokk: B (T_B) · törlés · engedélyezett.
-    // Triggerek: PRE-DELETE (PL/SQL az adatbázisban).
-    // SQL és triggerkód: ebben a DPS ServiceImpl-ben; részletek: analysis/backend-evidence.md
+    // B blokk (T_B): törlés.
     @Transactional(rollbackFor = Exception.class)
     @Override
     public List<String> deleteB(UserDto user, BRow original) throws Exception {

@@ -168,7 +168,7 @@ class AutomationTests(unittest.TestCase):
         service = (self.root / 'out/backend/DPS/LovtestServiceImpl.java').read_text(encoding='utf-8')
         self.assertIn('public LovResult lovOrszagok(UserDto user, LovRequest request) throws Exception', service)
         flat = ' '.join(service.split())  # Checkstyle layout: braces and one statement per line
-        self.assertIn('if (!MODULE_REVIEWED) { throw', flat)
+        self.assertNotIn('MODULE_REVIEWED', flat)
         self.assertIn('if (!false) { throw', flat)  # EVEK: blocked by its own reason
         self.assertIn('LOV_VAROSOK_PATH = "/lov/varosok"', (self.root / 'out/backend/CL/LovtestConstants.java').read_text(encoding='utf-8'))
 

@@ -394,12 +394,13 @@ class ScreenTests(unittest.TestCase):
         self.assertIn('B.H | Rejtett/technikai', notes)
         self.assertIn('NavigationStyle=Change Record', notes)
 
-    def test_unsupported_metadata_retained_and_backend_cannot_run(self):
+    def test_unsupported_metadata_retained_and_backend_cannot_write(self):
         xml = '<FormModule Name="F" CoordinateSystem="Real" RealUnit="Pixel"><Block Name="B" QueryDataSourceName="TABLE1"><Item Name="A" ItemType="Text Item" FontName="Arial"/></Block></FormModule>'
         out, plan, _ = self.generate(xml)
         self.assertIn('UNMAPPED_ATTRIBUTE', plan['ui_issue_counts'])
         summary = json.loads((out / 'analysis/summary.json').read_text())
-        self.assertEqual(summary['readable_blocks'], 0); self.assertEqual(summary['writable_blocks'], 0)
+        # No module switch: the query is readable; writing needs schema.json writable.
+        self.assertEqual(summary['readable_blocks'], 1); self.assertEqual(summary['writable_blocks'], 0)
 
     def test_mojibake_repair_is_reversible_and_optional(self):
         source = 'Lekérdezés'.encode('utf-8').decode('cp1250'); changes = []

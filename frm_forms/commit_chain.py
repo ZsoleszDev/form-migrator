@@ -138,7 +138,7 @@ def ai_hook(event: str, plan: dict, model: dict) -> tuple[str, str]:
     trigger = next(t for t in model['triggers'] if t['id'] == plan['trigger'])
     source = (trigger.get('replacement') or {}).get('source', trigger['source'])
     hook = AI_HOOKS[event]
-    notes = ['AI-ra vár. Bemenet: values (a képernyő BLOKK -> MEZŐ -> érték), parameters (:GLOBAL/:PARAMETER/:SYSTEM);',
+    notes = ['Bemenet: values (a képernyő BLOKK -> MEZŐ -> érték), parameters (:GLOBAL/:PARAMETER/:SYSTEM);',
              'kimenet: blocks (visszaírt mezők), globals, messages (MESSAGE), commands (Forms-utasítások a képernyőnek).']
     notes += ai_triggers.framework_note(source, None)
     body = (ai_triggers.region(trigger['id'] + ' (' + event + ', a COMMIT_FORM ' + ('előtt' if event == 'PRE-COMMIT' else 'után') + ')',

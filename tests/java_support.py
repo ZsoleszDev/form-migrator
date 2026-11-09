@@ -33,6 +33,34 @@ def trigger_mode(mode: str):
     return set_up, tear_down
 
 
+# An empty frame the Java assistant has not written yet: the commented Forms code, then the lambda closes.
+import re as _re
+EMPTY_FRAME = _re.compile(r"(//endregion[^\n]*\n)(?:[ \t]*\n)*([ \t]*)\}\);")
+
+
+def written_frames(text: str) -> str:
+    """The generated service with every empty AI frame written as `return null;`: what compiles once the Java
+    assistant (or the developer) has written them. The frames themselves are left empty on purpose."""
+    return EMPTY_FRAME.sub(lambda m: m.group(1) + m.group(2) + "    return null;\n" + m.group(2) + "});", text)
+
+
+def compile_copies(sources, work: Path) -> list:
+    """Copies of the sources with the empty frames written (written_frames), for javac."""
+    result = []
+    for number, source in enumerate(sources):
+        source = Path(source)
+        text = source.read_text(encoding="utf-8")
+        filled = written_frames(text)
+        if filled == text:
+            result.append(source)
+            continue
+        copy = work / "written" / str(number) / source.name
+        copy.parent.mkdir(parents=True, exist_ok=True)
+        copy.write_text(filled, encoding="utf-8")
+        result.append(copy)
+    return result
+
+
 # Imports of the company classes above, for generator configs in compile tests.
 COMPANY_IMPORTS = ['hu.company.common.ModuleServiceBase', 'hu.company.common.ModuleControllerBase', 'hu.company.common.DpsLogHelper',
                    'hu.company.common.WbsLogHelper', 'hu.company.common.UserDto']

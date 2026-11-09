@@ -9,7 +9,7 @@ import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 
-from java_support import COMPANY_IMPORTS, trigger_mode, write_stubs
+from java_support import COMPANY_IMPORTS, compile_copies, trigger_mode, write_stubs
 from frm_forms.cli import main
 from frm_forms.common import MigrationError
 from frm_forms.dictionary import references
@@ -98,7 +98,6 @@ class FormsRuntimeTests(unittest.TestCase):
         listing = next(e for e in plan['endpoints'] if e['operation'] == 'list')
         self.assertEqual(listing['blockers'], [])
         self.assertIn('CALENDAR', [b['block'] for b in self.read(out, 'screen-plan.json')['framework_blocks']])
-        self.assertIn('Forms-futtatókörnyezet, kihagyva', (out / 'backend/DPS/RtServiceImpl.java').read_text(encoding='utf-8'))
 
     def test_mixed_trigger_runs_its_sql_without_the_forms_call(self):
         out = self.generate()
@@ -216,7 +215,7 @@ class FormsRuntimeTests(unittest.TestCase):
         if not shutil.which('java'):
             self.skipTest('Java 11+ compiler required')
         out = self.generate(config={'backend_live': True})
-        sources = list(out.glob('backend/**/*.java')) + write_stubs(self.root / 'stubs')
+        sources = compile_copies(list(out.glob('backend/**/*.java')), self.root) + write_stubs(self.root / 'stubs')
         args = self.root / 'sources.args'
         args.write_text('\n'.join('"' + str(p).replace(chr(92), '/') + '"' for p in sources))
         result = subprocess.run(['java', 'com.sun.tools.javac.Main', '--release', '11', '-encoding', 'UTF-8',

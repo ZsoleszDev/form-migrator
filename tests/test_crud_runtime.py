@@ -9,6 +9,7 @@ Like Forms, a missing Required item or a too long value is refused (422) before 
 import contextlib
 import io
 import json
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -59,7 +60,7 @@ public class Required {
     public static void main(String[] args) throws Exception {
         if (create(null) != HttpStatus.UNPROCESSABLE_ENTITY) throw new AssertionError("Required: 422 before the trigger");
         if (create("ABCD") != HttpStatus.UNPROCESSABLE_ENTITY) throw new AssertionError("too long: 422 before the trigger");
-        // A valid value reaches WHEN-VALIDATE-ITEM: the Java assistant's placeholder answers 501.
+        // A valid value reaches WHEN-VALIDATE-ITEM (its hook, written by the test, refuses with 501).
         if (create("A") != HttpStatus.NOT_IMPLEMENTED) throw new AssertionError("the trigger runs after the checks");
         System.out.println("validation order checks passed");
     }
@@ -197,6 +198,12 @@ class CrudRuntimeTests(unittest.TestCase):
         service = (out / 'backend/DPS/KotelezoServiceImpl.java').read_text(encoding='utf-8')
         create = service[service.index('public RowResult<BRow> createB('):service.index('public RowResult<BRow> updateB(')]
         self.assertLess(create.index('validateB(row);'), create.index('validateRulesB(row, context);'))
+        # The hook waits empty for the Java assistant; written here as a refusal, so the order is visible at run time.
+        hook = re.search(r'(private void triggerWhenValidateItem\w*\(BRow row, RuleContext context\) \{[\s\S]*?//endregion\n)(\s*\})', service)
+        self.assertIsNotNone(hook)
+        written = service[:hook.end(1)] + ('        throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED, "trigger");\n'
+                                           + service[hook.start(2):])
+        (out / 'backend/DPS/KotelezoServiceImpl.java').write_text(written, encoding='utf-8')
         self.assertIn('validation order checks passed', self.run_java(out, 'Required', REQUIRED))
 
 

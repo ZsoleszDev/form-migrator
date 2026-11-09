@@ -50,8 +50,10 @@ bekötni. A képernyőértékek bekötése külön, összecsukott haladó eszkö
   írja, az egyszerű triggereket a migrátor AI nélkül: a rekordtriggereket (szekvenciás kulcs,
   kódtábla-megnevezés, üzenettel megálló ellenőrzés, master-detail törlésellenőrzés, a trigger
   INSERT/UPDATE/DELETE-je), az egyszerű gombokat (ellenőrzés, egy megerősítő kérdés, SQL,
-  mezőérték visszaírása, GO_BLOCK/EXECUTE_QUERY) és a lekérdező gombokat (DEFAULT_WHERE +
-  EXECUTE_QUERY, az eredeti PL/SQL-lel összevetve). A Spring-bekötéseket is a migrátor illeszti be.
+  mezőérték visszaírása, GO_BLOCK/EXECUTE_QUERY). A Spring-bekötéseket is a migrátor illeszti be.
+- A DPS-ben az AI-ra váró metódus üres: fölötte egy segítő sor, benne az eredeti Forms-kód kommentben.
+  A migrátor nem kezdi el (nincs helyőrző, nincs félig lefordított kód), és nincs `MODULE_REVIEWED`
+  kapcsoló: a fejlesztő dönti el, mikor kész a modul.
 - Opcionálisan a generált képernyő is elküldhető az AI-nak (standalone komponens, signalok, olvasható,
   kommentezett kód, ugyanazzal a működéssel). A teljes fájl csak akkor, ha belefér a kontextusba; ha nem,
   részenként (a fej a signalokkal, utána a metódusok). Sosem automatikus, beillesztés csak átnézés után.

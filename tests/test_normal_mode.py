@@ -132,7 +132,7 @@ class NormalModeTests(unittest.TestCase):
                 self.assertIn("'NORMAL'", query['where_sql'])
                 service = (out / 'backend/DPS/NormalServiceImpl.java').read_text()
                 method = service[service.index('public LovResult lovInptip('):]
-                self.assertIn('static final boolean MODULE_REVIEWED = true;', service)
+                self.assertNotIn('MODULE_REVIEWED', service)
                 self.assertNotIn('if (!false)', method)
                 self.assertNotIn('SELECT NULL FROM DUAL WHERE 1 = 0', method)
                 self.assertIn("'NORMAL' = 'ENTER-QUERY'", re.sub(r'"\s*\+\s*"', '', method))  # SQL wrapped below 120 characters
@@ -140,12 +140,12 @@ class NormalModeTests(unittest.TestCase):
                 # Evidence retains the original query; it is not overwritten with the adaptation.
                 self.assertIn(':SYSTEM.MODE', (out / 'analysis/backend-evidence.md').read_text())
 
-    def test_review_switch_still_controls_an_otherwise_ready_lov(self):
+    def test_a_ready_lov_is_live_without_a_module_switch(self):
         out = self.generate(live=False)
         plan = json.loads((out / 'analysis/backend-plan.json').read_text())
         lov = next(e for e in plan['endpoints'] if e['method'] == 'lovInptip')
-        self.assertFalse(lov['implemented'])
-        self.assertTrue(lov['ready_after_module_review'])
+        self.assertTrue(lov['implemented'])
+        self.assertFalse(lov['ready_after_module_review'])
         self.assertEqual(lov['blockers'], [])
 
     def test_generated_java_lov_compiles_and_reaches_jdbc_without_a_mode_parameter(self):

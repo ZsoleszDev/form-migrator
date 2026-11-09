@@ -310,10 +310,11 @@ END;'''
         self.assertIn('GO_BLOCK', reason)
         self.assertTrue(action['blockers'][0].startswith('Lekérdezés-adapter: '))
         java = (out / 'backend/DPS/QueryServiceImpl.java').read_text()
-        # Wrapped comments must retain the full reason, rather than a 160-char prefix.
-        comments = ' '.join(line.strip().removeprefix('// ') for line in java.splitlines() if line.strip().startswith('// '))
-        self.assertIn(reason, comments)
+        # The ServiceImpl keeps one helper line (the reason in full is in the reports, not above the method).
+        self.assertIn('az ok: analysis/backend-plan.json', java)
+        self.assertNotIn(reason, java)
         self.assertIn(reason, (out / 'analysis/backend-evidence.md').read_text())
+        self.assertIn(reason, (out / 'analysis/backend-plan.json').read_text())
 
     def test_regeneration_reports_preserved_501_even_when_the_fresh_candidate_is_ready(self):
         out = self.generate(builder=BUILDER.replace("go_block('BLK')", "go_block('OTHER')"))
@@ -385,12 +386,14 @@ END;'''
         self.assertIn('row.setCol6(rs.getString(1))', service)
         self.assertIn('new QueryPageResultDto<>(rows, messages, more)', service)  # hasMore: the page left rows out
 
-    def test_review_gate_still_controls_the_query_button(self):
+    def test_no_module_switch_holds_the_query_button_back(self):
+        # The developer puts the module to use when it is done: no MODULE_REVIEWED switch, also without backend_live.
         out = self.generate(config={'backend_live': False})
         action = self.action(out)
-        self.assertFalse(action['implemented'])
-        self.assertTrue(action['ready_after_module_review'])
+        self.assertTrue(action['implemented'])
+        self.assertFalse(action['ready_after_module_review'])
         self.assertEqual(action['blockers'], [])
+        self.assertNotIn('MODULE_REVIEWED', (out / 'backend/DPS/QueryServiceImpl.java').read_text())
 
     def test_generated_java_compiles_and_calls_builder_then_query_and_post_query(self):
         self.java_query_flow()

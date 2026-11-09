@@ -128,7 +128,7 @@ def coverage(model, backend=None, screen=None):
             row['endpoints'].append({k: endpoint.get(k) for k in ('method', 'operation', 'implemented', 'ready_after_module_review', 'blockers')})
         if linked and not any(e['implemented'] for e in linked):
             row['status'] = 'blocked'
-            row['gaps'].append('A kapcsolódó végpontok jelenleg tiltottak; lásd a MODULE_REVIEWED és a műveleti blokkolók állapotát.')
+            row['gaps'].append('A kapcsolódó végpontok jelenleg tiltottak; lásd a műveleti blokkolókat.')
         if trigger.get('passthrough', {}).get('unresolved'):
             row['gaps'].append('Adatbázisban/PLL-ben ellenőrizendő rutinok: ' + ', '.join(trigger['passthrough']['unresolved']))
         rows.append(row)

@@ -62,14 +62,7 @@
     }
   ],
   "module_gate": {
-    "switch": "MODULE_REVIEWED",
-    "required": true,
-    "reasons": [
-      "Migrációs váz: az összes adatbázis-művelet tiltott az ellenőrzött implementációig."
-    ],
-    "codes": [
-      "SCAFFOLD_REVIEW_REQUIRED"
-    ]
+    "required": false
   },
   "endpoints": [
     {
@@ -102,21 +95,21 @@
       "method": "lovInptip",
       "http": "POST",
       "constant": "TesztConstants.LOV_INPTIP_PATH",
-      "implemented": false,
+      "implemented": true,
       "block": "V_ELEK_ADLAP",
       "operation": "lov",
       "lov": "INPTIP",
-      "ready_after_module_review": true,
+      "ready_after_module_review": false,
       "blockers": []
     },
     {
       "method": "commitForm",
       "http": "POST",
       "constant": "TesztConstants.COMMIT_FORM_PATH",
-      "implemented": false,
+      "implemented": true,
       "block": "@FORM",
       "operation": "commit",
-      "ready_after_module_review": true,
+      "ready_after_module_review": false,
       "blockers": [],
       "blocks": [
         "AIT"

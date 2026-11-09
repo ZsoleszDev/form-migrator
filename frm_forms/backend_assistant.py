@@ -203,8 +203,6 @@ def prepare_workspace(output: Path) -> dict:
     for endpoint in endpoints:
         if endpoint.get("assistant", {}).get("applied"):
             continue
-        if ai_mode and endpoint.get("runs") == "java-query":
-            continue  # the migrator's query (query_java): done, no AI call (also not by the automatic AI queue)
         # Offered: exactly the methods that still carry the commented original Forms code
         # (//region Eredeti Forms-kód ...): manual buttons, Java/PL-SQL query buttons, gated CRUD.
         method = endpoint["method"]

@@ -41,7 +41,7 @@ class Settings:
     extra_cors_origins: list[str] = field(default_factory=list)
     extra_cors_headers: list[str] = field(default_factory=list)
     cors_allow_credentials: bool = False
-    # Web jobs: generated endpoints live at once (MODULE_REVIEWED = true). FRM_BACKEND_LIVE=false: review first.
+    # Web jobs: generated writes allowed at once (unless schema.json forbids them). FRM_BACKEND_LIVE=false: not by default.
     backend_live_default: bool = True
     # Deploy into a project (POST .../deploy) and folder browsing: when set, only folders inside these
     # (FRM_PROJECT_ROOTS, comma list).

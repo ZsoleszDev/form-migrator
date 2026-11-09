@@ -41,8 +41,8 @@ DEFAULTS = {"java_package": "hu.company.features", "api_prefix": "/api/forms", "
             # LOV endpoints from RecordGroupQuery (reviewed read-only SQL). false: the
             # earlier policy, no LOV code in the backend, the SQL stays analysis material.
             "backend_lov_endpoints": True,
-            # true: generated endpoints are live at once (MODULE_REVIEWED = true, writes allowed unless
-            # schema.json says writable:false). The web UI turns it on by default (FRM_BACKEND_LIVE).
+            # true: generated writes are allowed unless schema.json says writable:false.
+            # The web UI turns it on by default (FRM_BACKEND_LIVE).
             "backend_live": False,
             # "ai" (4.35): no deterministic translation of server-side trigger code. Every trigger gets its method
             # frame (endpoint/hook, DTOs, transaction, log1x) with the original Forms code commented in its body;
@@ -323,7 +323,7 @@ def _migration(args, on_progress=None) -> int:
         model['generation_mode'] = generation_mode
         if scaffold_mode or screen_mode:
             model['issues'].append({'code': 'SCAFFOLD_REVIEW_REQUIRED', 'owner': '@FORM:' + model['name'], 'scope': 'all',
-                                    'detail': 'Migrációs váz: az összes adatbázis-művelet tiltott az ellenőrzött implementációig.'})
+                                    'detail': 'Migrációs váz: az adatbázis-műveleteket a használatba vétel előtt ellenőrizni kell.'})
         finalize_capabilities(model)
         ui_model = build_ui_model(resolution, config, module, model)
         discovery = build_map([(inputs.form.filename, resolution.root)] + [(d.filename, d.root) for d in inputs.documents[1:]],
