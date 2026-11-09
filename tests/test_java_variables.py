@@ -19,12 +19,15 @@ import tempfile
 import unittest
 import unittest.mock
 
-from java_support import COMPANY_IMPORTS, write_stubs
+from java_support import COMPANY_IMPORTS, trigger_mode, write_stubs
 from frm_forms import java_variables
 from frm_forms.cli import main
 from frm_forms.common import MigrationError
 import test_developer_inputs as inputs
 import test_query_java as tq
+
+setUpModule, tearDownModule = trigger_mode('plsql')
+
 
 EXAMPLE = {'variableName': 'ibuKod', 'variableValue': 'commonService.Details(param)', 'autowired': 'commonService',
            'import': 'hu.company.pelda.CommonService'}

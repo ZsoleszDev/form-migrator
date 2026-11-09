@@ -17,7 +17,7 @@ import tempfile
 import unittest
 from xml.sax.saxutils import quoteattr
 
-from java_support import COMPANY_IMPORTS, write_stubs
+from java_support import COMPANY_IMPORTS, trigger_mode, write_stubs
 from frm_forms import framework
 from frm_forms.cli import main
 from frm_forms.messages import simplify, wrapper
@@ -25,6 +25,9 @@ from frm_forms.plsql import Unsupported, parse
 from frm_forms.plsql_passthrough import scan
 import test_query_actions as qa
 import test_query_java as tq
+
+setUpModule, tearDownModule = trigger_mode('plsql')
+
 
 REPLICA = Path(__file__).parent / 'fixtures/felmeres_replika_fmb.xml'
 AKTIV = 'Name="AKTIV" ItemType="Text Item" DataType="Char" MaximumLength="1" ColumnName="AKTIV" InitialValue="I" Visible="false"/>'

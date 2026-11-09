@@ -17,8 +17,10 @@ from frm_forms import backend_assistant as assistant
 from frm_forms import assistant_context, assistant_log
 from frm_forms.cli import main
 from frm_forms.common import MigrationError, read_json, write_json
-from java_support import COMPANY_IMPORTS, write_stubs
+from java_support import COMPANY_IMPORTS, trigger_mode, write_stubs
 from test_manual_action_source import FORM
+
+setUpModule, tearDownModule = trigger_mode('plsql')
 
 
 def answer(**changes):

@@ -7,7 +7,7 @@
 - A failed web job's error names the exception and its place (the log tab is hidden in the UI: the overview shows
   the end of the log under the error).
 """
-import java_support  # noqa: F401  (legacy trigger mode for these engine tests)
+from java_support import trigger_mode
 import contextlib
 import io
 import json
@@ -22,6 +22,8 @@ from frm_forms.common import failure_report, run_deep
 from frm_forms.web import worker
 from frm_forms.web.jobs import failure_message
 import test_query_actions as qa
+
+setUpModule, tearDownModule = trigger_mode('plsql')
 
 
 def long_concatenation_form(pieces=1500) -> bytes:

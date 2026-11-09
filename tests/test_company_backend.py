@@ -1,5 +1,5 @@
 """Cross-layer contracts and lossless conversion of generated DPS DTO accesses."""
-import java_support  # noqa: F401  (legacy trigger mode for these engine tests)
+from java_support import trigger_mode
 import json
 import re
 import unittest
@@ -12,6 +12,9 @@ from frm_forms.common import MigrationError
 from frm_forms.java_dto import bean_source
 from frm_forms.service_inline import JAVA_NONCODE, mask
 import os
+
+setUpModule, tearDownModule = trigger_mode('plsql')
+
 
 os.environ.setdefault('FRM_JAVA_IMPORT_MAP', '-')  # tests never read a developer's own java-imports.json
 os.environ.setdefault('FRM_JAVA_VARIABLE_MAP', '-')  # nor a developer's own java-variables.json

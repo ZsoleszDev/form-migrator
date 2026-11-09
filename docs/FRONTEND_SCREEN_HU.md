@@ -199,8 +199,24 @@ A gomb `on<Gomb>Click()` metódusa (4.27) csak a HTTP-kérést és az ablakok l�
 - `show_window('EDIT')` → `this.windowVisible['EDIT'] = true;` (ugyanígy `show_view` / `hide_view`);
 - a fókuszlépések (`goItem`, rekordnavigáció, `enterQuery`, `listValues`) kimaradnak.
 
-Ha a gombnak más lépése is van (`clear_block`, `message`, `exit_form` ...), vagy egy lépéshez nincs mit hívni
+Ha a gombnak más lépése is van (`clear_block`, `exit_form` ...), vagy egy lépéshez nincs mit hívni
 (például nincs a blokkhoz generált lekérdezés), a gomb TODO-t kap az eredeti Forms-kóddal.
+
+**Adatbázismunka nélküli gombok (`backend_trigger_mode: "ai"`).** A Java-alkalmazás csak adatbázismunkát kap. Az a
+gomb, amelynek kódjában (a hívott helyi eljárásokkal és a `DO_KEY` által indított key-triggerrel együtt) nincs SQL,
+adatbázis-rutin vagy -csomagelem, a blokk SQL-jének módosítása (`SET_BLOCK_PROPERTY … DEFAULT_WHERE`) vagy szerverre
+nyúló Forms-hívás (`FORMS_DDL`, `POPULATE_GROUP` …), nem kap Java-végpontot és Java-asszisztens-feladatot: a
+képernyőé (`frm_forms/database_work.py`; ami nem elemezhető, az kétség esetén a szerveré marad). A képernyő ilyenkor
+további lépéseket is maga hajt végre:
+
+- `:BLOKK.MEZŐ := 'állandó'` / `NULL` / `:BLOKK.MÁSIK_MEZŐ` → `this.forms['régió']?.get('kulcs')?.setValue(...)`;
+- `VALIDATE(ITEM_SCOPE)` és utána `IF NOT FORM_SUCCESS THEN RAISE FORM_TRIGGER_FAILURE; END IF;` →
+  `if (this.migrationInvalid('régió')) { return; }` (a mezők saját ellenőrzése, a hibásak megjelölve);
+- `MESSAGE('szöveg')` → toast; a `SYNCHRONIZE`, `CLEAR_MESSAGE`, `BELL` kimarad.
+
+Ami ezen túl van (`:GLOBAL`, feltétel, saját eljárás), az a gomb metódusában TODO az eredeti kóddal, a
+MIGRATION_NOTES.md-ben és a RUNTIME_COVERAGE.md-ben „Bekötendő”, az ok megnevezésével: „Nincs benne
+adatbázismunka, ezért nincs Java-végpontja”.
 
 A `MIGRATION_NOTES.md` első szekciója a tényleges teendőket összesíti; a
 **Triggerek besorolása** a triggereket keretrendszeri / vegyes / saját / üres
@@ -466,8 +482,9 @@ export class XyComponent extends ServiceBase {
   formátumban pontosan a `…_NAME` érték). Erre rákeresve a hívás a CL-ben, a DPS-ben, a WBS-ben és a
   komponensben is megtalálható. A szerver- és modulútvonalat a `ServiceBase.url()` teszi elé. A válasz típusa
   `any` (4.27): saját interfész és válaszboríték-kezelő (`data()`) nincs.
-- **Ki hívja:** a gombok metódusai (`onPbKeresClick()`), a `save()` és az indítási végpontot a konstruktor. A
-  többi (például a LOV vagy egy gomb nélküli lekérdezés) kész metódus, a fejlesztő hívja.
+- **Ki hívja:** a gombok metódusai (`onPbKeresClick()`), a `save()`, és a konstruktor az indításkori lekérdezést
+  (`plsql` módban az indítási végpontot is). A többi (például a LOV vagy egy gomb nélküli lekérdezés) kész metódus, a
+  fejlesztő hívja.
 - **Naplózás:** minden sikeres válasz legelőször a `WFF.debug(this.modName + '.<metódus>', res)` hívásba
   kerül (`tap`), ahol a `<metódus>` a végpontmetódus neve. A `modName` (a modul útvonala) és a `router`
   a céges `ServiceBase`-ből öröklődik.
@@ -661,14 +678,29 @@ export class RendelesComponent extends ServiceBase {
 
   // Mentés (Forms COMMIT_FORM): a változások egy kérésben; a backend egy tranzakcióban, Forms-sorrendben ment.
   protected save(): void {
-    // TODO: a blokkok változásai a DTO mezőivel: inserted: [új rekord], updated: [{ original, value }], deleted: [rekord].
-    this.commitForm({ changesRendeles: { inserted: [], updated: [], deleted: [] } }).subscribe();
+    const rendeles = this.forms['rendeles']?.getRawValue() ?? {};
+    this.commitForm({
+      changesRendeles: this.migrationChanges('RENDELES', rendeles, this.forms['rendeles']?.dirty),
+    }).subscribe(res => {
+      if (res.rowsRendeles?.length) {
+        const row = res.rowsRendeles[0];
+        this.migrationLoaded['RENDELES'] = row;
+        this.forms['rendeles']?.reset({ ...row, datum: row?.datum ? new Date(row.datum) : null });
+      }
+      this.applyActionResult(res);
+    });
   }
 }
 ```
 
-- **Konstruktor:** mindig van `constructor() { super(); }`, a mezők és a függvények között; ha a képernyőnek
-  indítási végpontja van, a hívása is ide kerül.
+- **Konstruktor:** mindig van `constructor() { super(); }`, a mezők és a függvények között; az indításkori
+  lekérdezés (és `plsql` módban az indítási végpont hívása) ide kerül.
+- **Indítás (AI-mód):** a PRE-FORM / WHEN-NEW-FORM-INSTANCE állandó értékadásai és konstans mezőtulajdonságai a
+  struktúrában vannak (`startValue`, `disabled`, `readonly`, `labelText`); az állandó `:GLOBAL` az az érték, amelyet a
+  képernyő a kéréseiben küld; a `GO_BLOCK` + `EXECUTE_QUERY` lekérdezést a konstruktor hívja, ha a feltétele nem a
+  képernyőről vagy paraméterből jön. Indítási végpont nem készül: az indítókódból nem lesz Java. A Forms-oldali
+  állapot (értéklista, csomagváltozó) és az indításkori adatbázismunka a MIGRATION_NOTES.md „Indítás” szakaszában
+  van („Nem migrált adatbázismunka”, a kóddal).
 - **Sablon:** a struktúrákra szögletes zárójellel hivatkozik:
   `<ank-form-block [formStructure]="structures['ctrl']" (formGroupGenerated)="onFormGroupGenerated('ctrl', $event)" />`.
   A `structures` típusa `Record<string, …>`, és az Angular CLI alap tsconfigja (`noPropertyAccessFromIndexSignature`)
@@ -677,8 +709,14 @@ export class RendelesComponent extends ServiceBase {
 - **Metódusok:** a végpontok; `onFormGroupGenerated` (a régiók FormGroupjai a `forms`-ban); `on<Gomb>Click()`
   gombonként; `save()`, ha a képernyőnek van mentési végpontja és menthető űrlapblokkja; `onRowAction()`, ha egy
   táblázatnak sor végi gombjai vannak. Segédmetódus (`text`, `data`, `blocks`, `parameters`, `showResult` ...) nincs.
-- **Mentés:** a sablon tetején egy **Mentés** gomb (`save()`). A `save()` a mentési végpont kérését küldi, a
-  blokkok változásai üres listák: összeállításuk (a lekérdezett rekordhoz képest módosítás, új rekord, törlés)
-  fejlesztői feladat (TODO).
+- **Mentés:** a sablon tetején egy **Mentés** gomb (`save()`). A lekérdezés az űrlapblokk rekordját
+  (`limit: 1`, a többi találatról a `migrationMoreRows` szól) teljesen beírja az űrlapba (`reset`), és mentett blokknál
+  megjegyzi (`migrationLoaded`). A `save()` blokkonként az űrlap rekordját küldi (`migrationChanges`): lekérdezett
+  rekordnál módosításként, ha a képernyő eltér tőle (`updated: [{ original, value }]`, az `original` a backend
+  ütközésvizsgálatáé), lekérdezés nélkül új rekordként, ha a felhasználó beírt valamit (`inserted`). A jelölőnégyzet a
+  képernyőn `true/false`, a rekordban a Forms-érték (`I/N`); a dátum a képernyőn `Date`, a rekordban helyi ISO-szöveg;
+  az üres szöveg `null`. Mentés után a képernyő a mentett, újraolvasott rekordot mutatja (például a generált
+  kulccsal); a válasz üzenetei és utasításai az `applyActionResult`-ba mennek. Törlést a képernyő nem küld
+  (`deleted: []`): a Forms `DELETE_RECORD` megfelelője fejlesztői feladat.
 - **Kommentek:** csak a továbbfejlesztést segítő megjegyzések maradnak (TODO-importok, a gombok TODO-i, a nem
   fordított gomboknál az eredeti Forms-kód).

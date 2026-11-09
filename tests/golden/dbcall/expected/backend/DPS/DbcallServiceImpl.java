@@ -12,6 +12,7 @@ import java.util.Set;
 
 import hu.company.features.cl.CommonMigrateTools.DbCalls;
 import hu.company.features.cl.CommonMigrateTools.FormsChecks;
+import hu.company.features.cl.CommonMigrateTools.FormsErrors;
 import hu.company.features.cl.CommonMigrateTools.FormsPlsql;
 import hu.company.features.cl.CommonMigrateTools.RuleContext;
 import hu.company.features.cl.CommonMigrateTools.SqlValues;
@@ -22,6 +23,7 @@ import hu.company.features.dbcall.cl.DbcallDtos.CommitResult;
 import hu.company.features.dbcall.cl.DbcallDtos.PageResult;
 import hu.company.features.dbcall.cl.DbcallDtos.RowResult;
 import lombok.extern.slf4j.XSlf4j;
+import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -50,12 +52,16 @@ public class DbcallServiceImpl extends ModuleServiceBase<DpsLogHelper> implement
             if (offset < 0 || offset > 1000000 || limit < 1 || limit > 200) {
                 throw badB("offset: 0..1000000, limit: 1..200 szükséges.");
             }
-            var rows = selectPageB(offset, limit);
+            var rows = selectPageB(offset, limit + 1); // one row more: did the page leave rows out?
+            var more = rows.size() > limit;
+            if (more) {
+                rows = rows.subList(0, limit);
+            }
             var context = new RuleContext();
             for (var row : rows) {
                 postQueryB(row);
             }
-            return new PageResult<>(rows, context.messages());
+            return new PageResult<>(rows, context.messages(), more);
         });
     }
 
@@ -70,10 +76,11 @@ public class DbcallServiceImpl extends ModuleServiceBase<DpsLogHelper> implement
             requireRowB(row);
             normalizeB(row);
 
+            validateB(row); // Forms: the item's own checks (Required, length, range) before its triggers
             var context = new RuleContext();
             preInsertB(row);
             normalizeB(row);
-            validateB(row);
+            validateB(row); // what the triggers wrote
             insertRowB(row);
             var saved = loadRowB(row, false);
             postQueryB(saved);
@@ -99,9 +106,9 @@ public class DbcallServiceImpl extends ModuleServiceBase<DpsLogHelper> implement
             if (!SqlValues.same(current.id, row.id)) {
                 throw badB("id: nem módosítható.");
             }
+            validateB(row); // Forms: the item's own checks (Required, length, range) before its triggers
             var context = new RuleContext();
             normalizeB(row);
-            validateB(row);
             if (!SqlValues.same(current.id, row.id)) {
                 throw badB("id: nem módosítható.");
             }
@@ -214,8 +221,14 @@ public class DbcallServiceImpl extends ModuleServiceBase<DpsLogHelper> implement
         if (SqlValues.isNull(key.id)) {
             throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "Hiányzó elsődleges kulcs.");
         }
-        var rows = jdbc.query("SELECT ID, KOD, DATUM FROM T_B WHERE ID = "
-                + ":id" + (lock ? " FOR UPDATE" : ""), paramsB(key), (rs, rowNum) -> mapB(rs));
+        List<BRow> rows;
+        try {
+            // NOWAIT, like the Forms lock: a record another session holds is HTTP 409 (FormsErrors), never a wait.
+            rows = jdbc.query("SELECT ID, KOD, DATUM FROM T_B WHERE ID = "
+                    + ":id" + (lock ? " FOR UPDATE NOWAIT" : ""), paramsB(key), (rs, rowNum) -> mapB(rs));
+        } catch (DataAccessException e) {
+            throw FormsErrors.translate(e);
+        }
         if (rows.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "A rekord nem található.");
         }

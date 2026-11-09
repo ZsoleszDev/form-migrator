@@ -1276,7 +1276,7 @@ function highlight(text: string, lang: CodeLang): string {
           }}</p-message>
       }
 
-      <p-panel [header]="aiHeader()" [toggleable]="true" [collapsed]="aiCollapsed()" (collapsedChange)="aiCollapsed.set($event)">
+      <p-panel [header]="aiHeader()" [toggleable]="true" [collapsed]="aiCollapsed()" (collapsedChange)="aiCollapsed.set(!!$event)">
         <div class="flex flex-col gap-3">
           <div class="grid gap-4 md:grid-cols-2">
             <label class="flex flex-col gap-2"><span class="font-medium">Ollama URL · az AI-t futtató laptop</span>

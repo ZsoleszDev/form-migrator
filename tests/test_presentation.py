@@ -6,6 +6,11 @@ import tempfile
 import unittest
 from frm_forms.cli import main
 from frm_forms.presentation import output_name
+from java_support import trigger_mode
+
+setUpModule, tearDownModule = trigger_mode('plsql')
+
+
 ROOT=Path(__file__).resolve().parents[1]
 
 class PresentationTests(unittest.TestCase):

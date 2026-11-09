@@ -175,7 +175,10 @@ END;""")
         self.assertEqual(sum(g['count'] for g in preview['groups']), len(full))
         self.assertLessEqual(len(preview['issues']), 100)
 
-    def test_generated_actions_compile_access_checked_before_review_or_denial(self):
+    def test_unported_action_compiles_and_answers_501(self):
+        # The access hook and the <method>Reviewed extension point of the early scaffold are gone (compact backend:
+        # one DPS ServiceImpl, test_company_backend); an action the migrator cannot port keeps its original code in a
+        # comment region and answers HTTP 501. A Unicode escape in a PL/SQL comment must not break the Java source.
         if not shutil.which('java'): self.skipTest('Java 17+ required')
         raw = fixture().replace(b'BEGIN start_query;', b'BEGIN start_query; -- \\u000a break comment')
         company = self.root/'company.json'; company.write_text(json.dumps({'java_company_imports': COMPANY_IMPORTS}))  # log1x, UserDto stubs
@@ -183,22 +186,16 @@ END;""")
         method = json.loads((out/'analysis/action-plan.json').read_text())['actions'][0]['method_name']
         smoke = self.root/'ActionSmoke.java'
         smoke.write_text('''package hu.company.features.test.dps;
+import hu.company.common.UserDto;
 import hu.company.features.test.cl.TestDtos.*;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 public class ActionSmoke {
- public static void main(String[] args) {
-  int[] checks={0};
-  var service=new TestServiceImpl(new org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate(), null, (block,operation)->{ checks[0]++; if(!block.equals("B")) throw new AssertionError(); });
-  try { service.METHOD(new ActionRequest(java.util.Map.of(), java.util.Map.of())); throw new AssertionError("Expected 501"); }
-  catch(ResponseStatusException ex) { if(ex.status!=HttpStatus.NOT_IMPLEMENTED || checks[0]!=1) throw new AssertionError(); }
-  var denied=new TestServiceImpl(new org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate(), null, (b,o)->{throw new IllegalStateException("denied");});
-  try {denied.METHOD(null); throw new AssertionError();} catch(IllegalStateException expected) {}
-  var reviewed=new TestServiceImpl(new org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate(), null, (b,o)->{checks[0]++;}) {
-   @Override protected ActionResult METHODReviewed(ActionRequest request) { return new ActionResult(java.util.Map.of(), java.util.List.of("reviewed")); }
-  };
-  if(!reviewed.METHOD(new ActionRequest(java.util.Map.of(), java.util.Map.of())).messages().get(0).equals("reviewed") || checks[0]!=2) throw new AssertionError();
-  System.out.println("action access and 501 assertions passed");
+ public static void main(String[] args) throws Exception {
+  var service=new TestServiceImpl(new org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate());
+  try { service.METHOD(new UserDto(), new ActionRequest(java.util.Map.of(), java.util.Map.of())); throw new AssertionError("Expected 501"); }
+  catch(ResponseStatusException ex) { if(ex.status!=HttpStatus.NOT_IMPLEMENTED) throw new AssertionError(); }
+  System.out.println("unported action 501 assertion passed");
  }
 }'''.replace('METHOD', method))
         sources = list(out.glob('backend/**/*.java')) + write_stubs(self.root/'stubs') + [smoke]

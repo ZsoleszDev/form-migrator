@@ -326,6 +326,10 @@ public class {cls} {{
     rendered = rendered.replace("SQL/PLSQL and private helpers are kept here; no domain/repository layer.",
                                 "AI-converted triggers use entity-based repositories; other methods are preserved.")
     rendered = add_imports(rendered, dto_imports)
+    # catch (NoResultException e): the NO_DATA_FOUND of a generated repository method (jpa_sql)
+    namespace = persistence[0]["namespace"] if persistence else "javax"
+    rendered = engine.ensure_imports(rendered, {simple: fqn for simple, fqn in persistence_imports(namespace).items()
+                                                if simple.endswith("Exception")})
     body_mask = engine.java_mask(response["body"] + "\n" + response["private_methods"])
     injections = []
     for descriptor in persistence:

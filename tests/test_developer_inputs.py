@@ -14,9 +14,11 @@ import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 
-from java_support import COMPANY_IMPORTS, write_stubs
+from java_support import COMPANY_IMPORTS, trigger_mode, write_stubs
 from frm_forms.cli import main
 import test_query_actions as qa
+
+setUpModule, tearDownModule = trigger_mode('plsql')
 
 
 def form() -> bytes:

@@ -47,6 +47,21 @@ class UiPipelineTests(unittest.TestCase):
         _,m=self.good('<Item Name="F" ItemType="Text Item" Required="true" MaximumLength="5" FixedLength="true" CaseRestriction="Upper"/><Item Name="N" ItemType="Text Item" DataType="Number" Precision="8" Scale="0" LowestAllowedValue="0" HighestAllowedValue="999"/><Item Name="D" ItemType="Text Item" DataType="Date" FormatMask="YYYY-MM-DD"/>')
         f,n,d=m['blocks'][0]['items'];self.assertEqual(f['validation']['fixed_length'],5);self.assertEqual(n['representation'],'safe-integer');self.assertEqual(n['validation']['maximum'],'999');self.assertEqual(d['widget'],'date')
         self.assertEqual(m['rendering']['widget_map']['widgets']['checkbox']['type'],'checkBox')
+    def test_5_hungarian_decimal_comma_is_read_like_the_backend_bounds(self):
+        # A Hungarian Forms Builder exports number properties with a decimal comma (rules.decimal_literal read it,
+        # the UI model rejected the whole form). Grouping separators are never guessed.
+        _,m=self.good('<Item Name="N" ItemType="Text Item" DataType="Number" LowestAllowedValue="-0,5" HighestAllowedValue="9999999999,99"/>')
+        n=m['blocks'][0]['items'][0]
+        self.assertEqual((n['validation']['minimum'],n['validation']['maximum']),('-0.5','9999999999.99'))
+        self.bad('INVALID_NUMBER','<Item Name="N" ItemType="Text Item" DataType="Number" HighestAllowedValue="9.999,99"/>',label='grouped')
+    def test_5_the_replica_form_generates_in_the_default_mode(self):
+        out=self.root/'replica'
+        with contextlib.redirect_stdout(io.StringIO()),contextlib.redirect_stderr(io.StringIO()) as err:
+            code=main(['migrate',str(ROOT/'tests/fixtures/felmeres_replika_fmb.xml'),'--out',str(out)])
+        self.assertEqual(code,0,err.getvalue())
+        model=json.loads((out/'analysis/ui-model.json').read_text(encoding='utf-8'))
+        osszeg=next(i for b in model['blocks'] for i in b['items'] if i['owner']=='RENDELES.OSSZEG')
+        self.assertEqual(osszeg['validation']['maximum'],'9999999999.99')
     def test_5_unsupported_validation_never_silently_disappears(self):
         self.bad('UNSUPPORTED_FORMAT_MASK','<Item Name="F" ItemType="Text Item" FormatMask="999G999D99"/>')
     def test_5_invalid_widget_map(self):

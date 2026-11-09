@@ -383,7 +383,7 @@ END;'''
         self.assertIn('request.getBlocks()', service)
         self.assertIn('request.getLimit()', service)
         self.assertIn('row.setCol6(rs.getString(1))', service)
-        self.assertIn('new QueryPageResultDto<>(rows, messages)', service)
+        self.assertIn('new QueryPageResultDto<>(rows, messages, more)', service)  # hasMore: the page left rows out
 
     def test_review_gate_still_controls_the_query_button(self):
         out = self.generate(config={'backend_live': False})
@@ -486,7 +486,7 @@ public class QuerySmoke {
         public <T> List<T> query(String sql, SqlParameterSource params, RowMapper<T> mapper) {
             queries++;
             if (builders != queries || !"MB_34ADLAP".equals(params.getValue("q0"))
-                    || !"X".equals(params.getValue("q1")) || !Integer.valueOf(200).equals(params.getValue("limit"))
+                    || !"X".equals(params.getValue("q1")) || !Integer.valueOf(201).equals(params.getValue("limit"))
                     || !sql.contains("WHERE") || sql.contains(":T1.") || sql.contains("MB_34ADLAP' OR")) {
                 throw new AssertionError("Builder, typed binds and bounded query must be used.");
             }
@@ -563,6 +563,9 @@ class Screen {
   blkRows: Record<string, unknown>[] = [{col7: 'old'}];
   requests: unknown[] = [];
   reply: Record<string, unknown> = {rows: [{col6: '00', col7: 'MB_34'}], messages: []};
+  warnings: string[] = [];
+  toast = {warning: (_title: string, detail: string) => { this.warnings.push(detail); }};
+  toastLife = {warning: 8000};
   actionOnt1Pblekerdezes(request: unknown) {
     this.requests.push(request);
     return {subscribe: (next: (res: any) => void) => next(this.reply)};
@@ -574,11 +577,15 @@ screen.onPbLekerdezesClick();
 assert.deepEqual(screen.requests[0], {blocks: {T1: {COL1: 'MB_34ADLAP', COL5: 'X', COL2: '1', COL3: '0', COL4: '1'}},
                                       parameters: {}, offset: 0, limit: 200});
 assert.deepEqual(screen.blkRows, [{col6: '00', col7: 'MB_34'}]);
+assert.deepEqual(screen.warnings, []);
+screen.reply = {rows: [{col6: '00', col7: 'MB_34'}], messages: [], hasMore: true};  // the page left rows out
+screen.onPbLekerdezesClick();
+assert.equal(screen.warnings.length, 1);
 screen.reply = {messages: ['Adatlap kiválasztása nem történt meg!']};
 screen.onPbLekerdezesClick();
 assert.deepEqual(screen.blkRows, []);
 console.log('typescript query-action OK');
-'''.replace('__METHOD__', method + '\n' + screen_method(out, 'migrationInputText')))
+'''.replace('__METHOD__', method + '\n' + screen_method(out, 'migrationInputText') + '\n' + screen_method(out, 'migrationMoreRows')))
         run = subprocess.run(['node', '--experimental-strip-types', '--no-warnings', str(script)], capture_output=True, text=True)
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertIn('typescript query-action OK', run.stdout)

@@ -15,9 +15,12 @@ from unittest.mock import patch
 from frm_forms import backend_assistant as engine, jpa_assistant as jpa, schema_workbench as schema
 from frm_forms.cli import main
 from frm_forms.common import MigrationError, read_json
-from java_support import COMPANY_IMPORTS, write_stubs
+from java_support import COMPANY_IMPORTS, trigger_mode, write_jpa_stubs, write_stubs
 from test_backend_assistant import Client, answer
 from test_schema_workbench import FORM, columns
+
+setUpModule, tearDownModule = trigger_mode('plsql')
+
 
 ENTITY = "LookupAppAccountEntity"
 REPOSITORY = "LookupAppAccountRepository"
@@ -98,7 +101,10 @@ class JpaAssistantTests(unittest.TestCase):
         self.assertIn("- lookupAppAccountRepository (LookupAppAccountRepository) for entity LookupAppAccountEntity, "
                       "table APP.ACCOUNT", sent)
         self.assertIn("fields: BigDecimal id (ID, primary key), String name (NAME)", sent)
-        self.assertIn("// REPOSITORY LookupAppAccountRepository", sent)
+        # The SQL has a generated repository method (jpa_sql): the answer is the service only.
+        self.assertIn("- lookupAppAccountRepository.findNameById(BigDecimal id) returns String\n"
+                      "  SQL: SELECT a.NAME INTO :CTRL.NAME FROM APP.ACCOUNT a WHERE a.ID = :CTRL.ID", sent)
+        self.assertNotIn("// REPOSITORY", sent)
         self.assertNotIn("@Entity", sent)
         self.assertNotIn("getName()", sent)
         self.assertEqual(result["context"]["entity_count"], 1)
@@ -110,7 +116,9 @@ class JpaAssistantTests(unittest.TestCase):
         self.assertIn("@Id", entity)
         self.assertIn("schema = \"APP\"", entity)
         self.assertIn("entityManager.find", repository)
-        self.assertNotIn("SELECT ", repository)
+        self.assertIn("public String findNameById(BigDecimal id) {", repository)  # generated, Criteria API
+        code = re.sub(r"/\*[\s\S]*?\*/|//[^\n]*", "", repository)  # its comment quotes the Forms SQL; the code has none
+        self.assertNotIn("SELECT ", code)
         source = self.service.read_text()
         self.assertIn("private LookupAppAccountRepository lookupAppAccountRepository", source)
         start, _, end = engine.method_span(source, self.task["method"])
@@ -280,19 +288,7 @@ public class LookupAppAccountRepository {
 
     def compile_and_run(self, result):
         engine.apply_proposal(self.out, result["id"], reviewed=True)
-        stubs = write_stubs(self.root / "stubs")
-        definitions = {
-            "Entity": 'public @interface Entity { String name() default ""; }',
-            "Table": 'public @interface Table { String name(); String schema() default ""; }',
-            "Column": 'public @interface Column { String name(); boolean nullable() default true; int length() default 255; int precision() default 0; int scale() default 0; }',
-            "Id": "public @interface Id {}", "IdClass": "public @interface IdClass { Class<?> value(); }",
-            "Lob": "public @interface Lob {}", "PersistenceContext": "public @interface PersistenceContext {}",
-            "EntityManager": "public interface EntityManager { <T> T find(Class<T> type, Object id); }"}
-        for cls, body in definitions.items():
-            path = self.root / "stubs" / "javax/persistence" / (cls + ".java")
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text("package javax.persistence;\n" + body)
-            stubs.append(path)
+        stubs = write_stubs(self.root / "stubs") + write_jpa_stubs(self.root / "stubs")
         runner = self.root / "Runner.java"
         runner.write_text("""import hu.company.features.lookup.dps.*;
 import hu.company.features.lookup.cl.LookupDtos.*;
@@ -308,6 +304,16 @@ public class Runner {
             public <T> T find(Class<T> type, Object id) {
                 return java.math.BigDecimal.ONE.equals(id) ? type.cast(entity) : null;
             }
+            public javax.persistence.Query createNativeQuery(String sql) { throw new UnsupportedOperationException(); }
+            public void persist(Object entity) { throw new UnsupportedOperationException(); }
+            public <T> T merge(T entity) { throw new UnsupportedOperationException(); }
+            public void remove(Object entity) { throw new UnsupportedOperationException(); }
+            public javax.persistence.criteria.CriteriaBuilder getCriteriaBuilder() { throw new UnsupportedOperationException(); }
+            public <T> javax.persistence.TypedQuery<T> createQuery(javax.persistence.criteria.CriteriaQuery<T> q) {
+                throw new UnsupportedOperationException();
+            }
+            public javax.persistence.Query createQuery(javax.persistence.criteria.CriteriaUpdate q) { throw new UnsupportedOperationException(); }
+            public javax.persistence.Query createQuery(javax.persistence.criteria.CriteriaDelete q) { throw new UnsupportedOperationException(); }
         };
         java.lang.reflect.Field emf = LookupAppAccountRepository.class.getDeclaredField("entityManager");
         emf.setAccessible(true); emf.set(repository, em);

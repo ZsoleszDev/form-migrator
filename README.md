@@ -43,10 +43,23 @@ bekötni. A képernyőértékek bekötése külön, összecsukott haladó eszkö
 ## Mit készít az AI-val együtt?
 
 - A migrátor az igazolt táblaszerkezetből JPA entityt készít.
-- Táblánként saját Spring repository készül. Az AI a konkrét adatbázis-műveleteket
-  ebben valósítja meg, az entitykkel, EntityManager/Criteria API használatával.
-- A DPS ServiceImpl kiválasztott metódusa a repositorykat hívja; a migrátor
-  a Spring-bekötéseket is beilleszti.
+- Táblánként saját Spring repository készül. A trigger SQL-jéből a migrátor maga írja
+  meg a repository-metódusokat (Criteria API, persist, szekvencia; az eredeti SQL a
+  kommentjükben), ahol pontosan fordítható; az AI csak a lefedetlen SQL-hez ír metódust.
+- A DPS ServiceImpl kiválasztott metódusa a repositorykat hívja; az üzleti logikát az AI
+  írja, az egyszerű triggereket a migrátor AI nélkül: a rekordtriggereket (szekvenciás kulcs,
+  kódtábla-megnevezés, üzenettel megálló ellenőrzés, master-detail törlésellenőrzés, a trigger
+  INSERT/UPDATE/DELETE-je), az egyszerű gombokat (ellenőrzés, egy megerősítő kérdés, SQL,
+  mezőérték visszaírása, GO_BLOCK/EXECUTE_QUERY) és a lekérdező gombokat (DEFAULT_WHERE +
+  EXECUTE_QUERY, az eredeti PL/SQL-lel összevetve). A Spring-bekötéseket is a migrátor illeszti be.
+- Opcionálisan a generált képernyő is elküldhető az AI-nak (standalone komponens, signalok, olvasható,
+  kommentezett kód, ugyanazzal a működéssel). A teljes fájl csak akkor, ha belefér a kontextusba; ha nem,
+  részenként (a fej a signalokkal, utána a metódusok). Sosem automatikus, beillesztés csak átnézés után.
+- Az AI-válasz szokásos apró hibáit (`request.getBlocks()`, `row.getX()`, a modul előtagja
+  nélküli repository, Spring Data `findById`/`save`) a migrátor helyben javítja, nem kér érte
+  újabb AI-hívást; ha az utolsó válaszban is marad hiba, az hibás vázlatként megtekinthető marad.
+- Java csak adatbázismunkából lesz: az indítókód (PRE-FORM, WHEN-NEW-FORM-INSTANCE) és az
+  adatbázismunka nélküli gombok a képernyő feladatai, nem kapnak Java-végpontot.
 - Szükség esetén kiegészítő DTO készül. A már létező Controller, végpont,
   service-aláírás és request/result DTO-szerződés megmarad.
 - Ugyanazon tábla repositoryja a következő triggernél is használható. A már
@@ -71,7 +84,8 @@ projektben fordítani és az eredeti működéssel tesztelni kell.
 
 A kész webfelület benne van a csomagban; normál használathoz nem kell npm.
 **4.35:** a csomagban lévő kész felület (`web-dist`) még a 4.33.3-as Angular-forrásból
-készült. Az új AI-munkasorhoz és a reszponzív nézetekhez fordítsd újra: `npm ci`, majd `npm run build:ui`.
+készült. Az új AI-munkasorhoz, a reszponzív nézetekhez és a frontend AI-átírás paneljéhez fordítsd újra: `npm ci`,
+majd `npm run build:ui` (Node.js 22.22.3+ vagy 24.15+ kell az Angular CLI-hez).
 Addig a `http://localhost:8000/ai-log` oldal mutatja és vezérli az AI-sort (indítás, leállítás,
 automatizmusok), ezt a Python backend szolgálja ki. Az automatikus futás és beillesztés a backendben
 történik, tehát a régi felülettel is működik.
@@ -80,6 +94,7 @@ Saját Angular-projektben az `angular-frontend/migrator-app.ts` és
 
 - [Egyszerű munkamenet](docs/MIGRALASI_MUNKAMENET_HU.md)
 - [Java asszisztens részletek](docs/JAVA_ASSISTANT_HU.md)
+- [Frontend AI-átírás (opcionális): standalone, signalok, kommentezett kód](docs/FRONTEND_AI_HU.md)
 - [CSV-import és SQL-exportminta](docs/CSV_TABLASZERKEZET_HU.md)
 - [4.35 ellenőrzései](docs/VALIDATION_4_35.md)
 - [Mit tartalmaz az XML-export, és mi kell még?](docs/XML_TELJESSEG_HU.md)

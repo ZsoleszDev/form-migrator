@@ -18,9 +18,11 @@ from frm_forms.common import MigrationError, name
 from frm_forms.contracts import validate_common_migrate_tools_package
 from frm_forms.discovery import build_map
 from frm_forms.service_inline import mask
-from java_support import COMPANY_IMPORTS, write_stubs
+from java_support import COMPANY_IMPORTS, trigger_mode, write_stubs
 from test_company_cl import CL_IMPORTS
 from test_forms_runtime import fixture
+
+setUpModule, tearDownModule = trigger_mode('plsql')
 
 
 # PMD MethodNamingConventions ([a-z][a-zA-Z0-9]*) and Checkstyle MethodName (lowercase second character).

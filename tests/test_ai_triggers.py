@@ -31,7 +31,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 SERVICE = "backend/DPS/OrdersServiceImpl.java"
 HOOKS = ("triggerPostQueryOrders", "triggerPreInsertOrders", "triggerWhenValidateItemCodeOrders")
-ENDPOINTS = ("onCtrlCountBtn", "onCtrlSearchBtn")
+ENDPOINTS = ("onCtrlCountBtn",)  # the query button is the migrator's (query_java), not an AI task
 
 
 def form() -> str:
@@ -81,6 +81,11 @@ def migrate(root: Path, output: Path, mode: str = "ai") -> Path:
         code = main(["migrate", str(source), "--screen", "--module", "orders", "--config", str(config), "--out", str(output)])
     assert code == 0, err.getvalue()
     return output
+
+
+def model_path():
+    """The model's way even for a trigger the migrator translates itself (hook_java): the tests of the AI path."""
+    return patch("frm_forms.hook_java.response", return_value=(None, "a modell útját teszteljük"))
 
 
 def method_text(service: str, method: str) -> str:
@@ -148,7 +153,6 @@ class AiFramesTests(unittest.TestCase):
 
     def test_every_server_trigger_is_a_frame_with_its_commented_original_code(self):
         for method, line in (("onCtrlCountBtn", "SELECT count(*) INTO :CTRL.TOTAL FROM app_orders"),
-                             ("onCtrlSearchBtn", "set_block_property('ORDERS', DEFAULT_WHERE"),
                              ("triggerPostQueryOrders", "SELECT p.name INTO :ORDERS.PARTNER_NAME"),
                              ("triggerPreInsertOrders", "SELECT app_orders_seq.NEXTVAL INTO :ORDERS.ID FROM dual;"),
                              ("triggerWhenValidateItemCodeOrders", "IF length(:ORDERS.CODE) < 3 THEN")):
@@ -164,6 +168,17 @@ class AiFramesTests(unittest.TestCase):
                 self.assertNotIn("app_", body.lower())
                 self.assertNotIn("DbCalls", body)
         self.assertNotIn("DbCalls.call(", self.service)
+
+    def test_the_query_button_is_the_migrators_java_query(self):
+        """No AI task: the WHERE built like the Forms code built it, the screen value a bind, the block's JDBC query."""
+        text = method_text(self.service, "onCtrlSearchBtn")
+        self.assertNotIn("TODO(AI)", text)
+        self.assertIn('String filter = PlsqlValues.text(values, "CTRL", "FILTER");', text)
+        self.assertIn("var q = onCtrlSearchBtnQuery(filter);", text)
+        self.assertIn('jdbc.query("SELECT ID, CODE, NAME FROM APP_ORDERS WHERE " + whereText(q.where)', text)
+        self.assertIn("postQueryOrders(row, context);", text)
+        builder = self.service[self.service.index("static QueryText onCtrlSearchBtnQuery(String filter) {"):]
+        self.assertIn('q.where = "code like :filter || \'%\'";', builder[:builder.index("\n    }\n")])
 
     def test_frames_keep_the_final_contracts(self):
         self.assertIn("public ActionResult onCtrlCountBtn(UserDto user, ActionRequest request)", self.service)
@@ -181,13 +196,16 @@ class AiFramesTests(unittest.TestCase):
     def test_plan_report_and_screen_follow_the_ai_frames(self):
         plan = read_json(self.output / "analysis/backend-plan.json")
         endpoints = {e["method"]: e for e in plan["endpoints"]}
+        # The query button (DEFAULT_WHERE + EXECUTE_QUERY) needs no model: the migrator's equivalence-checked query.
+        self.assertEqual(endpoints["onCtrlSearchBtn"]["runs"], "java-query")
+        self.assertEqual(endpoints["onCtrlSearchBtn"]["blockers"], [])
         for method in ENDPOINTS:
             self.assertEqual(endpoints[method]["runs"], "ai")
             self.assertTrue(endpoints[method]["blockers"][0].startswith("AI-ra vár"))
         self.assertEqual(endpoints["onCtrlSearchBtn"]["query_block"], "ORDERS")
         self.assertEqual(plan["skipped_actions"], [])
         report = (self.output / "migration-report.md").read_text(encoding="utf-8")
-        self.assertRegex(report, r"AI-ra váró triggerek \(Java asszisztens\) \| 5 \|")
+        self.assertRegex(report, r"AI-ra váró triggerek \(Java asszisztens\) \| 4 \|")
         screen = (self.output / "frontend/orders/orders.component.ts").read_text(encoding="utf-8")
         # A plain action: its answer reaches the screen (written items, messages, GO_BLOCK/EXECUTE_QUERY).
         self.assertIn(".subscribe(res => this.applyActionResult(res));", screen)
@@ -198,8 +216,8 @@ class AiFramesTests(unittest.TestCase):
         click = click[:click.index("\n  }\n")]
         self.assertIn("this.actionOnctrlsearchbtn(", click)
         self.assertIn("FILTER:", click)
-        self.assertIn("limit: 200", click)
-        self.assertIn("this.forms['orders']?.patchValue(res.rows?.[0] ?? {});", click)
+        self.assertIn("limit: 1,", click)  # the form shows one record; hasMore says when more matched
+        self.assertIn("this.migrationLoaded['ORDERS'] = row;\n      this.forms['orders']?.reset(row ?? {});", click)
 
     def test_screen_carries_out_the_commands_of_an_answer(self):
         screen = (self.output / "frontend/orders/orders.component.ts").read_text(encoding="utf-8")
@@ -231,7 +249,6 @@ class AiFramesTests(unittest.TestCase):
         self.assertEqual(tasks["triggerWhenValidateItemCodeOrders"]["pending_tables"], [])
         self.assertEqual(tasks["triggerPostQueryOrders"]["pending_tables"], ["APP_PARTNERS"])
         self.assertEqual(tasks["triggerPreInsertOrders"]["pending_tables"], ["APP_ORDERS"])  # the key's sequence
-        self.assertEqual(tasks["onCtrlSearchBtn"]["pending_tables"], ["APP_ORDERS"])
         self.assertEqual({t["kind"] for m, t in tasks.items() if m in HOOKS}, {"hook"})
         self.assertEqual(tasks["onCtrlCountBtn"]["event"], "WHEN-BUTTON-PRESSED")
         self.assertEqual(tasks["triggerPreInsertOrders"]["event"], "PRE-INSERT")
@@ -267,7 +284,7 @@ class HookAssistantTests(unittest.TestCase):
     def test_hook_prompt_answer_and_apply_keep_the_original_code(self):
         task = self.tasks["triggerWhenValidateItemCodeOrders"]
         client = Client(VALIDATE_ANSWER)
-        with patch("frm_forms.ollama.opener", return_value=client):
+        with patch("frm_forms.ollama.opener", return_value=client), model_path():
             result = engine.propose(self.output, task["id"], self.options)
         self.assertEqual(result["status"], "proposal", result)
         self.assertTrue(client.requests[0]["stream"])
@@ -289,6 +306,21 @@ class HookAssistantTests(unittest.TestCase):
         if shutil.which("java"):
             compile_module(self, self.output, Path(tempfile.mkdtemp(dir=self.root)))
 
+    def test_hook_hints_come_from_the_trigger_code_only(self):
+        # The region notes of every hook say "context.message(...)": that is no MESSAGE of the Forms code.
+        from frm_forms import schema_workbench as schema
+        text = {"data_type": "VARCHAR2", "length": 80, "length_semantics": "CHAR"}
+        for table, key, columns in (("APP_ORDERS", "ID", ("CODE", "NAME")), ("APP_PARTNERS", "CODE", ("NAME",))):
+            first = {"name": "ID", "data_type": "NUMBER"} if key == "ID" else {"name": key, **text}
+            rows = [{**first, "nullable": False}] + [{"name": c, **text, "nullable": True} for c in columns]
+            schema.save_table(self.output, table, rows, [key], schema.schema_sheet(self.output)["revision"])
+        self.tasks = {t["method"]: t for t in engine.prepare_workspace(self.output)["tasks"]}
+        hint = "- MESSAGE(x): context.message(x)."
+        validate = engine.preview(self.output, self.tasks["triggerWhenValidateItemCodeOrders"]["id"], self.options)["user"]
+        self.assertIn(hint, validate)
+        for method in ("triggerPostQueryOrders", "triggerPreInsertOrders"):
+            self.assertNotIn(hint, engine.preview(self.output, self.tasks[method]["id"], self.options)["user"], method)
+
     def test_sequence_key_hook_gets_its_own_table_repository_and_compiles(self):
         from frm_forms import schema_workbench as schema
         sheet = schema.schema_sheet(self.output)
@@ -298,38 +330,26 @@ class HookAssistantTests(unittest.TestCase):
             {"name": "NAME", "data_type": "VARCHAR2", "nullable": True, "length": 80, "length_semantics": "CHAR"}], ["ID"], sheet["revision"])
         task = next(t for t in engine.prepare_workspace(self.output)["tasks"] if t["method"] == "triggerPreInsertOrders")
         self.assertEqual(task["pending_tables"], [])
-        answer = """```java
-// SERVICE
-private void triggerPreInsertOrders(OrdersRow row, RuleContext context) {
-    row.id = ordersAppOrdersRepository.nextOrderId();
-}
-```
-```java
-// REPOSITORY OrdersAppOrdersRepository
-public java.math.BigDecimal nextOrderId() {
-    return (java.math.BigDecimal) entityManager.createNativeQuery("SELECT APP_ORDERS_SEQ.NEXTVAL FROM DUAL").getSingleResult();
-}
-```
-"""
-        client = Client(answer)
-        with patch("frm_forms.ollama.opener", return_value=client):
+        preview = engine.preview(self.output, task["id"], self.options)
+        # The sequence needs no table name in the code: the hook's own table hosts its generated method.
+        self.assertIn("Repositories:\n- ordersAppOrdersRepository (OrdersAppOrdersRepository)", preview["user"])
+        self.assertIn("- ordersAppOrdersRepository.nextAppOrdersSeq() returns BigDecimal", preview["user"])
+        self.assertTrue(preview["deterministic"])  # the key from a sequence needs no model (hook_java)
+        with patch("frm_forms.ollama.opener", side_effect=AssertionError("no model call")):
             result = engine.propose(self.output, task["id"], self.options)
-        user = client.requests[0]["messages"][1]["content"]
-        # The sequence needs no table name in the code: the hook's own table hosts the query.
-        self.assertIn("Repositories:\n- ordersAppOrdersRepository (OrdersAppOrdersRepository)", user)
-        self.assertNotIn("No database table is available", user)
-        self.assertEqual(result["status"], "proposal", result)
+        self.assertEqual((result["status"], result["calls"]), ("proposal", 0), result)
         engine.apply_proposal(self.output, result["id"], reviewed=True)
         service = (self.output / SERVICE).read_text(encoding="utf-8")
-        self.assertIn("row.id = ordersAppOrdersRepository.nextOrderId();", method_text(service, "triggerPreInsertOrders"))
-        self.assertIn("nextOrderId()", (self.output / "backend/DPS/OrdersAppOrdersRepository.java").read_text(encoding="utf-8"))
+        self.assertIn("row.id = ordersAppOrdersRepository.nextAppOrdersSeq();", method_text(service, "triggerPreInsertOrders"))
+        self.assertIn("public BigDecimal nextAppOrdersSeq() {",
+                      (self.output / "backend/DPS/OrdersAppOrdersRepository.java").read_text(encoding="utf-8"))
         if shutil.which("java"):
             compile_module(self, self.output, Path(tempfile.mkdtemp(dir=self.root)))
 
     def test_answer_without_the_hook_is_rejected_and_nothing_changes(self):
         task = self.tasks["triggerWhenValidateItemCodeOrders"]
         before = (self.output / SERVICE).read_bytes()
-        with patch("frm_forms.ollama.opener", return_value=Client("Nem tudom.", "Most sem.")):
+        with patch("frm_forms.ollama.opener", return_value=Client("Nem tudom.", "Most sem.")), model_path():
             with self.assertRaises(MigrationError):
                 engine.propose(self.output, task["id"], engine.Options(num_ctx=16384, attempts=2))
         self.assertEqual((self.output / SERVICE).read_bytes(), before)
@@ -471,18 +491,20 @@ class QueueTests(unittest.TestCase):
         with patch("frm_forms.ollama.opener", return_value=client):
             self.jobs.on_completed("job1")
             state = self.idle()
-        # Only the trigger whose tables are known (none needed) ran; the rest waits for the table structures.
-        self.assertEqual(len(client.requests), 1)
+        # Only the trigger whose tables are known (none needed) ran; the rest waits for the table structures. A plain
+        # check with a message needs no model: the migrator wrote it (hook_java), the queue applied it.
+        self.assertEqual(len(client.requests), 0)
         finished = state["finished"]
         self.assertEqual([(r["method"], r["status"], r["auto"], r["applied"]) for r in finished],
                          [("triggerWhenValidateItemCodeOrders", "completed", True, True)])
         self.assertEqual(finished[0]["proposal_status"], "proposal")
         service = (self.root / "job1/module" / SERVICE).read_text(encoding="utf-8")
         self.assertIn('context.message("Túl rövid kód");', method_text(service, "triggerWhenValidateItemCodeOrders"))
+        self.assertIn("SqlValues.length(row.code)", method_text(service, "triggerWhenValidateItemCodeOrders"))
         index = self.manager.index("job1")
         self.assertEqual([t["method"] for t in index["done_tasks"]], ["triggerWhenValidateItemCodeOrders"])
         self.assertEqual(index["auto"]["done"], 1)
-        self.assertEqual(index["auto"]["waiting_for_tables"], 4)
+        self.assertEqual(index["auto"]["waiting_for_tables"], 3)  # the query button is not one: the migrator wrote it
         # Nothing ready is left: a second automatic start queues nothing.
         with patch("frm_forms.ollama.opener", side_effect=AssertionError("no new request")):
             self.assertEqual(self.manager.auto_start("job1", reason="migration")["queued"], 0)
@@ -493,7 +515,7 @@ class QueueTests(unittest.TestCase):
             self.jobs.on_completed("job1")
             self.assertEqual(self.idle()["finished"], [])
         before = (self.root / "job1/module" / SERVICE).read_bytes()
-        with patch("frm_forms.ollama.opener", return_value=Client(VALIDATE_ANSWER)):
+        with patch("frm_forms.ollama.opener", return_value=Client(VALIDATE_ANSWER)), model_path():
             queued = self.manager.auto_start("job1")  # the developer's own "start all"
             self.assertEqual(queued["methods"], ["triggerWhenValidateItemCodeOrders"])
             state = self.idle()
@@ -502,6 +524,7 @@ class QueueTests(unittest.TestCase):
         self.assertEqual((self.root / "job1/module" / SERVICE).read_bytes(), before)
 
     def test_a_failed_automatic_run_is_not_repeated_for_the_same_input(self):
+        self.enterContext(model_path())
         with patch("frm_forms.ollama.opener", return_value=Client("Nem tudom.", "Most sem.")):
             self.manager.auto_start("job1", reason="migration")
             state = self.idle()
@@ -515,6 +538,7 @@ class QueueTests(unittest.TestCase):
 
     def test_runs_go_one_at_a_time_and_can_be_cancelled(self):
         from frm_forms.web.assistant import AssistantRequest, CancelRequest
+        self.enterContext(model_path())
         stream = Stream(block=True)
         tasks = {t["method"]: t for t in self.manager.index("job1")["tasks"]}
         with patch("frm_forms.ollama.opener", return_value=Opener(stream)):

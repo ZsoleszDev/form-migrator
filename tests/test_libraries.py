@@ -1,5 +1,5 @@
 """4.14: attached PL/SQL libraries (.pld) - the units the form reaches compile like its own program units."""
-import java_support  # noqa: F401  (legacy trigger mode for these engine tests)
+from java_support import trigger_mode
 import contextlib
 import io
 import json
@@ -12,6 +12,9 @@ from frm_forms.cli import main
 from frm_forms.common import MigrationError
 from frm_forms.framework import load
 from frm_forms.libraries import attach, decode, library_name, load_libraries, parse_pld
+
+setUpModule, tearDownModule = trigger_mode('plsql')
+
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / 'tests/fixtures/felmeres_replika_fmb.xml'
@@ -93,11 +96,12 @@ class AttachTests(unittest.TestCase):
         return [{**parsed, 'file': name.lower() + '.pld', 'sha256': '0'}]
 
     def test_only_reachable_units_are_added_transitively(self):
-        m = model(triggers=["BEGIN ank_ctrl.set_title('X'); END;"],
+        # ank_ctrl is a catalogued Forms-only UI library (forms_runtime_calls ANK_CTRL.*): never taken from the library.
+        m = model(triggers=["BEGIN IF ank_jog.irhat THEN ank_ctrl.set_title('X'); END IF; END;"],
                   units=[('P', 'Procedure', 'PROCEDURE p IS BEGIN naplo_init(1); END;')])
         report = attach(m, self.libraries(), load({}))
         added = {(u['name'], u['programunittype']) for u in m['program_units'] if u.get('frm_library')}
-        self.assertEqual(added, {('ANK_CTRL', 'Package Spec'), ('ANK_CTRL', 'Package Body'), ('NAPLO_INIT', 'Procedure')})
+        self.assertEqual(added, {('ANK_JOG', 'Package Spec'), ('ANK_JOG', 'Package Body'), ('NAPLO_INIT', 'Procedure')})
         self.assertNotIn('NEM_HASZNALT', json.dumps(report['libraries'][0]['used_units']))
         self.assertEqual(report['scope'], ['ANKLIB', 'QMSLIB65'])
         self.assertEqual(report['missing'], ['QMSLIB65'])
@@ -151,14 +155,16 @@ class LibraryMigrationTests(unittest.TestCase):
     def test_library_units_are_inlined_and_unused_ones_stay_out(self):
         out = self.run_migration('--pld', str(PLD))
         service = (out / 'backend/DPS/PeldaServiceImpl.java').read_text(encoding='utf-8')
-        self.assertIn('PlsqlUnits.ANK_CTRL_UI', service)
+        self.assertIn('PlsqlUnits.ANK_JOG_UI', service)
         self.assertIn('NAPLO_INIT (procedure, csatolt könyvtár: ANKLIB)', service)
-        self.assertIn("frm_cmd('SET_WINDOW_PROPERTY', 'FORMS_MDI_WINDOW', 'TITLE', p_title);", service)
         self.assertNotIn('NEM_HASZNALT', service.upper())
-        # ANK_MENU is in no given library: the database still resolves it.
-        self.assertIn('Az adatbázis oldja fel futáskor: ANK_MENU.INIT. A formhoz csatolt könyvtár(ak): QMSLIB65', service)
+        # ank_ctrl / ank_menu: catalogued Forms-only UI libraries, nowhere in the backend.
+        self.assertNotIn('ANK_CTRL', service.upper())
+        self.assertNotIn('ANK_MENU', service.upper())
+        # ANK_NAPLO is in no given library: the database still resolves it.
+        self.assertIn('Az adatbázis oldja fel futáskor: ANK_NAPLO.MENTES. A formhoz csatolt könyvtár(ak): QMSLIB65', service)
         report = json.loads((out / 'analysis/libraries.json').read_text(encoding='utf-8'))
-        self.assertEqual(report['libraries'][0]['used_units'], ['ANK_CTRL', 'ANK_JOG', 'NAPLO_INIT'])
+        self.assertEqual(report['libraries'][0]['used_units'], ['ANK_JOG', 'NAPLO_INIT'])
         issues = json.loads((out / 'analysis/form.ir.json').read_text(encoding='utf-8'))['issues']
         self.assertTrue(any('beolvasva (PLD): ANKLIB' in i['detail'] for i in issues if i['code'] == 'ATTACHED_LIBRARY'))
 
@@ -166,7 +172,8 @@ class LibraryMigrationTests(unittest.TestCase):
         out = self.run_migration()
         service = (out / 'backend/DPS/PeldaServiceImpl.java').read_text(encoding='utf-8')
         self.assertNotIn('csatolt könyvtár: ANKLIB', service)
-        self.assertIn('ANK_CTRL.SET_TITLE', service)
+        self.assertIn('Az adatbázis oldja fel futáskor: NAPLO_INIT. A formhoz csatolt könyvtár(ak): ANKLIB', service)
+        self.assertNotIn('ANK_CTRL', service.upper())  # catalogued Forms-only: never a database call
         report = json.loads((out / 'analysis/libraries.json').read_text(encoding='utf-8'))
         self.assertEqual(report['missing'], ['ANKLIB'])
 
@@ -211,7 +218,7 @@ class LibraryUploadTests(unittest.TestCase):
             time.sleep(0.05)
         self.assertEqual(job['status'], 'completed', job)
         report = json.loads((self.settings.data_dir / 'jobs' / job_id / 'module/analysis/libraries.json').read_text())
-        self.assertEqual(report['libraries'][0]['used_units'], ['ANK_CTRL', 'ANK_JOG', 'NAPLO_INIT'])
+        self.assertEqual(report['libraries'][0]['used_units'], ['ANK_JOG', 'NAPLO_INIT'])
 
     def test_library_file_name_is_checked(self):
         self.assertEqual(self.post('anklib.txt').status_code, 400)

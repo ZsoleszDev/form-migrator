@@ -9,12 +9,14 @@ import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 
-from java_support import COMPANY_IMPORTS, write_stubs
+from java_support import COMPANY_IMPORTS, trigger_mode, write_stubs
 from frm_forms.cli import main
 from frm_forms.framework import classify, load
 from frm_forms.plsql import Unsupported
 from frm_forms.plsql_passthrough import prepare, Rewriter
 from screen_support import screen_source
+
+setUpModule, tearDownModule = trigger_mode('plsql')
 
 
 ACTION_SQL = """BEGIN

@@ -1,5 +1,5 @@
 """Forms PL/SQL run as written in Oracle, and item states (SET_ITEM_PROPERTY) in the screen."""
-import java_support  # noqa: F401  (legacy trigger mode for these engine tests)
+from java_support import trigger_mode
 import contextlib
 import io
 import json
@@ -10,6 +10,9 @@ import unittest
 from frm_forms.cli import main
 from frm_forms.plsql import Unsupported
 from frm_forms.plsql_passthrough import Rewriter, assigned_vars, prepare
+
+setUpModule, tearDownModule = trigger_mode('plsql')
+
 
 V = Rewriter.var  # fixed variable name per item
 

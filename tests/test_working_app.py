@@ -14,11 +14,14 @@ import subprocess
 import tempfile
 import unittest
 
-from java_support import COMPANY_IMPORTS, write_stubs
+from java_support import COMPANY_IMPORTS, trigger_mode, write_stubs
 from screen_support import screen_source
 from frm_forms.cli import main
 from frm_forms.plsql import Unsupported
 from frm_forms.plsql_passthrough import prepare
+
+setUpModule, tearDownModule = trigger_mode('plsql')
+
 
 ROOT = Path(__file__).resolve().parents[1]
 REPLICA = ROOT / 'tests' / 'fixtures' / 'felmeres_replika_fmb.xml'
@@ -133,8 +136,11 @@ class ReplicaTests(unittest.TestCase):
     def test_start_up_code_is_the_init_endpoint(self):
         self.assertEqual(self.model['init_plan']['status'], 'generated')
         self.assertEqual(self.plan['api']['init'], '@INIT')
-        self.assertIn("    this.actionOnforminit({ blocks: {}, parameters: { 'GLOBAL.CG$APP': null } }).subscribe();\n  }",
-                      self.screen)  # the constructor calls it
+        constructor = self.screen[self.screen.index('  constructor() {'):]
+        constructor = constructor[:constructor.index('\n  }\n')]
+        self.assertIn('this.actionOnforminit({', constructor)  # the constructor calls it
+        self.assertIn("parameters: { 'GLOBAL.CG$APP': ", constructor)  # an input binding (analysis/input-bindings.json)
+        self.assertIn('}).subscribe(res => this.applyActionResult(res));', constructor)  # 4.35: its answer is applied
         self.assertIn("frm_group('CREATE_GROUP', 'RG_ALLAPOT')", self.service)
 
     def test_commit_chain_in_forms_order_with_the_master_key(self):
@@ -144,8 +150,9 @@ class ReplicaTests(unittest.TestCase):
         self.assertIn('row.rendelesId = saved.id;', commit)
         self.assertIn('PlsqlValues.number(values, "RENDELES", "ID")', commit)
         self.assertIn('<button pButton type="button" (click)="save()">Mentés</button>', self.screen)
-        # 4.27: the request of the save; its changes are the developer's (TODO)
-        self.assertIn('this.commitForm({ changesRendeles: { inserted: [], updated: [], deleted: [] } }).subscribe();', self.screen)
+        # The save sends the form's record (measured against the queried one) and the master key a new TETEL record reads.
+        self.assertIn("changesRendeles: this.migrationChanges('RENDELES', rendeles, this.forms['rendeles']?.dirty),", self.screen)
+        self.assertEqual(self.plan['api']['commit']['reads'], ['RENDELES.ID'])
 
     def test_generated_java_compiles(self):
         if not shutil.which('java'):

@@ -137,10 +137,15 @@ class WebFlowTests(unittest.TestCase):
         self.assertIn("  aitSearch(body: unknown) {\n    return this.http.post<any>(this.url('ait/query/search'), body).pipe(\n"
                       "      tap(res => WFF.debug(this.modName + '.aitSearch', res)),\n"
                       "      catchError(error => {\n        WFF.err('Hiba', error);\n        return EMPTY;\n      }),\n    );\n  }", component)
-        self.assertNotIn('@Input', component)
+        # 4.30: the only input is the module parameters a request slot can be bound to (input bindings)
+        self.assertEqual(re.findall(r'@Input\(\) (\w+)', component), ['migrationParameters'])
         self.assertNotIn('@Output', component)  # a routed component, not a child
         self.assertIn('  lovInptip(body: unknown) {', component)  # 4.27: the LOV endpoint is there; its suggestions are the developer's
-        self.assertIn("this.aitSearch({ criteria: { vElekAdlapUbiInptipKod: vElekAdlap.ubiInptipKod }, offset: 0, limit: 200 })", component)
+        search = component[component.index('this.aitSearch({'):]
+        search = search[:search.index('}).subscribe(')]
+        self.assertIn("criteria: { vElekAdlapUbiInptipKod: /* frm-input:", search)  # a slot of the input bindings
+        self.assertIn("(this.forms['vElekAdlap']?.getRawValue()?.['ubiInptipKod'] ?? null)", search)
+        self.assertIn('offset: 0,\n      limit: 200,', search)
         self.assertIn('## Backend-hívások', (out / 'frontend/teszt/MIGRATION_NOTES.md').read_text(encoding='utf-8'))
         plan = json.loads((out / 'analysis/screen-plan.json').read_text(encoding='utf-8'))
         self.assertEqual(plan['backend_calls']['queries'], {'AIT': 'aitSearch'})

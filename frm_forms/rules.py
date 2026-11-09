@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from decimal import Decimal
-from .common import MigrationError, identifier, jstr, model_cache
+from .common import MigrationError, identifier, jstr, model_cache, nls_decimal
 from .plsql import Unsupported, adapter_error, parse, flatten
 from .forms_context import NORMAL_MODE, normal_mode_expression
 from . import framework, forms_runtime
@@ -486,12 +486,8 @@ def apply_metadata(model: dict, metadata: dict) -> None:
 
 def decimal_literal(raw: str) -> str:
     """A Forms number bound as a plain decimal: '12.5', and the decimal comma of a Hungarian NLS ('12,5')."""
-    raw = str(raw or '').strip()
-    if re.fullmatch(r'[+-]?\d+(?:\.\d+)?', raw):
-        return raw
-    if re.fullmatch(r'[+-]?\d+,\d+', raw):
-        return raw.replace(',', '.')
-    return ''
+    raw = nls_decimal(raw or '')
+    return raw if re.fullmatch(r'[+-]?\d+(?:\.\d+)?', raw) else ''
 
 
 def item_semantics(model: dict, catalog: dict, live: bool) -> None:
@@ -670,10 +666,17 @@ def startup_plan(model: dict, catalog: dict) -> None:
         parts.append("-- " + trigger["event"] + "\nBEGIN\n" + decode_line_escapes(source).strip().rstrip("/").strip() + "\nEND;")
     ids = [t["id"] for t in chosen]
     if model.get('options', {}).get('backend_trigger_mode') == 'ai':
-        # The init endpoint's frame (onFormInit, called when the screen opens); its body: the Java assistant.
-        model["init_plan"] = {"status": "ai", "triggers": ids}
+        # The web screen opens in its initial state, and opening it is no event of the Java application: no
+        # start-up endpoint. Constants and item properties go to the screen, Forms plumbing goes, Forms-only state
+        # and the database work go to the notes (startup.triage, startup.merge 'server').
+        from . import startup
+        from .plsql_passthrough import local_units
+        units = local_units(model)
+        results = {t["id"]: startup.triage((t.get("replacement") or {}).get("source", t["source"]), catalog, units)
+                   for t in chosen}
+        model["startup"] = startup.merge(results)
         for trigger in chosen:
-            trigger.update(status="converted", target="init", ai=True)
+            trigger.update(status="converted", target="frontend")
             trigger.pop("reason", None)
         model["issues"][:] = [i for i in model["issues"]
                               if not (i["code"] == "UNSUPPORTED_TRIGGER" and any(i["detail"].startswith(t + ": ") for t in ids))]
@@ -1201,9 +1204,41 @@ def analyze(model: dict, metadata: dict, replacements: dict, catalog: dict | Non
         except Exception as error:
             exc = adapter_error(error)
             if ai_mode and trigger["event"] == "WHEN-BUTTON-PRESSED" and source.strip():
-                # Not a pure screen step: a backend action whose body the Java assistant writes. A query button
-                # (own DEFAULT_WHERE + EXECUTE_QUERY) keeps the query contract: the screen shows the returned rows.
+                from . import database_work
                 target = ai_triggers.query_target(source, model)
+                work = database_work.evidence(source, model, catalog, trigger["block"], trigger["item"])
+                if not work and not target:
+                    # Only screen work (items, navigation, messages, the blocks' queries and save): the screen's,
+                    # never a Java endpoint or a task for the Java assistant. Its recognised steps run there; the
+                    # rest is the developer's on the screen (TODO with the original code in the button's method).
+                    steps = framework.action_steps(source, catalog, model, trigger["block"], trigger["item"], screen_values=True)
+                    trigger.update(status="converted" if steps else "review", target="frontend", screen_only=True)
+                    trigger.pop("reason", None)
+                    if not steps:
+                        trigger["reason"] = ("Nincs benne adatbázismunka, ezért nincs Java-végpontja: a képernyőn kell "
+                                             "megírni (" + str(exc).rstrip(".") + ").")
+                        model["issues"].append({"code": "UNSUPPORTED_TRIGGER", "owner": trigger["block"] or form_owner,
+                                                "scope": "frontend", "detail": trigger["id"] + ": " + trigger["reason"]})
+                    continue
+                trigger["database_work"] = work
+                if target:
+                    # A query button (own DEFAULT_WHERE + EXECUTE_QUERY) is the block's query with another WHERE: the
+                    # migrator writes it (query_java: the WHERE built like the Forms code built it, every screen value
+                    # a bind, checked against the PL/SQL on input cases), the same JDBC query as the block's search.
+                    # Only what it does not cover becomes the Java assistant's task.
+                    from .query_java import plan as java_query
+                    try:
+                        java = java_query(trigger, source, model, catalog)
+                        trigger['query_action'] = {'target': java['target'], 'unit': java['unit'], 'context': None,
+                                                   'variants': [], 'message_units': {}, 'java': java,
+                                                   'prepared': {'binds': [], 'outs': [], 'inputs': java['inputs']}}
+                        trigger.update(status='converted', target='action')
+                        trigger.pop('reason', None)
+                        continue
+                    except Exception as java_error:
+                        trigger['query_java_reason'] = str(adapter_error(java_error))
+                # A backend action whose body the Java assistant writes. A query button keeps the query contract:
+                # the screen shows the returned rows.
                 if target:
                     trigger['query_action'] = {'target': target, 'unit': trigger.get('owner') or '', 'context': None,
                                                'variants': [], 'message_units': {}, 'java': None, 'ai': True,

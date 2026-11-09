@@ -1,5 +1,5 @@
 """DO_KEY fallback must preserve the form's key overrides and list opener logic."""
-import java_support  # noqa: F401  (legacy trigger mode for these engine tests)
+from java_support import trigger_mode
 import json
 import unittest
 import xml.etree.ElementTree as ET
@@ -7,6 +7,8 @@ import xml.etree.ElementTree as ET
 from frm_forms.forms_keys import screen_context
 from frm_forms.framework import action_steps, load
 import test_forms_runtime as runtime
+
+setUpModule, tearDownModule = trigger_mode('plsql')
 
 
 class FormsKeyTests(unittest.TestCase):

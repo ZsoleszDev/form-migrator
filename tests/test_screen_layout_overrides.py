@@ -11,6 +11,10 @@ from frm_forms.common import MigrationError
 from frm_forms.screen_layout import spans
 from frm_forms.screen_overrides import fingerprint, validate
 import test_screen
+from java_support import trigger_mode
+
+setUpModule, tearDownModule = trigger_mode('plsql')
+
 
 ROOT = test_screen.ROOT
 

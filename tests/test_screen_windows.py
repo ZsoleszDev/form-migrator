@@ -6,6 +6,10 @@ import unittest
 
 from frm_forms.cli import main
 import test_screen
+from java_support import trigger_mode
+
+setUpModule, tearDownModule = trigger_mode('plsql')
+
 
 ROOT = test_screen.ROOT
 

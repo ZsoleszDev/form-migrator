@@ -5,6 +5,10 @@ from pathlib import Path
 import tempfile
 import unittest
 from frm_forms.cli import main
+from java_support import trigger_mode
+
+setUpModule, tearDownModule = trigger_mode('plsql')
+
 
 ROOT = Path(__file__).resolve().parents[1]
 

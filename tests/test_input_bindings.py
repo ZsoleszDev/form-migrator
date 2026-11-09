@@ -15,6 +15,10 @@ from frm_forms.cli import main
 from frm_forms.common import MigrationError, read_json
 from screen_support import screen_method, ANGULAR_CLI_OPTIONS, with_company_imports
 from test_schema_workbench import FORM as BASE
+from java_support import trigger_mode
+
+setUpModule, tearDownModule = trigger_mode('plsql')
+
 
 FORM = BASE.replace('WHERE a.ID = :CTRL.ID',
     'WHERE a.ID = :CTRL.ID AND a.NAME = :GLOBAL.FILTER AND a.NAME = :PARAMETER.NAME AND a.ID = :HIDDEN.ID')

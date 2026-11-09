@@ -534,13 +534,17 @@ def java_method(operation, block, gated, log1x, user_type, support):
             }}
             var whereText = out[{where_index}];
             String sql = null;
-            var params = new MapSqlParameterSource().addValue("offset", request.offset()).addValue("limit", request.limit());
+            var params = new MapSqlParameterSource().addValue("offset", request.offset()).addValue("limit", request.limit() + 1);
 {chr(10).join(cases)}
             if (sql == null) {{
                 throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "A DEFAULT_WHERE nem egyezik a formból lefordított feltételekkel.");
             }}
             var rows = jdbc.query(sql, params, (rs, rowNum) -> map{suffix}(rs));
-{post_call}            return new PageResult<>(rows, messages);
+            var more = rows.size() > request.limit();  // one row more was asked: did the page leave rows out?
+            if (more) {{
+                rows = rows.subList(0, request.limit());
+            }}
+{post_call}            return new PageResult<>(rows, messages, more);
         }});
     }}'''
 

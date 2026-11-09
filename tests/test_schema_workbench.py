@@ -12,6 +12,10 @@ from frm_forms.cli import main
 from frm_forms.common import MigrationError, read_json, write_json
 from frm_forms.dictionary import references
 from test_backend_assistant import Client, answer
+from java_support import trigger_mode
+
+setUpModule, tearDownModule = trigger_mode('ai')
+
 
 FORM = '''<Module><FormModule Name="LOOKUP" Title="Táblafelismerés">
 <Coordinate CoordinateSystem="Real" RealUnit="Pixel"/>

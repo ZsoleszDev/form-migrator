@@ -49,7 +49,7 @@ def generate(output: Path, config, package, cls, blocks, ops):
     missing = set()
     wrappers = {
         'RowResult': [('T', 'row'), ('List<String>', 'messages')],
-        'PageResult': [('List<T>', 'rows'), ('List<String>', 'messages')],
+        'PageResult': [('List<T>', 'rows'), ('List<String>', 'messages'), ('boolean', 'hasMore')],
         'UpdateRequest': [('T', 'original'), ('T', 'value')],
         'SearchRequest': [('T', 'criteria'), ('int', 'offset'), ('int', 'limit')],
         'LovRequest': [('String', 'term'), ('Map<String, String>', 'parameters'), ('Integer', 'limit')],
@@ -99,16 +99,17 @@ def generate(output: Path, config, package, cls, blocks, ops):
     def emit(class_name, imports, body):
         write(folder / (class_name + '.java'), f'package {cl_package(config, package)};\n\n{imports}\n{body}\n')
 
-    def dto(class_name, fields, declarations=None, generic=''):
+    def dto(class_name, fields, declarations=None, generic='', extra_constructors=()):
         imports = DTO_IMPORTS
         types = ' '.join(t for t, _ in fields)
         imports += ''.join('import java.util.' + t + ';\n' for t in ('List', 'Map') if re.search(r'\b' + t + r'\b', types))
         declarations = declarations if declarations is not None else '\n'.join(f'    private {t} {n};' for t, n in fields)
         constructor = ''
-        if fields:
-            arguments = ', '.join(f'{t} {n}' for t, n in fields)
-            assignments = '\n'.join(f'        this.{n} = {n};' for _, n in fields)
-            constructor = f'\n\n    public {class_name}({arguments}) {{\n{assignments}\n    }}'
+        # extra_constructors: leading field counts of further constructors (an older contract still compiles)
+        for count in [*extra_constructors, len(fields)] if fields else []:
+            arguments = ', '.join(f'{t} {n}' for t, n in fields[:count])
+            assignments = '\n'.join(f'        this.{n} = {n};' for _, n in fields[:count])
+            constructor += f'\n\n    public {class_name}({arguments}) {{\n{assignments}\n    }}'
         emit(class_name, imports, f'{DTO_ANNOTATIONS}\npublic class {class_name}{generic} {{\n\n{declarations}{constructor}\n\n}}')
 
     from .compact_backend import row_fields
@@ -122,7 +123,8 @@ def generate(output: Path, config, package, cls, blocks, ops):
                 row_declarations(fields).replace('    public ', '    private '))
     for key in sorted(needed):
         fields = [(remap(t), n) for t, n in wrappers[key]]  # Row and wrapper names of the company DTOs
-        dto(names[key], fields, generic='<T>' if key in {'RowResult', 'PageResult', 'UpdateRequest', 'SearchRequest', 'BlockChanges'} else '')
+        dto(names[key], fields, generic='<T>' if key in {'RowResult', 'PageResult', 'UpdateRequest', 'SearchRequest', 'BlockChanges'} else '',
+            extra_constructors=(2,) if key == 'PageResult' else ())
     (folder / (cls + 'Dtos.java')).unlink()
 
     constants = [f'    public static final String NAME = WebMenuLeaf.Path.AWU_{config["AWU_AZON"]};',

@@ -1681,7 +1681,7 @@ def method(operation: dict, block: dict, gated: bool, log1x, user_type: str, sup
         owner, item = bind['source'].split('.', 1)
         value = f"PlsqlValues.{READERS[bind['item']['type']]}(values, {jstr(owner)}, {jstr(item)})"
         params.append(f"            q.params.addValue({jstr(bind['parameter'])}, {value}, {JDBC_TYPES[bind['item']['type']]});")
-    params.append('            q.params.addValue("offset", request.offset()).addValue("limit", request.limit());')
+    params.append('            q.params.addValue("offset", request.offset()).addValue("limit", request.limit() + 1);')
     suffix = name(block['class'])
     suffix = suffix[:1].upper() + suffix[1:]
     post = support_methods('\n'.join(support)).get('postQuery' + suffix)
@@ -1743,7 +1743,11 @@ def method(operation: dict, block: dict, gated: bool, log1x, user_type: str, sup
             }}
 {chr(10).join(params)}
             var rows = jdbc.query({jstr(select)} + whereText(q.where) + {tail}, q.params, (rs, rowNum) -> map{suffix}(rs));
-{post_call}            return new PageResult<>(rows, q.messages);
+            var more = rows.size() > request.limit();  // one row more was asked: did the page leave rows out?
+            if (more) {{
+                rows = rows.subList(0, request.limit());
+            }}
+{post_call}            return new PageResult<>(rows, q.messages, more);
         }});
     }}
 

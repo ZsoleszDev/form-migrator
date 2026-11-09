@@ -15,12 +15,15 @@ import subprocess
 import tempfile
 import unittest
 
-from java_support import COMPANY_IMPORTS, write_stubs
+from java_support import COMPANY_IMPORTS, trigger_mode, write_stubs
 from frm_forms.cli import main
 from frm_forms.commit_points import transform
 from frm_forms.plsql import Unsupported
 from frm_forms.plsql_passthrough import prepare
 from screen_support import screen_source
+
+setUpModule, tearDownModule = trigger_mode('plsql')
+
 
 ROOT = Path(__file__).resolve().parents[1]
 REPLICA = ROOT / 'tests' / 'fixtures' / 'felmeres_replika_fmb.xml'

@@ -1,3 +1,117 @@
+# Következő változat (a 4.35 után) — Java csak adatbázismunkából, generált repository, kevesebb AI-hívás; valódi mentés, Forms-sorrend
+
+- **Magyar tizedesvessző a UI-modellben is.** A magyar Forms Builder a számpropertyket tizedesvesszővel
+  exportálja (`HighestAllowedValue="9999999999,99"`). A backend eddig is elfogadta, a UI-modell `INVALID_NUMBER`-rel
+  leállt, így a CLI alapmódja a repó saját replika-űrlapját is elutasította. Most mindkettő ugyanazt az olvasót
+  használja (`common.nls_decimal`); ezres elválasztót továbbra sem találgat.
+- **Java asszisztens: tippek csak az eredeti Forms-kódból.** Az `original_code()` a migrátor saját megjegyzéseit is
+  beolvasta, ezért minden rekordhook promptja `MESSAGE`-tippet kapott. A tippek és a mezősorok most a feladat
+  Forms-forrásaiból jönnek, a PL/SQL-megjegyzések nélkül.
+- **Pontos Oracle-formátumminták.** A „`TO_CHAR(date, fmt)`: ugyanaz a minta” tipp hibás volt (Oracle `MI`/`DD`/`YYYY`
+  = Java `mm`/`dd`/`yyyy`). Az `oracle_formats` a kód minden literál formátummintáját a pontos `java.time`-mintára
+  fordítja (`TO_CHAR`, `TO_DATE` az Oracle 1–2 jegyes engedékenységével), és megmondja, ha nincs megfelelő (NLS-nevek,
+  AM/PM, RR, hétszám) vagy ha számformátum. Új tipp: `a || b` → `SqlValues.concat` (Oracle-ben a NULL kimarad,
+  Javában `"a" + null = "anull"`).
+- **Adatbázis-rutinok típusos metódusként.** A Forms-kód tárolt eljárás- és függvényhívásai (pl. PRE-INSERT
+  `kod_pkg.check_insert(:B.KOD, :B.DATUM, :B.NEV)`) a schema.json `procedures` aláírásából generált, típusos
+  metódust kapnak (pl. `String kodPkgCheckInsert(String pKod, LocalDateTime pDatum)`; pozíciós vagy nevesített
+  paraméterek, a kihagyottaknál az adatbázis alapértéke, OUT/IN OUT érték visszatérési értékként vagy kis
+  holder osztályban). A prompt ezeket kínálja egyetlen megengedett PL/SQL-hívásként, és megnevezi az aláírás
+  nélküli rutinokat (MISSING, sosem újraírás). A beillesztés a hívott metódusokat is hozzáadja (`DbCalls` a
+  ServiceImpl `NamedParameterJdbcTemplate`-jén); ha a modell maga írja meg, javítást kér.
+- **Zárolás várakozás nélkül.** A rekord zárolása `FOR UPDATE NOWAIT`: ha más munkamenet tartja (ORA-00054,
+  ORA-30006), HTTP 409 „A rekordot most más felhasználó zárolja; próbáld újra később.”, mint Formsban — a kérés és a
+  kapcsolat nem vár korlátlanul. `CommonMigrateTools.VERSION` = 6: a projekt vegye át az új példányt.
+- **Nincs csendes levágás 200 sornál.** A lista-, kereső- és lekérdezőgomb-végpontok eggyel több sort kérnek,
+  és a `PageResult.hasMore` jelzi, ha a lap nem fért el (a POST-QUERY a plusz sort nem látja). A képernyő szól
+  (`migrationMoreRows`); az űrlapblokk egyetlen rekordot kér (`limit: 1`), és szól, ha több is illeszkedett.
+- **Valódi mentés.** A `save()` eddig üres változáslistákat küldött. Most a lekérdezés az űrlap rekordját
+  teljesen beírja (`reset`) és megjegyzi (`migrationLoaded`); a mentés blokkonként módosításként küldi, ha a
+  képernyő eltér tőle (`updated: [{ original, value }]`), lekérdezés nélkül új rekordként, ha a felhasználó beírt
+  valamit. A jelölőnégyzet a képernyőn `true/false`, a rekordban a Forms-érték; a dátum a képernyőn `Date`, a
+  rekordban helyi idő másodpercre; az üres szöveg `null`. Mentés után a képernyő a mentett, újraolvasott rekordot
+  mutatja (a generált kulccsal), az üzenetek és utasítások az `applyActionResult`-ba mennek. A kérés a mentési
+  lánc által olvasott képernyőértékeket is viszi (új detail rekord master-kulcsa, PRE-COMMIT kötései). Törlést a
+  képernyő nem küld: a `DELETE_RECORD` megfelelője fejlesztői feladat.
+- **Az indítókódból nem lesz Java (nincs `onFormInit`).** A PRE-FORM és a WHEN-NEW-FORM-INSTANCE eddig
+  egészében az AI-ra várt (`onFormInit`), keretrendszer-hívással, kurzorbeállítással, statikus értéklistával együtt.
+  A webes képernyő megnyitása nem esemény a Java-alkalmazásban, ezért AI-módban nincs indítási végpont és
+  AI-feladat. Az indítókód utasításonként a helyére kerül (`frm_forms/startup.py`): az állandó értékadás és a
+  konstans mezőtulajdonság a képernyő kezdőállapota (`startValue`, `disabled`, `readonly`), az állandó `:GLOBAL` az
+  az érték, amelyet a képernyő a kéréseiben küld, a `GO_BLOCK` + `EXECUTE_QUERY` a konstruktor lekérdezése; a
+  `qms$…`, a `SET_APPLICATION_PROPERTY` és az `ALTER SESSION` kimarad; a memóriabeli értéklista, a csomagváltozó és
+  az indításkori adatbázismunka (SQL, adatbázis-rutin) a képernyő MIGRATION_NOTES.md-jébe kerül („Nem migrált
+  adatbázismunka”, a kóddal), hogy semmi se tűnjön el szó nélkül. A `plsql` mód indítási végpontja megmaradt.
+- **Adatbázismunka nélküli gombból nincs Java-végpont.** Az a gomb, amely csak a képernyőn dolgozik (mezőérték,
+  ellenőrzés, navigáció, a blokkok lekérdezése és mentése), eddig AI-feladat lett, ha a képernyő nem ismerte fel
+  minden lépését, és a backend Forms-utasításokat küldött vissza a képernyőnek. Most a `frm_forms/database_work.py`
+  dönt a kódból (a hívott helyi eljárásokkal és a `DO_KEY` key-triggerével együtt): SQL, adatbázis-rutin vagy
+  -csomagelem, a blokk SQL-jének módosítása, szerverre nyúló Forms-hívás nélkül a gomb a képernyőé (kétség esetén a
+  szerveré marad). A képernyő ehhez több lépést ismer: mezőérték állandóból vagy másik mezőből (`setValue`),
+  `VALIDATE` a `FORM_SUCCESS`-ellenőrzésével (`migrationInvalid`), `MESSAGE` (toast); a többi TODO az eredeti
+  kóddal, megnevezett okkal. A replika-űrlapon 13 AI-feladatból 9 maradt.
+- **A repository-metódusokat a migrátor írja.** A helyi AI leggyakrabban a repositoryn hibázott (EntityManager a
+  service-ben, meg nem írt repository-metódus hívása, pl. `ModulRepository.findByWhereClause()`), és minden ilyen
+  válasz újabb AI-hívást jelentett. A `frm_forms/jpa_sql.py` a trigger SQL-jéből, amit pontosan lefed (egy tábla;
+  `SELECT … INTO`, aggregátum, szekvencia, kurzor és `FOR` ciklus lekérdezése, minden oszlopot író `INSERT`,
+  `UPDATE`, `DELETE`; a feltételekben összehasonlítás, `IS NULL`, `LIKE`, `IN`, `BETWEEN`, `UPPER`/`LOWER`/`TRIM`,
+  `||`), a tábla repositoryjába Criteria API-s metódust ír, kötött paraméterekkel és az eredeti SQL-lel a
+  kommentjében; a `SELECT INTO` a PL/SQL kivételeit adja (`NoResultException` = NO_DATA_FOUND,
+  `NonUniqueResultException` = TOO_MANY_ROWS). A prompt ezeket kínálja adatbázis-elérésként, és ha minden SQL-t
+  lefednek, csak a service-t kéri; a lefedetlen SQL-t név szerint felsorolja. A generált metódusok Hibernate 5.6-on
+  (Oracle-dialektus) is futottak a fejlesztés során.
+- **Az egyszerű rekordtriggerekhez nem kell AI.** A szekvenciás kulcs, a kódtábla-megnevezés kikeresése
+  (`NO_DATA_FOUND` → `NULL`), az üzenettel megálló ellenőrzés és a master-detail varázsló törlésellenőrzése
+  (`frm_forms/hook_java.py`) a migrátortól kap Java-kódot, modellhívás nélkül (`calls: 0`); a javaslat ugyanúgy
+  illeszthető be. A replika-űrlap maradék 9 feladatából 4 ilyen.
+- **Kevesebb AI-hívás, kevesebb újrakérés.** A helyi modell gyakran 2–3 kérés után sem adott elfogadható választ, és
+  minden javító kör egy teljes modellhívás volt. Négy változás:
+  - *Több feladat AI nélkül.* Az egyszerű gomb (képernyőérték, ellenőrzés üzenettel, egy `SHOW_ALERT`-kérdés, az SQL
+    a generált repository-metódusokon át, mezőérték visszaírása, `GO_BLOCK`/`EXECUTE_QUERY`, `COMMIT_FORM` a végén)
+    a migrátortól kap `ActionResult`-törzset (`frm_forms/action_java.py`); a rekordtrigger `INSERT`/`UPDATE`/`DELETE`
+    utasítása is a generált metódusán át fut; a lekérdező gomb (DEFAULT_WHERE + EXECUTE_QUERY) AI-módban is a
+    migrátor PL/SQL-lel összevetett Java-lekérdezése (`query_java`), és az automatikus AI-sor sem küldi el.
+  - *A szokásos apró hibák helyben javítva* (`frm_forms/reply_repair.py`): `request.getBlocks()` → `request.blocks()`,
+    `row.getVevo()` / `row.setId(x)` → `row.vevo` / `row.id = x`, a modul előtagja nélküli repository és entity,
+    a Spring Data `findById`/`save`/`delete`… egy generált metódus nélküli repositoryn (a migrátor írja,
+    find/merge/remove + flush, figyelmeztetéssel), az üres `JpaRepository`-interfész, a generált metódus
+    újraírása, a címke nélküli segédmetódus-blokk, és a `record` nevű változó téves elutasítása. Egyik sem kér
+    újabb AI-hívást; a javaslat megjegyzése felsorolja, mit javított a migrátor.
+  - *Pontosabb javítókérés:* generált metódusok mellett a nem létező metódus vagy az EntityManager hibájánál a
+    kérés felsorolja a hívható metódusokat a pontos aláírásukkal, és nem kér repository-blokkot. A gombok promptja
+    a törzs vázát is megadja (`values`, `messages`, `commands`, `blocks`, `return new ActionResult(...)`).
+  - *A sikertelen futás nem vész el:* ha az utolsó válaszban is maradt hiba, az hibás vázlatként (`draft`)
+    megmarad a hibáival — megtekinthető, letölthető, kézzel javítható, de így nem illeszthető be és nem kerül
+    cache-be. Hibaüzenet csak akkor jön, ha a válaszban nincs használható kód.
+
+  A replika-űrlapon a 9 AI-feladatból most 5-höz nem kell modellhívás (a megerősítő `PB_LEZAR` gomb is ilyen);
+  4 maradt az AI-é (form-csomageljárás, `DO_KEY` key-trigger, adatbázis-rutin, `|| 'x'`-es UPDATE).
+- **Frontend AI-átírás (opcionális).** A generált képernyő elküldhető a helyi modellnek: standalone komponens,
+  signalok az állapotra (`signal`, `computed`, `input()`, `output()`), olvasható, magyarul kommentezett kód,
+  ugyanazzal a működéssel (HTTP-hívások, metódusnevek, lépések). Bekapcsolni a Java asszisztens fül új paneljén vagy
+  az `/ai-log` oldalon lehet; sosem fut magától, és csak átnézés után illeszthető be (`frm_forms/frontend_assistant.py`,
+  [docs/FRONTEND_AI_HU.md](docs/FRONTEND_AI_HU.md)). A **Teljes fájl** gomb csak akkor aktív, ha a kérés és a válasz is
+  belefér a kontextusba és a kimeneti keretbe; ha nem, **részenként** megy: előbb a fej (itt lesz az állapotból
+  signal), utána a metódusok csoportokban, mindegyik a fej vázlatával és a signalok listájával, majd a migrátor
+  összerakja. A nagy állandók (FormBlock-struktúrák) helyőrzőként mennek, a migrátor visszateszi őket. Ellenőrzés:
+  metódusok, selector, helyőrzők, signal-írás, `@angular/core` import, TypeScript-szintaxis (ha van TypeScript a gépen);
+  hibánál javítókérés, végül hibás vázlat. A közös AI-beállítás mentése mostantól csak a kérésben szereplő mezőket
+  írja (egy kapcsoló nem nullázza a kapcsolatot). A `migrator-app.ts` egy sablonhibája (`collapsedChange` típusa)
+  javítva, a felület így a mostani függőségekkel lefordul.
+- **A céges Forms-felületkönyvtárak kimaradnak.** Az `ank_ctrl` (képernyőcím, súgósor) és az `ank_menu` (menü)
+  rutinjai csak az Oracle Forms futtatókörnyezetben működnek: a keretrendszer-katalógus `forms_runtime_calls`
+  listáján vannak, így sem a backendbe, sem az AI-feladatokba nem kerülnek, és a csatolt könyvtárból sem
+  töltődnek be. Az adatbázist érintő céges rutinok (pl. `naplo_init`, `ank_jog.irhat`) maradnak.
+- **Forms-sorrend a validációban.** A mező saját ellenőrzései (kötelező, hossz, tartomány, listaérték) a
+  WHEN-VALIDATE-ITEM/RECORD és a PRE-INSERT/UPDATE előtt futnak, ahogy Formsban; a triggerek által írt értékeket
+  utána újra ellenőrzi.
+- **Tesztek és CI.** A `tests/java_support.py` importáláskor `plsql`-re állította a `FRM_BACKEND_TRIGGER_MODE`-ot,
+  így az eredmény a futtatási sorrendtől függött; most minden modul kimondja a saját módját és visszaállítja a
+  környezetet. Az elavult elvárások frissítve, új futtatásos tesztek (Java: lapozás, zárolás, validációs sorrend;
+  Node: a mentés változáslistái), GitHub Actions munkafolyamat (`.github/workflows/tests.yml`: Python 3.13, JDK 21,
+  Node 22, TypeScript). A tesztek egy része az `examples/` mappát használja, amely nincs a repóban: amíg nem kerül
+  be, ezek hibával állnak le.
+
 # 4.35 — Minden szerveroldali trigger az AI-é, automatikus és élő AI-sor
 
 - **Új alapértelmezés: `backend_trigger_mode: "ai"`.** A determinisztikus generátor nem fordítja le a

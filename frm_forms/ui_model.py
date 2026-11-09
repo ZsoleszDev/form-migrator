@@ -7,7 +7,7 @@ import hashlib
 import json
 import re
 from pathlib import Path
-from .common import MigrationError, name, write_json
+from .common import MigrationError, name, nls_decimal, write_json
 from .xmlmodel import canonical
 from .ui_types import classify
 from .ui_config import widget_map
@@ -71,7 +71,7 @@ class Reader:
         if value is None or value=='': return None
         try:
             if len(str(value))>260: raise InvalidOperation
-            result=Decimal(str(value))
+            result=Decimal(nls_decimal(value))  # the same reading as the backend's bounds (rules.decimal_literal)
             if not result.is_finite(): raise InvalidOperation
             if result.as_tuple().exponent < -130 or result.as_tuple().exponent > 125 or abs(result)>Decimal('1e125'): raise InvalidOperation
             return result

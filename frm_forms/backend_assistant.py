@@ -43,7 +43,7 @@ RESPONSE_SCHEMA = {
     "type": "object", "additionalProperties": False,
     "required": ["status", "summary", "body", "imports", "private_methods", "assumptions", "missing_context", "test_cases"],
     "properties": {
-        "status": {"type": "string", "enum": ["proposal", "needs_context"]},
+        "status": {"type": "string", "enum": ["proposal", "needs_context", "draft"]},
         "summary": {"type": "string"}, "body": {"type": "string"},
         "private_methods": {"type": "string"},
         **{key: {"type": "array", "items": {"type": "string"}}
@@ -158,6 +158,11 @@ def hook_contract(hook: dict, ir: dict) -> dict:
             "row_class": hook["row_class"], "fields": fields}
 
 
+def screen_items(ir: dict) -> dict:
+    from .action_java import screen_items as items
+    return items(ir)
+
+
 def prepare_workspace(output: Path) -> dict:
     """Index unfinished endpoints without network access or backend modifications."""
     output = output.resolve()
@@ -181,6 +186,11 @@ def prepare_workspace(output: Path) -> dict:
     schema = schema_bundle[0]
     from . import java_imports
     formatting_imports = java_imports.load(effective["config"])
+    # The database routines of the code: typed methods from the reviewed signatures (db_routines).
+    from . import db_routines, framework
+    from .rules import procedure_signatures
+    procedures = procedure_signatures(schema.get("procedures", {}))
+    catalog = framework.load(effective["config"])
     from .input_bindings import sheet as input_sheet
     input_contract = input_sheet(output)
     tasks = []
@@ -189,9 +199,12 @@ def prepare_workspace(output: Path) -> dict:
     # hooks of the ServiceImpl (triggerOnInsertRendeles ...); each is a task of its own, like an endpoint.
     applied_hooks = {h["method"] for h in plan.get("ai_hooks_applied", [])}
     endpoints += [h for h in ai_hooks(service, ir, {e["method"] for e in endpoints}) if h["method"] not in applied_hooks]
+    ai_mode = (ir.get("options") or {}).get("backend_trigger_mode") == "ai"
     for endpoint in endpoints:
         if endpoint.get("assistant", {}).get("applied"):
             continue
+        if ai_mode and endpoint.get("runs") == "java-query":
+            continue  # the migrator's query (query_java): done, no AI call (also not by the automatic AI queue)
         # Offered: exactly the methods that still carry the commented original Forms code
         # (//region Eredeti Forms-kód ...): manual buttons, Java/PL-SQL query buttons, gated CRUD.
         method = endpoint["method"]
@@ -259,6 +272,12 @@ def prepare_workspace(output: Path) -> dict:
             elif file.name.startswith(cls) and "RestClient" not in file.name:
                 contracts[file.name] = file.read_text(encoding="utf-8")
         sheet = schema_sheet(output, sources, blocks, schema_bundle)
+        routines, unavailable = db_routines.plan(sources, procedures, catalog)
+        external = (action or {}).get("external_calls")
+        if external is None:
+            # A hook or the start-up code: its PKG.PROC calls (an undotted unknown name is mostly an Oracle built-in).
+            external = sorted({c["name"] for s in sources for c in s.get("calls", [])
+                               if c.get("kind") in {"external_candidate", "ambiguous_local_program_unit"}})
         packet = {"version": VERSION, "id": task_id, "module": effective["module"],
                   "target": target, "method": method, "endpoint": endpoint,
                   "kind": "hook" if hook else "implement" if manual or blocked else "rewrite_java",
@@ -277,7 +296,10 @@ def prepare_workspace(output: Path) -> dict:
                                if row["owner"] == endpoint.get("owner", endpoint.get("block"))],
                       "warnings": input_contract["warnings"]},
                   "source_module_sha256": ir.get("source_sha256"),
-                  "external_calls": (action or {}).get("external_calls", []),
+                  "external_calls": external,
+                  "db_routines": routines, "unavailable_routines": unavailable,
+                  # an AI button: the types of the screen's values (action_java translates a simple one itself)
+                  "screen_items": screen_items(ir) if manual and ai_mode else {},
                   "module_gate": plan.get("module_gate", {}),
                   "table_requirements": sheet["tables"], "pending_tables": sheet["pending"], "schema_warnings": sheet["warnings"],
                   "notice": "A tiltás oka és a forrás megmarad; az AI-javaslat nem működésigazolás."}
@@ -308,8 +330,12 @@ def prepare_workspace(output: Path) -> dict:
              "a saját repositoryk és a szükséges kiegészítő DTO-k együtt frissülnek. A meglévő Controller és "
              "végponti szerződés megmarad. A friss modul ZIP-je letölthető.\n\n"
              "Az adatbázis-műveletek entitykkel, a repositoryban futnak; a service üzleti logikát és "
-             "repositoryhívásokat tartalmaz. Nem kell promptot írni. Hiányzó külső rutint vagy céges API-t "
-             "csak akkor kell pótolni a kiegészítő forrásban, ha a működéshez szükséges.\n\n"
+             "repositoryhívásokat tartalmaz. A trigger SQL-jéhez a migrátor maga írja a repository-metódusokat "
+             "(Criteria API, az eredeti SQL a kommentjükben), ahol pontosan fordítható: az AI ezeket hívja, és csak "
+             "a service logikáját írja. Az egyszerű rekordtriggerekhez (szekvenciás kulcs, kódtábla-megnevezés, "
+             "üzenettel megálló ellenőrzés, master-detail törlésellenőrzés) AI-hívás sem kell. Nem kell promptot "
+             "írni. Hiányzó külső rutint vagy céges API-t csak akkor kell pótolni a kiegészítő forrásban, ha a "
+             "működéshez szükséges.\n\n"
              "A képernyőértékek külön bekötése opcionális haladó eszköz; nem feltétele a Java-átírásnak. "
              "A meglévő log1x és tranzakciós keret megmarad. A céges projektben JPA/Hibernate és a megfelelő "
              "entity/repository csomagok felismerése szükséges. Java 11 mellett az alap névtér javax.persistence; "
@@ -432,7 +458,7 @@ public final class {repository} {{
 def validate_response(value: object) -> dict:
     """The normalized answer a proposal stores (see assistant_reply); re-checked before apply."""
     keys = set(RESPONSE_SCHEMA["required"])
-    if not isinstance(value, dict) or not keys <= set(value) or set(value) - keys - {"repositories", "dtos"} or value["status"] not in {"proposal", "needs_context"}:
+    if not isinstance(value, dict) or not keys <= set(value) or set(value) - keys - {"repositories", "dtos"} or value["status"] not in {"proposal", "needs_context", "draft"}:
         raise MigrationError("Az AI-válasz nem követi a Java-javaslat sémáját.")
     for key, limit in (("summary", 4000), ("body", 60000), ("private_methods", 40000)):
         if not isinstance(value[key], str) or len(value[key]) > limit:
@@ -447,6 +473,11 @@ def validate_response(value: object) -> dict:
         if not value["missing_context"]:
             raise MigrationError("Hiányzó kontextus esetén meg kell nevezni, mi hiányzik.")
         return value
+    if value["status"] == "draft":
+        # The model's last answer that still had problems (draft_response): shown with them, never applied.
+        if not value["body"].strip():
+            raise MigrationError("A vázlathoz kódtörzs kell.")
+        return value
     if not value["body"].strip() or value["missing_context"]:
         raise MigrationError("A teljes javaslathoz kódtörzs kell, megnevezett hiányzó függőség nélkül.")
     if re.fullmatch(r"\s*return\s+null\s*;\s*", java_mask(value["body"])):
@@ -459,7 +490,9 @@ def validate_response(value: object) -> dict:
     # Structural checks are deliberately NOT described as compilation/security proof.
     if "\\u" in code or "```" in code or re.search(r"\b(NOT_IMPLEMENTED|UnsupportedOperationException)\b", mask):
         raise MigrationError("A javaslat helyőrzőt vagy nem támogatott kódformát tartalmaz.")
-    if re.search(r"\b(package|import|class|interface|enum|record)\s+", mask):
+    # A declaration, not a word: `String record = ...` or `Foo.class` is ordinary code.
+    if re.search(r"(?<![\w$.])(?:package|import)\s+[\w.*]+\s*;|(?<![\w$.])(?:class|interface|enum)\s+[A-Za-z_$][\w$]*\s*(?:[{<]|extends\b|implements\b)"
+                 r"|(?<![\w$.])record\s+[A-Za-z_$][\w$]*\s*[(<]", mask):
         raise MigrationError("A modell csak metódustörzset és privát segédmetódusokat adhat.")
     if re.search(r"\b(Runtime|ProcessBuilder|System\s*\.\s*(?:exit|setProperty)|ScriptEngineManager|ClassLoader|DriverManager)\b|java\s*\.\s*(?:net|io|nio|lang\s*\.\s*reflect)\b", mask + "\n" + "\n".join(value["imports"])):
         raise MigrationError("A javaslat nem megengedett rendszer-/hálózati API-t használ.")
@@ -479,13 +512,15 @@ def validate_response(value: object) -> dict:
     return value
 
 
-def common_tools(output: Path) -> str | None:
-    """Import of the shared PlsqlValues helper when the module has CommonMigrateTools."""
+def common_tool_imports(output: Path) -> dict[str, str]:
+    """Simple name -> import of the CommonMigrateTools helpers (SqlValues, DbCalls ...) the module has."""
     path = safe_file(output, "backend/CL/CommonMigrateTools.java")
-    if not path.is_file(): return None
+    if not path.is_file(): return {}
     text = path.read_text(encoding="utf-8")
     package = re.search(r"^\s*package\s+([\w.]+)\s*;", text, re.M)
-    return package.group(1) + ".CommonMigrateTools.PlsqlValues" if package and "class PlsqlValues" in text else None
+    if not package: return {}
+    return {name: package.group(1) + ".CommonMigrateTools." + name
+            for name in re.findall(r"^    public static final class (\w+)", text, re.M)}
 
 
 def render_candidate(service: str, packet: dict, response: dict) -> str:
@@ -499,7 +534,7 @@ def render_candidate(service: str, packet: dict, response: dict) -> str:
     if packet.get("kind") == "hook":
         # A private trigger hook (backend_trigger_mode=ai): the region stays on top, the model's code replaces the rest.
         original = ORIGINAL_REGION.search(existing)
-        region = original.group(0).rstrip() + "\n" if original else ""
+        region = written(original.group(0).rstrip() + "\n") if original else ""
         body = "\n".join("        " + line if line else "" for line in response["body"].strip().splitlines())
         result = service[:opening + 1] + "\n" + region + body + "\n    }" + service[end + 1:]
         return finish_candidate(result, service, packet, response)
@@ -509,7 +544,7 @@ def render_candidate(service: str, packet: dict, response: dict) -> str:
     lambda_end = matching_brace(mask, lambda_open)
     # The commented original Forms source stays in the method: the model need not repeat it.
     original = ORIGINAL_REGION.search(existing, lambda_open + 1, lambda_end)
-    region = original.group(0).rstrip() + "\n" if original else ""
+    region = written(original.group(0).rstrip() + "\n") if original else ""
     body = "\n".join("            " + line if line else "" for line in response["body"].strip().splitlines())
     # The gate is generator-owned, never delegated to the model.
     guard = ('            if (!MODULE_REVIEWED) {\n'
@@ -525,6 +560,11 @@ def render_candidate(service: str, packet: dict, response: dict) -> str:
         before = before[:line_start] + "    @org.springframework.transaction.annotation.Transactional(rollbackFor = Exception.class)\n" + before[line_start:]
     result = before + new_method + service[end + 1:]
     return finish_candidate(result, service, packet, response)
+
+
+def written(region: str) -> str:
+    """The kept region of a method whose body is written now: its note no longer says it waits for the AI."""
+    return re.sub(r"^([ \t]*//[ \t]*)AI-ra vár\.[ \t]*", r"\1", region, count=1, flags=re.M)
 
 
 def finish_candidate(result: str, service: str, packet: dict, response: dict) -> str:
@@ -544,11 +584,39 @@ def finish_candidate(result: str, service: str, packet: dict, response: dict) ->
         last = java_mask(result).rfind("}")
         helpers = "\n".join("    " + line if line else "" for line in response["private_methods"].strip().splitlines())
         result = result[:last] + "\n    // Java asszisztens: " + packet["id"] + "\n" + helpers + "\n" + result[last:]
+    result = add_routines(result, packet, response, helper_names)
     mapping = dict(java_tidy_known())
     mapping.update(packet.get("formatting_imports") or {})
+    # SqlValues.concat / nvl (the prompt's Oracle semantics), DbCalls of the database routine methods ...
+    mapping.update(packet.get("common_tool_imports") or {})
     if packet.get("plsql_values_import"):
         mapping["PlsqlValues"] = packet["plsql_values_import"]
     return ensure_imports(result, mapping)
+
+
+def add_routines(result: str, packet: dict, response: dict, helper_names: list[str]) -> str:
+    """The generated methods of the database routines the proposal calls (db_routines), each once per service.
+
+    The model calls them and never writes them; the service gets a NamedParameterJdbcTemplate when it has none.
+    """
+    routines = packet.get("db_routines") or []
+    clash = sorted(set(helper_names) & {r["method"] for r in routines})
+    if clash:
+        raise MigrationError("Az adatbázis-rutin metódusát a migrátor adja, a javaslat ne írja meg: " + ", ".join(clash))
+    code = java_mask(response["body"] + "\n" + response["private_methods"])
+    used = [r for r in routines if re.search(r"(?<![\w$.])" + re.escape(r["method"]) + r"\s*\(", code)]
+    missing = [r for r in used if r["header"] not in result]
+    if not missing:
+        return result
+    last = java_mask(result).rfind("}")
+    result = result[:last] + "\n" + "\n".join(r["source"] for r in missing) + result[last:]
+    if not re.search(r"\bNamedParameterJdbcTemplate\s+jdbc\s*[;=]", java_mask(result)):
+        match = re.search(r"\bpublic\s+class\s+\w+[^{]*\{", java_mask(result))
+        if not match: raise MigrationError("A DPS ServiceImpl osztálya nem található.")
+        field = ("\n    @org.springframework.beans.factory.annotation.Autowired\n"
+                 "    private NamedParameterJdbcTemplate jdbc;  // the database routine methods\n")
+        result = result[:match.end()] + field + result[match.end():]
+    return result
 
 
 # JDK types model-written code often uses without writing the import (in addition to the generator's list).
@@ -664,6 +732,16 @@ def budget_message(required: int, num_ctx: int) -> str:
             f"a beállított num_ctx {num_ctx}. {next_step} A trigger és a szükséges források teljesek maradtak.")
 
 
+def persistence_plan(packet: dict, output: Path) -> tuple[list[dict], dict]:
+    """The entities and repositories of the task's tables, with the generated repository methods of its SQL (jpa_sql):
+    the model calls them, it does not write them. The same for a request and for its apply."""
+    from . import jpa_assistant, jpa_sql
+    persistence = jpa_assistant.plan(packet, output)
+    generated = (jpa_sql.attach(packet, persistence, (packet.get("hook") or {}).get("table"))
+                 if persistence else {"methods": [], "refused": []})
+    return persistence, generated
+
+
 def prepare(output: Path, task_id: str, options: Options) -> dict:
     """Everything one request needs, built locally without network access."""
     options.validate()
@@ -678,20 +756,33 @@ def prepare(output: Path, task_id: str, options: Options) -> dict:
         raise MigrationError("Előbb add meg a hiányzó táblaszerkezetet az Adatbázistáblák panelen: " + ", ".join(packet["pending_tables"]))
     service = safe_file(output, packet["target"]).read_text(encoding="utf-8")
     packet["service_package_source"] = service[:service.find("public class") if "public class" in service else 1000]
-    packet["plsql_values_import"] = common_tools(output)
-    from . import assistant_context, jpa_assistant
-    persistence = jpa_assistant.plan(packet, output) if options.data_access == "jpa" else []
+    packet["common_tool_imports"] = common_tool_imports(output)
+    packet["plsql_values_import"] = packet["common_tool_imports"].get("PlsqlValues")
+    from . import assistant_context
+    persistence, generated = persistence_plan(packet, output) if options.data_access == "jpa" else ([], None)
+    generated = generated or {"methods": [], "refused": []}
     helpers, notes = data_models(packet) if options.data_access == "jdbc" else ({}, [])
     prompt = assistant_context.build(packet, persistence, helpers, options,
-                                     plsql_values=bool(packet["plsql_values_import"]))
+                                     plsql_values=bool(packet["plsql_values_import"]), generated=generated)
     # What the former JSON request carried (whole task packet): kept as a size comparison.
     legacy = {"task": packet, "generated_jdbc_helpers": helpers, "helper_notes": notes,
               "additional_requirements": options.instructions, "project_context": options.project_context}
     input_tokens = estimate_tokens(prompt["system"], prompt["user"])
     return {"output": output, "packet": packet, "service": service, "persistence": persistence, "helpers": helpers,
-            "notes": notes, "prompt": prompt, "input_tokens": input_tokens,
+            "notes": notes, "prompt": prompt, "generated": generated, "input_tokens": input_tokens,
             "required_tokens": input_tokens + options.num_predict + 1000,
             "original_bytes": len(json.dumps(legacy, ensure_ascii=False).encode("utf-8"))}
+
+
+def deterministic_response(prepared: dict) -> tuple[dict | None, str]:
+    """A simple record trigger (sequence key, code description, check with a message) or a simple button (screen
+    values, checks, one alert, its SQL, commands) needs no model (hook_java, action_java): (response, why not)."""
+    from . import action_java, framework, hook_java
+    packet = prepared["packet"]
+    if packet.get("kind") == "hook":
+        return hook_java.response(packet, prepared["generated"])
+    effective = read_json(safe_file(prepared["output"], "analysis/effective-config.json"))
+    return action_java.response(packet, prepared["generated"], framework.load(effective["config"]))
 
 
 def preview(output: Path, task_id: str, options: Options) -> dict:
@@ -699,13 +790,21 @@ def preview(output: Path, task_id: str, options: Options) -> dict:
     prepared = prepare(output, task_id, options)
     prompt = prepared["prompt"]
     warnings = []
-    if prepared["required_tokens"] > options.num_ctx:
+    deterministic = False
+    if options.data_access == "jpa" and prepared["packet"].get("kind") in {"hook", "implement"}:
+        deterministic = deterministic_response(prepared)[0] is not None
+    if deterministic:
+        warnings.append("Ezt a triggert a migrátor AI nélkül fordítja (az SQL-je a generált repository-metódusokban van): "
+                        "a futtatás nem hívja a modellt, ez a kérés nem megy el.")
+    elif prepared["required_tokens"] > options.num_ctx:
         warnings.append(budget_message(prepared["required_tokens"], options.num_ctx))
     return {"task_id": task_id, "method": prepared["packet"]["method"], "system": prompt["system"], "user": prompt["user"],
             "bytes": prompt["bytes"], "estimated_input_tokens": prepared["input_tokens"],
             "required_tokens": prepared["required_tokens"], "num_ctx": options.num_ctx, "num_predict": options.num_predict,
             "repositories": prompt["repositories"], "entities": prompt["entities"],
-            "omitted_tables": prompt["omitted_tables"], "original_bytes": prepared["original_bytes"], "warnings": warnings}
+            "omitted_tables": prompt["omitted_tables"], "original_bytes": prepared["original_bytes"], "warnings": warnings,
+            "deterministic": deterministic, "generated_methods": prompt.get("generated_methods", []),
+            "refused_sql": prompt.get("refused_sql", [])}
 
 
 class Cancelled(MigrationError):
@@ -882,18 +981,55 @@ def call_model(options: Options, body: dict, progress=None, cancel=None, attempt
     return outer
 
 
+def draft_response(reply, calls: int) -> tuple[dict | None, dict | None]:
+    """The model's last answer with problems as a draft (status draft): readable, downloadable, never applied.
+
+    Not cached: the next run asks the model again. The problems are the extraction's warnings, so every screen that
+    shows a proposal shows them.
+    """
+    if reply is None or not reply.response or not reply.response.get("body", "").strip() or reply.truncated:
+        return None, None
+    draft = dict(reply.response, status="draft", missing_context=[],
+                 summary=f"Vázlat: az AI {calls} hívás után sem adott hibátlan választ. A kódja megtekinthető és "
+                         "kézzel javítható, de így nem illeszthető be; a hibák a figyelmeztetések között.")
+    try:
+        validate_response(draft)
+    except MigrationError:
+        return None, None
+    extraction = reply.report()
+    extraction["status"] = "draft"
+    extraction["warnings"] = (["Az AI utolsó válaszának hibája: " + p.hu for p in reply.problems]
+                              + list(extraction.get("warnings", [])))
+    return draft, extraction
+
+
 def reply_context(prepared: dict, options: Options):
     from . import assistant_reply
     packet, service = prepared["packet"], prepared["service"]
     used = [p for p in prepared["persistence"] if p["repository"] in prepared["prompt"]["repositories"]]
     allowed = set(re.findall(r"^\s*import\s+([\w.$]+)\s*;", service, re.M))
     allowed |= set(re.findall(r"\b(?:[a-z_][\w]*\.)+[A-Z][\w$]*", options.project_context))
+    generated = {}
+    for method in (prepared.get("generated") or {}).get("methods", []):
+        returns, call = method.signature.split(" ", 1)
+        generated.setdefault(method.repository, []).append(method.variable + "." + call + " returns " + returns)
+    hook = packet.get("hook") or {}
     return assistant_reply.Context(
         method=packet["method"], service=service, module_class=name(packet["module"], "pascal"),
-        repositories=[assistant_reply.Repository(p["repository"], p["variable"], p["entity"], p["existing_repository"])
-                      for p in used],
+        repositories=[assistant_reply.Repository(p["repository"], p["variable"], p["entity"], p["existing_repository"],
+                                                 id_type(p)) for p in used],
         namespace=(packet.get("config") or {}).get("jpa_namespace") or "javax", mode=options.data_access,
-        allowed_imports=frozenset(allowed))
+        allowed_imports=frozenset(allowed), routines=frozenset(r["method"] for r in packet.get("db_routines") or []),
+        generated=generated,
+        row_fields=frozenset(f["field"] for f in hook.get("fields", []) if f.get("field")) if hook.get("kind") == "record" else frozenset())
+
+
+def id_type(descriptor: dict) -> str:
+    """The id type of a repository's findById (reply_repair): the key field's type, or the composite key class."""
+    keys = descriptor.get("primary_key") or []
+    if len(keys) == 1:
+        return descriptor.get("fields", {}).get(keys[0], "").replace("java.math.", "").replace("java.time.", "")
+    return descriptor["entity"] + "Id" if keys else ""
 
 
 def propose(output: Path, task_id: str, options: Options, cache: Path | None = None,
@@ -940,8 +1076,6 @@ def _propose(prepared, options, cache, request, log, assistant_reply, jpa_assist
     output, packet, service = prepared["output"], prepared["packet"], prepared["service"]
     persistence, helpers, notes, prompt = prepared["persistence"], prepared["helpers"], prepared["notes"], prepared["prompt"]
     task_id = packet["id"]
-    if prepared["required_tokens"] > options.num_ctx:
-        raise MigrationError(budget_message(prepared["required_tokens"], options.num_ctx))
     ctx = reply_context(prepared, options)
 
     def render_files(response):
@@ -959,7 +1093,23 @@ def _propose(prepared, options, cache, request, log, assistant_reply, jpa_assist
     cache = cache or output.parent / ".frm-assistant-cache"
     cache_file = safe_file(cache, key + ".json")
     response, errors, cached, extraction, usage = None, [], False, None, {}
-    if cache_file.is_file():
+    deterministic = False
+    if options.data_access == "jpa" and packet.get("kind") in {"hook", "implement"}:
+        response, reason = deterministic_response(prepared)
+        if response is not None:
+            try:
+                validate_response(response)
+                parse_files(render_files(response))
+                deterministic, cached = True, True
+                extraction = {"format": "deterministic", "status": "proposal", "truncated": False, "blocks": [],
+                              "notes": ["AI-hívás nélkül, a migrátor fordította (az SQL a generált repository-metódusokban)."],
+                              "warnings": [], "problems": [], "missing": []}
+            except MigrationError as exc:
+                response, reason = None, str(exc)  # the model writes it after all
+        log.data["deterministic"] = deterministic or reason
+    if response is None and prepared["required_tokens"] > options.num_ctx:
+        raise MigrationError(budget_message(prepared["required_tokens"], options.num_ctx))
+    if response is None and cache_file.is_file():
         try:
             entry = read_json(cache_file)
             if entry.get("key") == key:
@@ -971,9 +1121,10 @@ def _propose(prepared, options, cache, request, log, assistant_reply, jpa_assist
     if response is None and options.cached_only:
         raise MigrationError("Ehhez a pontos forráshoz/beállításhoz nincs érvényes cache; hálózati hívás nem történt.")
     calls, parse_status, raw = 0, "not_run", ""
-    verified_procedures = {name.upper() for name in packet.get("schema", {}).get("procedures", {})}
-    unresolved = [call for call in packet.get("external_calls", []) if call.upper() not in verified_procedures]
-    messages, correction = list(request["messages"]), None
+    from .db_routines import resolve
+    verified_procedures = {name.upper(): {} for name in packet.get("schema", {}).get("procedures", {})}
+    unresolved = [call for call in packet.get("external_calls", []) if resolve(call, verified_procedures) is None]
+    messages, correction, last = list(request["messages"]), None, None
     while response is None and calls < options.attempts:
         calls += 1
         attempt = log.begin(calls, correction)
@@ -1013,6 +1164,7 @@ def _propose(prepared, options, cache, request, log, assistant_reply, jpa_assist
             response, extraction = reply.response, reply.report()
             break
         errors.append("; ".join(p.hu for p in reply.problems)[:2000])
+        last = reply
         if reply.truncated:
             errors.append(f"A válasz a kimeneti keretnél (num_predict={options.num_predict}) megszakadt; "
                           "növeld a Kimeneti keretet a Memória és futtatás résznél.")
@@ -1024,9 +1176,14 @@ def _propose(prepared, options, cache, request, log, assistant_reply, jpa_assist
             errors.append("A javítási kérés (előző válasz + hibalista) nem fér a beállított kontextusba; nem küldtük el.")
             break
     if response is None:
-        raise MigrationError(f"Nem érkezett használható Java-javaslat ({calls} AI-hívás): " + " | ".join(errors))
-    if not cached:
+        # The calls are not thrown away: the last answer is kept as a draft with its problems (never applied).
+        response, extraction = draft_response(last, calls)
+        if response is None:
+            raise MigrationError(f"Nem érkezett használható Java-javaslat ({calls} AI-hívás): " + " | ".join(errors))
+    elif not cached:
         write_json(cache_file, {"key": key, "response": response, "raw": raw, "extraction": extraction})
+    if deterministic:
+        key = digest(key + ":deterministic:" + json.dumps(response, sort_keys=True, ensure_ascii=False))
     proposal_id = key[:20]
     folder = safe_file(output, AREA + "/proposals/" + proposal_id)
     files, draft_note = {}, None
@@ -1034,11 +1191,18 @@ def _propose(prepared, options, cache, request, log, assistant_reply, jpa_assist
         files = render_files(response)
         if cached: parse_status = parse_files(files)
     elif response["body"].strip():
-        # needs_context: show what the model could write, never apply it.
+        # needs_context / draft: show what the model could write, never apply it.
         try:
             files = render_files(response)
         except MigrationError as exc:
             draft_note = "A hiányos vázlatból nem készült fájl: " + str(exc)
+            if response["status"] == "draft":
+                # The draft's code is still worth reading: the service file with the model's method as written.
+                try:
+                    files, draft_note = {packet["target"]: render_candidate(service, packet, response)}, (
+                        "A vázlatból csak a service-fájl készült (a repository-rész nem illeszthető): " + str(exc))
+                except MigrationError:
+                    pass
     files, formatting = format_candidates(packet, files)
     manifest = []
     for relative, text in sorted(files.items()):
@@ -1059,7 +1223,8 @@ def _propose(prepared, options, cache, request, log, assistant_reply, jpa_assist
     if draft_note:
         extraction["warnings"] = list(extraction.get("warnings", [])) + [draft_note]
     result = {"version": VERSION, "id": proposal_id, "task_id": task_id, "method": packet["method"],
-              "status": response["status"], "model": options.model, "cached": cached, "calls": calls,
+              "status": response["status"], "model": "determinisztikus (AI nélkül)" if deterministic else options.model,
+              "deterministic": deterministic, "cached": cached and not deterministic, "calls": calls,
               "data_access": options.data_access, "exchange_id": log.data["id"],
               "context": {"original_bytes": prepared["original_bytes"], "sent_bytes": prompt["bytes"],
                           "estimated_input_tokens": prepared["input_tokens"], "method_count": 1,
@@ -1067,7 +1232,7 @@ def _propose(prepared, options, cache, request, log, assistant_reply, jpa_assist
               "source_fingerprint": packet["fingerprint"], "response": response, "files": manifest,
               "apply_allowed": packet["apply_allowed"], "extraction": extraction,
               "helper_notes": notes, "format_errors": errors, "applied": False,
-              "validation": {"schema": "passed", "structural_checks": "passed", "java_parse": parse_status,
+              "validation": {"schema": "passed", "structural_checks": "failed" if response["status"] == "draft" else "passed", "java_parse": parse_status,
                              "java_compile": "not_run", "oracle_equivalence": "not_run",
                              "deterministic_format": formatting}}
     write_json(folder / "proposal.json", result)
@@ -1119,12 +1284,13 @@ def apply_proposal(output: Path, proposal_id: str, reviewed: bool = False) -> di
     response = validate_response(record["response"])
     source = safe_file(output, packet["target"]).read_text(encoding="utf-8")
     packet["service_package_source"] = source[:source.find("public class") if "public class" in source else 1000]
-    packet["plsql_values_import"] = common_tools(output)
+    packet["common_tool_imports"] = common_tool_imports(output)
+    packet["plsql_values_import"] = packet["common_tool_imports"].get("PlsqlValues")
     # Reconstruct rather than trusting paths or editable files from a model ZIP.
     expected_files = {packet["target"]: render_candidate(source, packet, response)}
     if record.get("data_access") == "jpa":
         from . import jpa_assistant
-        expected_files = jpa_assistant.render_files(output, packet, response, source, jpa_assistant.plan(packet, output))
+        expected_files = jpa_assistant.render_files(output, packet, response, source, persistence_plan(packet, output)[0])
     elif any(f["target"] != packet["target"] for f in record["files"]):
         expected_files.update(data_models(packet)[0])
     expected_files, _ = format_candidates(packet, expected_files)

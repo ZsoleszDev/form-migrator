@@ -45,6 +45,15 @@ JPA_RULE = ("Database access only through the repositories listed below. Write t
             "   The repository fields are already injected into the service.")
 NO_TABLE_RULE = ("No database table is available to this method. If the logic needs database access (a table or\n"
                  "   a sequence), write MISSING: and name it.")
+# Every SQL statement of the code has a generated repository method (jpa_sql): the model writes the logic only.
+GENERATED_RULE = ("Database access only through the generated repository methods listed below: the code's SQL is\n"
+                  "   already written there. Do not write repository code, SQL, JPQL or EntityManager code. The repository\n"
+                  "   fields are already injected into the service.")
+PARTLY_GENERATED = ("\n   The generated repository methods listed below already run part of the SQL: call them. Write\n"
+                    "   repository methods only for the SQL listed without one.")
+# The database routines the Forms code calls (db_routines): the migrator adds their typed methods to the service.
+ROUTINE_RULE = ("\n   The database routines of the Forms code run in Oracle through the generated methods listed below:\n"
+                "   call those methods (the only allowed PL/SQL calls); never re-implement or skip a routine.")
 JDBC_RULE = ("Database access: use the service's existing `jdbc` field (NamedParameterJdbcTemplate) with named,\n"
              "   bound parameters{jdbc_helpers}; never concatenate values into SQL.")
 PLSQL_VALUES = ("\n   Helpers: PlsqlValues.text(request.blocks(), \"BLOCK\", \"ITEM\"), PlsqlValues.number(...) returns\n"
@@ -66,6 +75,20 @@ QUERY_RESULT = """4. Screen values: request.blocks().get("BLOCK").get("ITEM") (a
    conditions, bound values, never string concatenation), map every entity to a new {row_class} (its fields
    are listed below) and return new PageResult<>(rows, messages). MESSAGE texts go to messages; an error:
    throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "text")."""
+
+# A plain button (ActionResult): the shape of a body the migrator can insert as it is. Small local models copy a
+# skeleton far more reliably than they follow prose; the repaired slips (reply_repair) are the ones it shows right.
+ACTION_SKELETON = """The body usually has this shape (fill in the logic of the Forms code):
+```java
+var values = request.blocks() == null ? Map.<String, Map<String, String>>of() : request.blocks();
+BigDecimal id = PlsqlValues.number(values, "BLOCK", "ITEM");   // text(...) for a String, datetime(...) for a date
+List<String> messages = new ArrayList<>();
+List<List<String>> commands = new ArrayList<>();
+Map<String, Map<String, String>> blocks = new LinkedHashMap<>();
+// ... the Forms logic: if / the repository methods / messages.add("...") / commands.add(List.of("GO_BLOCK", "BLOCK"))
+PlsqlValues.put(blocks, "BLOCK", "ITEM", value);               // every item the Forms code assigns
+return new ActionResult(blocks, messages, commands, Map.of());
+```"""
 
 # backend_trigger_mode=ai: a private hook of the CRUD flow (POST-QUERY, PRE-INSERT, ON-INSERT, WHEN-VALIDATE-ITEM ...).
 HOOK_RULES = """Rules:
@@ -141,9 +164,41 @@ COMMON_HINTS = [
     (r"\bCURSOR\b|\bFOR\s+\w+\s+IN\s*\(", 'CURSOR / FOR r IN (SELECT ...): a repository method that returns the list (or exists()/count()).'),
     (r"\bSELECT\b[\s\S]*?\bINTO\b", 'SELECT ... INTO: a repository method; no row = NO_DATA_FOUND (handle it where the Forms code does).'),
     (r"\b(?:UPDATE|INSERT\s+INTO|DELETE\s+FROM)\b", 'UPDATE / INSERT / DELETE of a table: a repository method (find + setters, persist, remove or CriteriaUpdate).'),
-    (r"\bTO_NUMBER\s*\(", 'TO_NUMBER(s): new BigDecimal(s.trim()) (null stays null).'),
-    (r"\bTO_CHAR\s*\(", 'TO_CHAR(n): n.toPlainString(); TO_CHAR(date, fmt): DateTimeFormatter.ofPattern(<the same pattern>).'),
+    (r"\bTO_NUMBER\s*\(", 'TO_NUMBER(s): new BigDecimal(s.trim()) (null stays null); the decimal character is the '
+                          'session\'s (a Hungarian session reads 1,5): replace it with . first.'),
+    (r"\bTO_CHAR\s*\(", 'TO_CHAR(n): n.toPlainString() (Oracle writes the session\'s decimal character and no leading '
+                        'zero: .5, a Hungarian session 1,5). An Oracle format model is never a Java pattern as it is '
+                        '(MI is mm, DD is dd, YYYY is yyyy): use the conversions listed here.'),
+    (r"\|\|", "a || b: SqlValues.concat(a, b), never a + b (Oracle skips NULL: 'a' || NULL = 'a', and an empty "
+              "result is NULL); a number or a date goes in through TO_CHAR."),
 ]
+
+
+def format_hints(code: str) -> list[str]:
+    """The exact java.time pattern of every TO_CHAR / TO_DATE call with a literal format model in the Forms code."""
+    from .oracle_formats import format_calls, has_time, is_number_format, java_pattern
+    lines = []
+    for function, model in format_calls(code):
+        quoted = "'" + model.replace("'", "''") + "'"
+        if function == "TO_CHAR" and is_number_format(model):
+            lines.append(f"TO_CHAR(n, {quoted}) is a number format model (9 and 0 are digits, G and D the group and "
+                         "decimal characters of the session: a Hungarian one writes 1 234,5): build it with DecimalFormat "
+                         "and explicit DecimalFormatSymbols.")
+            continue
+        pattern = java_pattern(model, parse=function != "TO_CHAR")
+        if pattern is None:
+            lines.append(f"{function}(x, {quoted}): no exact java.time pattern (month or day names, AM/PM, RR or week "
+                         "numbers depend on the Oracle NLS settings); write the closest DateTimeFormatter with an explicit "
+                         "Locale and name the format under NOTES.")
+        elif function == "TO_CHAR":
+            lines.append(f'TO_CHAR(d, {quoted}): d.format(DateTimeFormatter.ofPattern("{pattern}")) (null stays null).')
+        elif has_time(model) or function == "TO_TIMESTAMP":
+            lines.append(f'{function}(s, {quoted}): LocalDateTime.parse(s.trim(), DateTimeFormatter.ofPattern("{pattern}")) '
+                         '(null stays null).')
+        else:
+            lines.append(f'TO_DATE(s, {quoted}): LocalDate.parse(s.trim(), DateTimeFormatter.ofPattern("{pattern}"))'
+                         '.atStartOfDay() (null stays null).')
+    return lines
 HOOK_HINTS = [
     (r"\bMESSAGE\s*\(", 'MESSAGE(x): context.message(x).'),
     (r"\bFORM_TRIGGER_FAILURE\b", 'RAISE FORM_TRIGGER_FAILURE: context.abort().'),
@@ -152,12 +207,20 @@ HOOK_HINTS = [
 ]
 
 
+def jpa_rule(has_tables: bool, generated: dict | None) -> str:
+    """Rule 2 in jpa mode: the generated repository methods of the code's SQL (jpa_sql), when there are any."""
+    if generated and generated.get("methods"):
+        return GENERATED_RULE if not generated.get("refused") else JPA_RULE + PARTLY_GENERATED
+    return JPA_RULE if has_tables else NO_TABLE_RULE
+
+
 def rules(data_access: str = "jpa", has_tables: bool = True, plsql_values: bool = True, jdbc_helpers: bool = False,
-          action_api: bool = True) -> str:
+          action_api: bool = True, routines: bool = False, generated: dict | None = None) -> str:
     if data_access == "jpa":
-        data_rule = JPA_RULE if has_tables else NO_TABLE_RULE
+        data_rule = jpa_rule(has_tables, generated)
     else:
         data_rule = JDBC_RULE.replace("{jdbc_helpers}", " and the generated helpers below where they fit" if jdbc_helpers else "")
+    data_rule += ROUTINE_RULE if routines else ""
     # Plain replacement: the rules quote Java code with literal braces.
     text = RULES.replace("{data_rule}", data_rule).replace("{helpers}", PLSQL_VALUES if plsql_values else "")
     if not action_api:
@@ -166,9 +229,10 @@ def rules(data_access: str = "jpa", has_tables: bool = True, plsql_values: bool 
     return text
 
 
-def hook_rules(packet: dict, data_access: str, has_tables: bool) -> str:
+def hook_rules(packet: dict, data_access: str, has_tables: bool, generated: dict | None = None) -> str:
     hook = packet.get("hook") or {}
-    data_rule = (JPA_RULE if has_tables else NO_TABLE_RULE) if data_access == "jpa" else JDBC_RULE.replace("{jdbc_helpers}", "")
+    data_rule = jpa_rule(has_tables, generated) if data_access == "jpa" else JDBC_RULE.replace("{jdbc_helpers}", "")
+    data_rule += ROUTINE_RULE if packet.get("db_routines") else ""
     if hook.get("kind") == "commit":
         return COMMIT_RULES.replace("{data_rule}", data_rule).replace("{event}", hook.get("event", ""))
     event = hook.get("event", "")
@@ -178,26 +242,49 @@ def hook_rules(packet: dict, data_access: str, has_tables: bool) -> str:
 
 
 def original_code(method: str) -> str:
-    """The commented Forms code of the method (the //region), uncommented, for the hints."""
+    """The commented Forms code of the method (the //region), uncommented.
+
+    The region of ai_triggers.region starts with the migrator's own notes ("üzenet: context.message(...)") and
+    has "// --- <heading>" lines between the sources: neither is Forms code, both are left out.
+    """
     lines = re.findall(r"^[ \t]*//(?![ \t]*(?:region|endregion)\b)[ \t]?(.*)$", method, re.M)
+    if any(line.startswith("--- ") for line in lines):
+        first = next(i for i, line in enumerate(lines) if line.startswith("--- "))
+        lines = [line for line in lines[first:] if not line.startswith("--- ")]
     return "\n".join(lines)
 
 
-def hints(method: str, kind: str) -> list[str]:
-    code = original_code(method)
+def forms_code(packet: dict, method: str) -> str:
+    """The Forms code the task translates, without PL/SQL comments: the trigger and the local units it calls.
+
+    The packet's sources are exactly the code its region shows. Commented-out PL/SQL (-- MESSAGE(...)) and the
+    region's notes never produce a hint or a field line.
+    """
+    from .ai_triggers import code_text
+    sources = [s.get("source") or "" for s in packet.get("sources") or [] if isinstance(s, dict)]
+    return "\n".join(code_text(source) for source in sources) if sources else code_text(original_code(method))
+
+
+# The COMMON_HINTS that say how to write a repository method: not needed when every statement has a generated one.
+SQL_HINTS = {text for _, text in COMMON_HINTS if text.startswith(('SEQ.NEXTVAL:', 'CURSOR / FOR', 'SELECT ... INTO:',
+                                                                   'UPDATE / INSERT / DELETE'))}
+
+
+def hints(code: str, kind: str, sql_generated: bool = False) -> list[str]:
+    """Forms -> Java lines for the built-ins and references the Forms code (forms_code) uses."""
     chosen = (HOOK_HINTS if kind == "hook" else [] if kind == "commit" else ACTION_HINTS) + COMMON_HINTS
     found = []
     for pattern, text in chosen:
-        if re.search(pattern, code, re.I) and text not in found:
+        if re.search(pattern, code, re.I) and text not in found and not (sql_generated and text in SQL_HINTS):
             found.append(text)
-    return found
+    return found + format_hints(code)
 
 
 def record_fields(packet: dict, method: str) -> list[str]:
     """Forms item -> row.field for a record hook: the referenced items and the key (all, when few)."""
     hook = packet.get("hook") or {}
     fields = hook.get("fields") or []
-    code = original_code(method).upper()
+    code = forms_code(packet, method).upper()
     every = len(fields) <= 12
     lines = []
     for f in fields:
@@ -274,14 +361,18 @@ def query_fields(packet: dict) -> list[str]:
     return lines
 
 
-def build(packet: dict, persistence: list[dict], helpers: dict, options, *, plsql_values: bool = False) -> dict:
+def build(packet: dict, persistence: list[dict], helpers: dict, options, *, plsql_values: bool = False,
+          generated: dict | None = None) -> dict:
     method = packet["existing_method"]
     data_access = options.data_access
     kind = packet.get("kind")
     hook = kind == "hook"
     own = own_table(packet, method) if hook else None
-    used = ([p for p in persistence if table_used(p, method) or (own and p["table"].rsplit(".", 1)[-1].upper() == own)]
-            if data_access == "jpa" else [])
+    generated = generated if data_access == "jpa" and generated else {"methods": [], "refused": []}
+    hosts = {m.repository for m in generated["methods"]}  # e.g. the repository of a sequence query
+    used = ([p for p in persistence if table_used(p, method) or (own and p["table"].rsplit(".", 1)[-1].upper() == own)
+             or p["repository"] in hosts] if data_access == "jpa" else [])
+    all_generated = bool(generated["methods"]) and not generated["refused"]
     omitted = [p["table"] for p in persistence if p not in used]
     header = method.split("{", 1)[0]
     action_api = "ActionResult" in header
@@ -289,7 +380,7 @@ def build(packet: dict, persistence: list[dict], helpers: dict, options, *, plsq
     if hook:
         hook_kind = (packet.get("hook") or {}).get("kind", "record")
         parts = ["Rewrite this private Java method so that it implements the original Oracle Forms trigger in plain Java.",
-                 hook_rules(packet, data_access, bool(used))]
+                 hook_rules(packet, data_access, bool(used), generated)]
         if hook_kind == "record":
             fields = record_fields(packet, method)
             if fields:
@@ -297,7 +388,8 @@ def build(packet: dict, persistence: list[dict], helpers: dict, options, *, plsq
         hint_kind = "hook" if hook_kind == "record" else "commit"
     else:
         parts = ["Rewrite this Java method so that it implements the original Oracle Forms code in plain Java.",
-                 rules(data_access, bool(used), plsql_values, bool(helpers), action_api)]
+                 rules(data_access, bool(used), plsql_values, bool(helpers), action_api, bool(packet.get("db_routines")),
+                       generated)]
         if query_api:
             target = (packet.get("endpoint") or {}).get("query_block") or "target"
             block = next((b for b in packet.get("blocks", []) if b.get("name") == target), {})
@@ -309,15 +401,31 @@ def build(packet: dict, persistence: list[dict], helpers: dict, options, *, plsq
             if fields:
                 parts.append("Fields of " + (row_class.group(1) if row_class else "the row") + " (public, set them directly):\n" + "\n".join(fields))
         hint_kind = "action"
-    found = hints(method, hint_kind)
+    found = hints(forms_code(packet, method), hint_kind, all_generated)
     if found:
         parts.append("Forms -> Java for this code:\n" + "\n".join("- " + line for line in found))
+    if generated["methods"]:
+        from .jpa_sql import prompt_lines
+        parts.append("Repository methods of this code's SQL (generated by the migrator; call them, never write them):\n"
+                     + "\n".join(prompt_lines(generated)))
+    if generated["refused"]:
+        parts.append("SQL without a generated method (write one public method for each, in the repository of its table):\n"
+                     + "\n".join("- " + r["statement"] for r in generated["refused"]))
+    routines = packet.get("db_routines") or []
+    if routines:
+        parts.append("Database routine methods (generated; call them, do not write them):\n"
+                     + "\n".join("- " + r["describe"] for r in routines))
+    if packet.get("unavailable_routines"):
+        parts.append("Called database routines without a method: " + "; ".join(packet["unavailable_routines"])
+                     + ". If the logic needs one, write MISSING: and name it; never re-implement a database routine.")
     if used:
         lines = ["Repositories:"]
         for p in used:
             lines.append(f"- {p['variable']} ({p['repository']}) for entity {p['entity']}, table {p['table']}")
             lines += field_lines(p, method)
-            existing = existing_methods(p.get("existing_repository", ""))
+            names = {m.name for m in generated["methods"] if m.repository == p["repository"]}
+            existing = [e for e in existing_methods(p.get("existing_repository", ""))
+                        if re.search(r"\b(\w+)\(", e).group(1) not in names]
             if existing:
                 lines.append("  existing methods (reuse them): " + "; ".join(existing))
         parts.append("\n".join(lines))
@@ -329,10 +437,12 @@ def build(packet: dict, persistence: list[dict], helpers: dict, options, *, plsq
                      + options.project_context.strip() + "\n```")
     if options.instructions.strip():
         parts.append("Additional requirements from the developer:\n" + options.instructions.strip())
+    if not hook and action_api and plsql_values:
+        parts.append(ACTION_SKELETON)
     parts.append("Method:\n```java\n" + method.strip("\n") + "\n```")
     answer = ["Answer format (code only, no explanation):", "```java", "// SERVICE",
               "<the complete rewritten method, followed by any new private helper methods>", "```"]
-    for p in used:
+    for p in ([] if all_generated else used):
         answer += ["```java", "// REPOSITORY " + p["repository"], "<only the new public methods of this repository>", "```"]
     answer += ["Only if something essential is missing (for example the source of a called database package), add:",
                "MISSING:", "- <exactly what is missing>",
@@ -341,4 +451,6 @@ def build(packet: dict, persistence: list[dict], helpers: dict, options, *, plsq
     user = "\n\n".join(parts) + "\n"
     return {"system": SYSTEM, "user": user, "repositories": [p["repository"] for p in used],
             "entities": [p["entity"] for p in used], "omitted_tables": omitted,
+            "generated_methods": [m.repository + "." + m.name for m in generated["methods"]],
+            "refused_sql": [r["statement"] for r in generated["refused"]],
             "method_chars": len(method), "bytes": len((SYSTEM + user).encode("utf-8"))}

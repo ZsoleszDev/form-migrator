@@ -1,5 +1,5 @@
 """Felmérés (survey): why endpoints stay disabled, counted over forms and shareable without names."""
-import java_support  # noqa: F401  (legacy trigger mode for these engine tests)
+from java_support import trigger_mode
 import contextlib
 import io
 import json
@@ -10,6 +10,9 @@ import unittest
 from frm_forms import survey
 from frm_forms.cli import main
 from test_screen_windows import simple_windows
+
+setUpModule, tearDownModule = trigger_mode('plsql')
+
 
 ROOT = Path(__file__).resolve().parent
 REPLICA = ROOT / 'fixtures' / 'felmeres_replika_fmb.xml'

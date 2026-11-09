@@ -15,6 +15,7 @@ import { SelectModule } from '@openng/optimus-ui/select';
 import { TableModule } from '@openng/optimus-ui/table';
 import { TagModule } from '@openng/optimus-ui/tag';
 import { AiProgress, AiRun, AiSummary, MigratorAiQueue } from './migrator-ai-queue';
+import { MigratorFrontendAi } from './migrator-frontend-ai';
 
 interface AssistantJob { id: string; status: string; module: string | null; filename: string }
 interface Task {
@@ -105,7 +106,7 @@ const ORACLE_TYPES = ['VARCHAR2', 'NVARCHAR2', 'CHAR', 'NCHAR', 'NUMBER', 'FLOAT
 @Component({
   selector: 'app-migrator-assistant',
   imports: [FormsModule, ReactiveFormsModule, ButtonModule, CheckboxModule, InputTextModule,
-    MessageModule, PanelModule, ProgressBarModule, SelectModule, TableModule, TagModule, MigratorAiQueue],
+    MessageModule, PanelModule, ProgressBarModule, SelectModule, TableModule, TagModule, MigratorAiQueue, MigratorFrontendAi],
   host: {class: 'block min-w-0'},
   styles: `
     .as-table { min-width: 0; width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
@@ -276,7 +277,7 @@ ORDER BY column_id;</pre>
               </label>
               @if (proposal(); as result) {
                 <p class="m-0">{{ result.response.summary }}</p>
-                <p-tag [value]="result.applied ? 'Átvéve' : result.status === 'needs_context' ? 'További adat szükséges' : 'Átnézendő javaslat'" />
+                <p-tag [value]="result.applied ? 'Átvéve' : result.status === 'needs_context' ? 'További adat szükséges' : result.status === 'draft' ? 'Hibás vázlat (nem illeszthető be)' : 'Átnézendő javaslat'" />
                 @if (result.response.missing_context.length) {
                   <p-message severity="warn">Az AI szerint ez hiányzik: {{ result.response.missing_context.join(' · ') }}
                     @if (result.status === 'needs_context') { A vázlat megtekinthető, de nem illeszthető be: add meg a hiányzó forrást a Kiegészítő forrás részben, és futtasd újra. }
@@ -407,6 +408,10 @@ ORDER BY column_id;</pre>
             }
           </details>
         </p-panel>
+        <p-panel header="Frontend AI-átírás (opcionális)" [toggleable]="true" [collapsed]="true" class="block min-w-0 w-full">
+          <app-migrator-frontend-ai [apiBase]="apiBase" [jobId]="jobId()" [numCtx]="numCtx.value" [numPredict]="numPredict.value"
+            [timeout]="timeout.value" [attempts]="attempts.value" [think]="think.value" (applied)="moduleUpdated.emit($event)" />
+        </p-panel>
         <details [open]="bindingsOpen()" (toggle)="bindingsOpen.set($any($event.target).open)"><summary class="cursor-pointer text-sm opacity-80">Haladó: képernyőértékek bekötése</summary>
         @if (bindingsOpen()) {
         <p-panel header="Képernyőértékek bekötése (opcionális)" [toggleable]="true" class="block min-w-0 w-full"
@@ -525,7 +530,7 @@ export class MigratorAssistant implements OnChanges, OnDestroy {
   private exchangeEpoch = 0;
   private exchangeTimer?: ReturnType<typeof setTimeout>;
   readonly exchangeOptions = computed(() => this.exchanges().map(item => ({value: item.id,
-    label: item.method + ' · ' + this.exchangeStatus(item.status) + (item.proposal_status === 'needs_context' ? ' (adatot kér)' : '')
+    label: item.method + ' · ' + this.exchangeStatus(item.status) + (item.proposal_status === 'needs_context' ? ' (adatot kér)' : item.proposal_status === 'draft' ? ' (hibás vázlat)' : '')
       + ' · ' + this.formatTime(item.started)})));
   // A running model does not lock the panel: tables can be filled in meanwhile (the queue picks them up).
   readonly locked = computed(() => this.loading() || this.mutating());
@@ -555,7 +560,7 @@ export class MigratorAssistant implements OnChanges, OnDestroy {
     return rows.length ? rows.length + ' felismert értékből ' + pending + ' igényel még bekötést vagy ellenőrzést.' : 'Nincs felismert bemenet.';
   });
   readonly proposalOptions = computed(() => (this.index()?.proposals ?? []).map(p => ({value: p.id,
-    label: p.method + ' · ' + (p.applied ? 'átvéve' : p.status === 'needs_context' ? 'adatot kér' : 'javaslat')})));
+    label: p.method + ' · ' + (p.applied ? 'átvéve' : p.status === 'needs_context' ? 'adatot kér' : p.status === 'draft' ? 'hibás vázlat' : 'javaslat')})));
   readonly previewOptions = computed(() => (this.proposal()?.files ?? []).flatMap(f => [
     {value: f.candidate + '.patch', label: 'Diff · ' + f.target}, {value: f.candidate, label: 'Teljes fájl · ' + f.target}]));
   readonly reviewSections = computed(() => {

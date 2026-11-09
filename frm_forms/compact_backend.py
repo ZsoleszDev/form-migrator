@@ -88,10 +88,12 @@ def frontend_api(ops, base, cls):
                                              'ready': not o['lov']['blockers']}
         elif o['op'] == 'commit':
             from .commit_chain import field
+            reads, context = o.get('reads') or ([], [])
             api['commit'] = {'constant': o['constant'],
                              'blocks': {b['name']: {'request': 'changes' + field(b), 'result': 'rows' + field(b),
                                                     'operations': [op for op in ('create', 'update', 'delete') if b['endpoint_plan'].get(op)]}
-                                        for b in o['blocks']}}
+                                        for b in o['blocks']},
+                             'reads': reads, 'parameters': context}
         elif o['op'] == 'action':
             api['actions'][o['action']['owner']] = {'constant': o['constant']}
             # What the code reads: the screen sends these (blocks: BLOCK.ITEM, parameters: GLOBAL/PARAMETER/SYSTEM).
@@ -489,21 +491,8 @@ def manual_source(action, discovery) -> str:
 
 
 def ai_action_sources(o, model, discovery) -> list[tuple[str, str]]:
-    """The original code of an action for its AI stub: the trigger(s), the local units they call, DO_KEY targets."""
-    from . import ai_triggers
+    """The original code of an action for its AI stub: the trigger, the local units it calls, DO_KEY targets."""
     action = o['action']
-    if action.get('init'):
-        sections = []
-        for trigger in model['triggers']:
-            if trigger['id'] in action.get('init_triggers', []):
-                source = (trigger.get('replacement') or {}).get('source', trigger['source'])
-                sections.append((trigger['id'], source))
-        seen = {label for label, _ in sections}
-        for trigger_id, source in list(sections):
-            for label, text in ai_triggers.unit_sections(source, model):
-                if label not in seen:
-                    seen.add(label); sections.append((label, text))
-        return sections
     codes = discovery.get('_code_index', {})
     sections = [(codes[cid]['path'].rsplit('/', 1)[-1] if codes[cid]['kind'] != 'trigger' else action['owner'] + ' / ' + action['event'],
                  codes[cid]['source_view']) for cid in action.get('reachable_code', []) if cid in codes]
@@ -513,7 +502,7 @@ def ai_action_sources(o, model, discovery) -> list[tuple[str, str]]:
 
 
 def ai_action_method(o, model, discovery, log1x, user_type, blocks) -> str:
-    """backend_trigger_mode=ai: the endpoint frame of a button / the start-up code, its body for the Java assistant."""
+    """backend_trigger_mode=ai: the endpoint frame of a button, its body for the Java assistant."""
     from . import ai_triggers
     action = o['action']
     label = action['owner'] + ' / ' + action['event']
@@ -530,8 +519,6 @@ def ai_action_method(o, model, discovery, log1x, user_type, blocks) -> str:
     original = ai_triggers.region(label, ai_action_sources(o, model, discovery), '            ', notes)
     info = [label + ': a Forms-kód Java-változatát a Java asszisztens (helyi AI) írja ide.',
             'A metódus kerete (végpont, DTO, tranzakció, log1x) végleges; csak a törzs változik.']
-    if action.get('init'):
-        info.append('Indítási végpont: a képernyő megnyitáskor hívja (PRE-FORM, WHEN-NEW-FORM-INSTANCE).')
     if query:
         returns, request = f"PageResult<{target['class']}Row>", 'QueryActionRequest'
     else:
@@ -615,7 +602,7 @@ def crud_evidence(op, model, discovery, values):
         if b['sequence']:
             lines.append('Azonosító: SELECT '+b['sequence']+'.NEXTVAL FROM DUAL')
     else:
-        lines.append('Rekord betöltése és zárolása: '+json.loads(values['SELECT_KEY'])+' FOR UPDATE')
+        lines.append('Rekord betöltése és zárolása: '+json.loads(values['SELECT_KEY'])+' FOR UPDATE NOWAIT')
         if verb == 'delete':
             lines.append('Generált SQL: '+json.loads(values['DELETE_SQL']))
         else:
@@ -729,18 +716,15 @@ def generate(model, output: Path, config, module, package, discovery, actions):
     cls = name(module, 'pascal')
     cl = cl_package(config, package)  # where the developer puts the module's CL files
     init = model.get('init_plan') or {}
-    if init.get('status') in ('generated', 'ai'):
-        # The form's start-up code (PRE-FORM, WHEN-NEW-FORM-INSTANCE): the screen calls it when it opens.
-        events = {t.split(':', 1)[1] for t in init['triggers']}
-        init_binds = [b['name'] for c in discovery['code'] if c['kind'] == 'trigger' and not c.get('block')
-                      and not c.get('item') and c.get('name') in events for b in c.get('binds', [])] if init['status'] == 'ai' else []
+    if init.get('status') == 'generated':
+        # The form's start-up code (PRE-FORM, WHEN-NEW-FORM-INSTANCE) as PL/SQL (backend_trigger_mode=plsql): the
+        # screen calls it when it opens. backend_trigger_mode=ai has no start-up endpoint (rules.startup_plan).
         actions = list(actions) + [{'owner': INIT_OWNER, 'event': ' + '.join(t.split(':', 1)[1] for t in init['triggers']),
                                     'block': None, 'item': None, 'key': 'init', 'api_name': 'init',
                                     'path': config['api_prefix'].rstrip('/') + '/' + module + '/init', 'method': 'POST',
                                     'method_name': 'onFormInit', 'trigger_id': None, 'reachable_code': [],
-                                    'event_code_candidates': [], 'binds': list(dict.fromkeys(init_binds)), 'external_calls': [],
-                                    'source_file': '', 'source_sha256': '', 'init': True, 'init_triggers': init['triggers'],
-                                    'ai': init['status'] == 'ai'}]
+                                    'event_code_candidates': [], 'binds': [], 'external_calls': [],
+                                    'source_file': '', 'source_sha256': '', 'init': True, 'init_triggers': init['triggers']}]
     ops = operations(model, actions)
     # LOVs: reviewed read-only SQL from RecordGroupQuery, one endpoint per LOV.
     from .backend_lovs import lov_plans, lov_method, lov_evidence
@@ -763,9 +747,6 @@ def generate(model, output: Path, config, module, package, discovery, actions):
             continue
         if o['action'].get('init'):
             o['passthrough'] = init.get('plan')
-            o['ai'] = init.get('status') == 'ai'
-            if o['ai']:
-                o['ai_reads'] = action_reads(o['action'], discovery)
             continue
         trigger = next((t for t in model['triggers'] if t['owner'] == o['action']['owner'] and t['event'] == o['action']['event']), None)
         o['passthrough'] = trigger.get('passthrough_plan') if trigger else None
@@ -787,6 +768,7 @@ def generate(model, output: Path, config, module, package, discovery, actions):
         # Buttons with a commit point: commitForm runs their code up to the point first (commit_points).
         commit['preludes'] = [(o['action']['owner'], runner_name(o)) for o in ops
                               if o['op'] == 'action' and (o.get('passthrough') or {}).get('commit_points')]
+        commit['reads'] = commit_chain.screen_reads(commit, model, discovery)  # the screen sends them with the changes
     runnable_actions = [o for o in ops if (o.get('passthrough') or o.get('query_action')) and not o.get('ai')]
     blocks = backend_blocks(model)
     served = {b['name'] for b in blocks}
@@ -813,7 +795,8 @@ def generate(model, output: Path, config, module, package, discovery, actions):
     wrappers = ''
     if blocks:
         wrappers += (value_class('RowResult<T>', [('T', 'row'), ('List<String>', 'messages')])
-                     + value_class('PageResult<T>', [('List<T>', 'rows'), ('List<String>', 'messages')])
+                     # hasMore: the page left rows out (the list asks one row more); (rows, messages) still compiles
+                     + value_class('PageResult<T>', [('List<T>', 'rows'), ('List<String>', 'messages'), ('boolean', 'hasMore')], (2,))
                      + value_class('UpdateRequest<T>', [('T', 'original'), ('T', 'value')]))
     if any(o['op']=='search' for o in ops):
         wrappers += value_class('SearchRequest<T>', [('T', 'criteria'), ('int', 'offset'), ('int', 'limit')])
@@ -1211,6 +1194,14 @@ import org.springframework.boot.web.client.RestTemplateBuilder;
         for selection in selections:
             selection['dto'] = cl_contract['dto_types'].get(selection['dto'], selection['dto'])
     api = frontend_api(ops, '' if cl_contract else base, cls)
+    if model.get('startup'):
+        # The screen's state on opening (startup.triage), not a server call. A :GLOBAL that other code writes too
+        # is no constant of the screen.
+        from .rules import INIT_EVENTS
+        written = {b['name'].upper() for c in discovery['code'] for b in c.get('binds', [])
+                   if b.get('usage') == 'assignment-target' and not (c['kind'] == 'trigger' and not c.get('block')
+                                                                    and c.get('name') in INIT_EVENTS)}
+        api['startup'] = dict(model['startup'], globals={k: v for k, v in model['startup']['globals'].items() if k not in written})
     if cl_contract:
         api.update(requires_host_adapter=True, response_envelope='RestResponseDto',
                    base_path_expression=cl_contract['wbs_base_path_expression'])
