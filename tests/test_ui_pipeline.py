@@ -124,7 +124,9 @@ class UiPipelineTests(unittest.TestCase):
         report=(out/'migration-report.md').read_text();self.assertIn('B.TREE',report);self.assertIn('MAIN',report)
     def test_10_report_inference_counts_and_endpoint_list(self):
         out,m=self.good('<Item Name="C" CheckedValue="1" UncheckedValue="0"/>',block='QueryDataSourceName="T"')
-        report=(out/'migration-report.md').read_text();self.assertIn('heurisztikából: 1/1',report);self.assertIn('b_read',report)
+        report=(out/'migration-report.md').read_text();self.assertIn('heurisztikából: 1/1',report)
+        # No primary key, no JPA Domain: the block has no endpoint, and the report says why.
+        self.assertIn('| B | b | nem készül | nem készül | nem készül | nem készül |',report);self.assertIn('NO_PRIMARY_KEY',report)
     def test_same_input_byte_identical_and_reject_before_java_ai(self):
         out,m=self.good();first={str(p.relative_to(out)):p.read_bytes() for p in out.rglob('*') if p.is_file()}
         other,_=self.good(label='other');self.assertEqual(first,{str(p.relative_to(other)):p.read_bytes() for p in other.rglob('*') if p.is_file()})

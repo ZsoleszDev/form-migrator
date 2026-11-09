@@ -367,10 +367,39 @@ def with_package(text: str, package: str) -> str:
     return 'package ' + package + ';\n\n' + text
 
 
-def plan_files(output: Path, mapped: dict, runtime: Path | None, tools: str | None) -> list[dict]:
+JPA_MARKER = 'Forms migrator JPA'  # jpa_crud: the generated Domain / Repository of a table
+
+
+def existing_classes(mapped: dict, outputs: list[Path]) -> dict[str, tuple[Path, str]]:
+    """The generated Domain/Repository classes the project already has (not written by the migrator): name ->
+    (file, package). The project's class is used, the generated one is not deployed."""
+    names = set()
+    for output in outputs:
+        folder = output / 'backend' / 'DPS'
+        for path in folder.glob('*.java') if folder.is_dir() else []:
+            if JPA_MARKER in path.read_text(encoding='utf-8', errors='ignore'):
+                names.add(path.stem)
+    found = {}
+    if not names:
+        return found
+    roots = java_roots([mapped.get(layer) for layer in LAYERS])
+    for root in roots:
+        for current, _, files in walk(root, depth=14):
+            for name in names - set(found):
+                if name + '.java' in files:
+                    text = (current / (name + '.java')).read_text(encoding='utf-8', errors='ignore')
+                    package = PACKAGE_LINE.search(text)
+                    if JPA_MARKER not in text and package:
+                        found[name] = (current / (name + '.java'), package.group(1))
+    return found
+
+
+def plan_files(output: Path, mapped: dict, runtime: Path | None, tools: str | None, existing: dict | None = None) -> list[dict]:
     """Part, target, content and policy of every deployable file of one output.
 
-    runtime: the wf-table.ts of the project, tools: the package of its CommonMigrateTools (None: not found)."""
+    runtime: the wf-table.ts of the project, tools: the package of its CommonMigrateTools (None: not found),
+    existing: the project's own Domain/Repository classes of the same names (existing_classes)."""
+    existing = existing or {}
     from .angular_ui import overwrite_policy
     manifest = json.loads((output / 'generated-files.json').read_text(encoding='utf-8'))
     generated = None
@@ -395,8 +424,18 @@ def plan_files(output: Path, mapped: dict, runtime: Path | None, tools: str | No
             text = with_package(text, deployed[layer])  # the generator may leave it to the IDE: it is known here
             text = rewrite_packages(text, {generated[key]: deployed[key] for key in LAYERS},
                                     (generated['tools'], tools) if tools else None)
+            own = existing.get(relative.stem)
+            imports = [f'import {pkg}.{cls};\n' for cls, (_, pkg) in sorted(existing.items())
+                       if cls != relative.stem and pkg != deployed[layer] and re.search(r'\b' + cls + r'\b', text)]
+            if imports:  # the project's class of the same name, in its own package
+                package = PACKAGE_LINE.search(text)
+                at = package.end() if package else 0
+                text = text[:at] + ('\n' if package else '') + ''.join(imports) + text[at:]
             item['data'] = text.encode('utf-8')
-            if mapped.get(layer) is None:
+            if own and JPA_MARKER in text:
+                item['reason'] = (f'a projektben már van {relative.stem} ({own[0]}): azt használja; '
+                                  'a getter/setter- és mezőneveknek egyezniük kell a generált kóddal')
+            elif mapped.get(layer) is None:
                 item['reason'] = f'nincs {layer} mappa (válaszd ki, vagy add meg: --layout {layer}=<mappa>)'
             elif mapped['exact'].get(layer):
                 item['target'] = mapped[layer] / relative.name  # the module's own folder: nothing invented
@@ -497,9 +536,10 @@ def deploy(outputs, root=None, layout: dict | None = None, dry_run: bool = False
                              'telepíthető; a többi modult egyenként telepítsd, vagy válaszd a projekt mappáját.')
     mapped['packages'] = {key: required_package(key, mapped[key]) for key in LAYERS if mapped['exact'].get(key)}
     helpers, runtime, tools = helper_report(mapped, folders)
+    existing = existing_classes(mapped, folders)
     results, counts = [], {}
     for output in folders:
-        for item in plan_files(output, mapped, runtime, tools):
+        for item in plan_files(output, mapped, runtime, tools, existing):
             status, target, display = 'skipped', item['target'], None
             if target is not None:
                 base, home = mapped[item['part']], mapped['home'][item['part']]

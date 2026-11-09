@@ -75,6 +75,9 @@ DEFAULTS = {"java_package": "hu.company.features", "api_prefix": "/api/forms", "
             "wbs_package": "",
             # true: module Java files without package line (the IDE sets it where the files are copied). The web turns it on.
             "java_empty_package": False,
+            # The JPA annotations of the generated Domain/Repository classes (backend_trigger_mode=ai): javax (Spring
+            # Boot 2) or jakarta (Spring Boot 3).
+            "jpa_namespace": "javax",
             # Forms CALL_FORM/OPEN_FORM/NEW_FORM target -> Angular route; default "/<form name in lower case>".
             "form_routes": {},
             # Checkstyle layout of every generated Java file (java_style): braces, blank lines, import
@@ -170,6 +173,8 @@ def configuration(args) -> dict:
     result["form_routes"] = {k.upper(): v.strip() for k, v in result["form_routes"].items()}
     if type(result["java_empty_package"]) is not bool:
         raise MigrationError("java_empty_package: true vagy false szükséges.")
+    if result["jpa_namespace"] not in ("javax", "jakarta"):
+        raise MigrationError("jpa_namespace: javax vagy jakarta szükséges.")
     if type(result["java_checkstyle_format"]) is not bool:
         raise MigrationError("java_checkstyle_format: true vagy false szükséges.")
     result["java_import_order"] = validate_import_order(result["java_import_order"])

@@ -42,7 +42,6 @@ import hu.company.common.UserDto;
 import hu.company.features.kotelezo.cl.KotelezoDtos.*;
 import hu.company.features.kotelezo.dps.KotelezoServiceImpl;
 import org.springframework.http.HttpStatus;
-import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
 public class Required {
@@ -50,7 +49,7 @@ public class Required {
         var row = new BRow();
         row.kod = kod;
         try {
-            new KotelezoServiceImpl(new NamedParameterJdbcTemplate()).createB(new UserDto(), row);
+            new KotelezoServiceImpl().createB(new UserDto(), row);  // the checks come before the repository
         } catch (ResponseStatusException e) {
             return e.status;
         }

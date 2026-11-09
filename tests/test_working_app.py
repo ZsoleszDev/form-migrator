@@ -96,8 +96,12 @@ class ReplicaTests(unittest.TestCase):
         config.write_text(json.dumps({'java_company_imports': COMPANY_IMPORTS, 'backend_live': True,
                                       'screen_window_selection': 'all', 'screen_primary_window_auto': True}))
         cls.out = cls.root / 'out'
+        # The plsql mode keeps the Forms ROWID key of a block without a primary key: RENDELES here, without its PK.
+        replica = cls.root / 'replica.xml'
+        replica.write_text(REPLICA.read_text(encoding='utf-8').replace(
+            'ColumnName="ID" PrimaryKey="true" Prompt="Azonosító"', 'ColumnName="ID" Prompt="Azonosító"'), encoding='utf-8')
         with contextlib.redirect_stdout(io.StringIO()):
-            code = main(['migrate', str(REPLICA), '--out', str(cls.out), '--screen', '--module', 'rendeles', '--config', str(config)])
+            code = main(['migrate', str(replica), '--out', str(cls.out), '--screen', '--module', 'rendeles', '--config', str(config)])
         assert code == 0, code
         cls.plan = json.loads((cls.out / 'analysis/backend-plan.json').read_text(encoding='utf-8'))
         cls.model = json.loads((cls.out / 'analysis/form.ir.json').read_text(encoding='utf-8'))

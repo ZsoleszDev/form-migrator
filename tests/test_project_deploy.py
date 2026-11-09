@@ -207,6 +207,22 @@ class DeployTests(unittest.TestCase):
         self.assertEqual(report['layout']['DPS'], str(self.root / 'rendszer-dps/src/main/java'))
         self.assertIn('Telepítés a projektbe', markdown(report))
 
+    def test_the_projects_own_domain_is_used_and_not_deployed(self):
+        own = self.root / 'rendszer-dps/src/main/java/hu/ceg/domain/RendelesDomain.java'
+        own.parent.mkdir(parents=True)
+        own.write_text('package hu.ceg.domain;\npublic class RendelesDomain {}\n', encoding='utf-8')
+        report = deploy([self.output], self.root)
+        files = {f['source']: f for f in report['files']}
+        self.assertEqual(files['backend/DPS/RendelesDomain.java']['status'], 'skipped')
+        self.assertIn('azt használja', files['backend/DPS/RendelesDomain.java']['reason'])
+        dps = self.root / 'rendszer-dps/src/main/java/hu/company/features/rendeles/dps'
+        self.assertFalse((dps / 'RendelesDomain.java').exists())
+        self.assertEqual(own.read_text(encoding='utf-8'), 'package hu.ceg.domain;\npublic class RendelesDomain {}\n')
+        # the generated repository and service import the project's class
+        self.assertIn('import hu.ceg.domain.RendelesDomain;', (dps / 'RendelesRepository.java').read_text(encoding='utf-8'))
+        self.assertIn('import hu.ceg.domain.RendelesDomain;', (dps / 'RendelesServiceImpl.java').read_text(encoding='utf-8'))
+        self.assertNotIn('import hu.ceg.domain.RendelesDomain;', (dps / 'PartnerRepository.java').read_text(encoding='utf-8'))
+
     def test_redeploy_updates_the_generated_files_and_keeps_create_once(self):
         deploy([self.output], self.root)
         self.assertEqual(set(deploy([self.output], self.root)['counts']), {'unchanged'})
@@ -266,7 +282,10 @@ class DeployTests(unittest.TestCase):
         dps, wbs, cl, ui = (Path(folders[key]) for key in ('DPS', 'WBS', 'CL', 'frontend'))
         self.assertEqual(sorted(p.name for p in dps.iterdir()), sorted(
             ['RendelesController.java', 'RendelesControllerBase.java', 'RendelesControllerImpl.java', 'RendelesService.java',
-             'RendelesServiceBase.java', 'RendelesServiceImpl.java']))  # straight in, no package folders invented
+             'RendelesServiceBase.java', 'RendelesServiceImpl.java',
+             # the tables' Domain and Repository (jpa_crud), next to the service
+             'PartnerDomain.java', 'PartnerRepository.java', 'RendelesDomain.java', 'RendelesRepository.java',
+             'RendelesTetelDomain.java', 'RendelesTetelRepository.java']))  # straight in, no package folders invented
         self.assertFalse((self.root / 'rendszer-dps/src/main/java/hu/company/features/rendeles').exists())
         service = (dps / 'RendelesServiceImpl.java').read_text(encoding='utf-8')
         self.assertTrue(service.startswith('package hu.ceg.rendszer.dps.rendeles;\n'))

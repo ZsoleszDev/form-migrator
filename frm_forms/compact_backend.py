@@ -900,10 +900,26 @@ public class {cls}ControllerImpl extends {controller_base} implements {cls}Contr
     support, operation_bodies = [], {}
     from .service_inline import inline_block
     vals = {b['name']: block_values(model, b) for b in blocks}
+    # backend_trigger_mode=ai: the blocks' data access is Spring Data JPA (jpa_crud), a Domain and a Repository per table.
+    from . import jpa_crud
+    tables = jpa_crud.plan(blocks) if blocks and jpa_crud.ai_mode(model) else {}
     for b in blocks:
         # Only the internals of generated endpoints: no create() for InsertAllowed=false.
         sections = set().union(*(OPERATION_SECTIONS[op] for op in OPERATION_SECTIONS if b['endpoint_plan'].get(op)))
-        source = template('CompactBlock.java.tpl', {**vals[b['name']], 'RULE_METHODS': rule_methods(model, b)}, config, sections)
+        if tables:
+            entry = tables[b['table'].upper()]
+            reads = b['endpoint_plan'].get('list') or b['endpoint_plan'].get('search')
+            query = jpa_crud.block_query(b, entry) if reads else None
+            if query:
+                entry['queries'].append(query)
+            values = {**vals[b['name']], **jpa_crud.block_values(b, entry, query), 'SEARCH_METHOD': ''}
+            if query and query['search']:
+                from .generate import check_lines
+                checks = '\n'.join('            ' + line for line in check_lines((v['item'], 'criteria.' + v['field']) for v in query['binds']))
+                values['SEARCH_METHOD'] = jpa_crud.search_method(b, query, checks, entry['variable'])
+            source = template('CompactBlockJpa.java.tpl', {**values, 'RULE_METHODS': rule_methods(model, b)}, config, sections)
+        else:
+            source = template('CompactBlock.java.tpl', {**vals[b['name']], 'RULE_METHODS': rule_methods(model, b)}, config, sections)
         bodies, helpers = inline_block(source, b, b['endpoint_plan'])
         operation_bodies[b['name']] = bodies
         support.append(helpers)
@@ -981,10 +997,14 @@ public class {cls}ControllerImpl extends {controller_base} implements {cls}Contr
     write(output/'analysis/backend-evidence.md', '# Backend-bizonyíték\n\nA DPS ServiceImpl metódusai mögötti eredeti Forms SQL és PL/SQL, '
                                                  'és a generált SQL. A kódban csak rövid összefoglaló áll; a részletek itt vannak.\n\n'
           + ''.join('## ' + method + '\n\n```text\n' + text.strip() + '\n```\n\n' for method, text in evidence))
-    dps_fields = []
-    dps_fields += ['    private final NamedParameterJdbcTemplate jdbc;'] if blocks or lovs or runnable_actions else []
-    ctor_args = 'NamedParameterJdbcTemplate jdbc' if blocks or lovs or runnable_actions else ''
-    ctor_body = '\n'.join(['        this.jdbc = Objects.requireNonNull(jdbc);'] if blocks or lovs or runnable_actions else [])
+    # JPA blocks: the repositories, @Autowired like the company services; JDBC only for what still runs SQL itself.
+    jdbc = bool((blocks and not tables) or lovs or runnable_actions)
+    if tables:
+        jpa_crud.write_files(tables, output, layer_package(config, package, 'DPS'), config.get('jpa_namespace') or 'javax')
+    dps_fields = jpa_crud.service_fields(tables)
+    dps_fields += ['    private final NamedParameterJdbcTemplate jdbc;'] if jdbc else []
+    ctor_args = 'NamedParameterJdbcTemplate jdbc' if jdbc else ''
+    ctor_body = '\n'.join(['        this.jdbc = Objects.requireNonNull(jdbc);'] if jdbc else [])
     # SqlValues, RuleContext, DbCalls, PlsqlValues, LovQuery, FormsChecks, FormsErrors: nested classes of the
     # one CL helper file CommonMigrateTools, shared by every module - not copied into each ServiceImpl.
     tools_package = write_common_tools(output, config)
@@ -1043,15 +1063,19 @@ import org.springframework.transaction.annotation.Transactional;
                                                                    f'backend/DPS/{cls}ServiceImpl.java')
     dps_imports += variable_imports
     variable_fields += '\n' if variable_fields else ''
-    emit('DPS', 'ServiceImpl', f'''/** CREATE_ONCE: --regenerate preserves this file. SQL/PLSQL and private helpers are kept here; no domain/repository layer. */
+    constructor = f'''
+    public {cls}ServiceImpl({ctor_args}) {{
+{ctor_body}
+    }}
+''' if ctor_args else ''
+    header = ('CREATE_ONCE: --regenerate preserves this file. The data access is in the repositories (Spring Data JPA).'
+              if tables else 'CREATE_ONCE: --regenerate preserves this file. SQL/PLSQL and private helpers are kept here; no domain/repository layer.')
+    emit('DPS', 'ServiceImpl', f'''/** {header} */
 @XSlf4j
 @Service
 public class {cls}ServiceImpl extends {service_base} implements {cls}Service {{
 {variable_fields}{module_header(model, cls)}{chr(10).join(dps_fields)}
-
-    public {cls}ServiceImpl({ctor_args}) {{
-{ctor_body}
-    }}
+{constructor}
 
 {(chr(10) + chr(10)).join(dps_methods)}
 
