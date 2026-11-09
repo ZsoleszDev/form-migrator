@@ -933,7 +933,14 @@ public class {cls}ControllerImpl extends {controller_base} implements {cls}Contr
     public {o['returns']} {o['method']}({user_type} user, {o['args']}) throws Exception {{
         {log1x(o, '() -> client.' + o['method'] + '(' + o['call'] + ')')}
     }}''')
-        if o['op'] == 'lov':
+        if o['op'] == 'lov' and jpa_crud.ai_mode(model):
+            # The record group's query is a native @Query of a repository (jpa_lov): no JDBC in the service.
+            from . import jpa_lov
+            entry = jpa_lov.prepare(o['lov'], tables, blocks)
+            dps_methods.append(jpa_lov.service_method(o['lov'], comment_lines, log1x(o, '() -> {'), user_type, o['method'],
+                                                      entry['variable'] if entry else None))
+            evidence.append((o['method'], '\n'.join(lov_evidence(o['lov'], gated))))
+        elif o['op'] == 'lov':
             dps_methods.append(lov_method(o['lov'], gated, comment_lines, log1x(o, '() -> {'), user_type, o['method']))
             evidence.append((o['method'], '\n'.join(lov_evidence(o['lov'], gated))))
         elif o['op'] == 'action' and o.get('ai'):
@@ -998,7 +1005,7 @@ public class {cls}ControllerImpl extends {controller_base} implements {cls}Contr
                                                  'és a generált SQL. A kódban csak rövid összefoglaló áll; a részletek itt vannak.\n\n'
           + ''.join('## ' + method + '\n\n```text\n' + text.strip() + '\n```\n\n' for method, text in evidence))
     # JPA blocks: the repositories, @Autowired like the company services; JDBC only for what still runs SQL itself.
-    jdbc = bool((blocks and not tables) or lovs or runnable_actions)
+    jdbc = bool(((blocks or lovs) and not jpa_crud.ai_mode(model)) or runnable_actions)
     if tables:
         jpa_crud.write_files(tables, output, layer_package(config, package, 'DPS'), config.get('jpa_namespace') or 'javax')
     dps_fields = jpa_crud.service_fields(tables)

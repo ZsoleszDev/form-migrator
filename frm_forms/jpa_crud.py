@@ -70,6 +70,7 @@ def plan(blocks: list[dict]) -> dict[str, dict]:
         key_types = [entry["columns"][k]["type"] for k in entry["key"]]
         entry["id_type"] = key_types[0] if len(key_types) == 1 else entry["domain"] + ".Key"
         entry["queries"] = []
+        entry["extra"] = []  # further repository methods: (source, the Java types it uses), e.g. the LOVs (jpa_lov)
     return tables
 
 
@@ -151,7 +152,8 @@ def domain_source(entry: dict, package: str, namespace: str) -> str:
 
 def repository_source(entry: dict, package: str, namespace: str) -> str:
     key_fields = [(entry["columns"][k]["type"], entry["columns"][k]["field"]) for k in entry["key"]]
-    types = {t for t, _ in key_fields} | {t for q in entry["queries"] for t, _ in q["params"]}
+    types = ({t for t, _ in key_fields} | {t for q in entry["queries"] for t, _ in q["params"]}
+             | {t for _, used in entry["extra"] for t in used})
     imports = ["java.util.Optional", namespace + ".persistence.LockModeType", namespace + ".persistence.QueryHint",
                "org.springframework.data.jpa.repository.JpaRepository", "org.springframework.data.jpa.repository.Lock",
                "org.springframework.data.jpa.repository.Query", "org.springframework.data.jpa.repository.QueryHints",
@@ -160,6 +162,7 @@ def repository_source(entry: dict, package: str, namespace: str) -> str:
     imports += ["java.time.LocalDateTime"] if "LocalDateTime" in types else []
     if entry["queries"]:
         imports += ["org.springframework.data.domain.Pageable", "org.springframework.data.domain.Slice"]
+    imports += ["java.util.List"] if "List" in types else []
     domain = entry["domain"]
     lines = [f"// {MARKER} repository: {entry['table']}.",
              f"public interface {entry['repository']} extends JpaRepository<{domain}, {entry['id_type']}> {{"]
@@ -180,6 +183,8 @@ def repository_source(entry: dict, package: str, namespace: str) -> str:
               f'    @QueryHints(@QueryHint(name = "{hint}", value = "0"))',
               f"    @Query({jstr(f'SELECT d FROM {domain} d WHERE {condition}')})",
               f"    Optional<{domain}> lockById(" + ", ".join(f'@Param("{f}") {t} {f}' for t, f in key_fields) + ");"]
+    for source, _ in entry["extra"]:
+        lines += ["", source]
     for sequence, method in entry["sequences"].items():
         lines += ["", f"    // Az új rekord kulcsa (Forms: {sequence}.NEXTVAL).",
                   f"    @Query(value = {jstr('SELECT ' + sequence + '.NEXTVAL FROM DUAL')}, nativeQuery = true)",
@@ -221,8 +226,9 @@ def block_values(b: dict, entry: dict, query: dict | None) -> dict:
 
 
 def search_method(b: dict, query: dict, criteria_checks: str, repository: str) -> str:
-    args = ", ".join(("SqlValues.normalize(criteria." + v["field"] + ")") if v["item"]["type"] == "text" else "criteria." + v["field"]
-                     for v in query["binds"])
+    # A native query's text parameter is never null: Oracle reads '' as NULL, and the bind stays a VARCHAR.
+    text = "SqlValues.nvl(SqlValues.normalize(criteria.{}), \"\")" if query["kind"] == "native" else "SqlValues.normalize(criteria.{})"
+    args = ", ".join(text.format(v["field"]) if v["item"]["type"] == "text" else "criteria." + v["field"] for v in query["binds"])
     return f'''        public PageResult<{b["class"]}Row> search(SearchRequest<{b["class"]}Criteria> request) {{
             guard("search");
             if (request == null || request.criteria() == null) throw bad("Hiányzó keresési feltételek.");
