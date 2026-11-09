@@ -394,6 +394,7 @@ public final class CommonMigrateTools {
     }
 
     /** Gombkérés értékei (Oracle-nevek, szövegként) és a PL/SQL-kötések típusos értékei között. */
+    // frm:legacy-begin (backend_trigger_mode plsql/java only)
     /**
      * A Forms-emuláció rögzített PL/SQL-segédeljárásai (frm_msg, frm_cmd ...).
      *
@@ -487,6 +488,8 @@ public final class CommonMigrateTools {
         }
     }
 
+    // frm:legacy-end
+
     public static final class PlsqlValues {
         private PlsqlValues() {
         }
@@ -544,6 +547,7 @@ public final class CommonMigrateTools {
                             : value.toString());
         }
 
+        // frm:legacy-begin (backend_trigger_mode plsql/java only)
         /** A PL/SQL üzenetpuffer nem üres sorai. */
         public static List<String> lines(Object messages) {
             if (!(messages instanceof String)) {
@@ -618,6 +622,7 @@ public final class CommonMigrateTools {
                     : value instanceof BigDecimal ? ((BigDecimal) value).toPlainString()
                     : value.toString());
         }
+        // frm:legacy-end
     }
 
     /**
@@ -750,6 +755,7 @@ public final class CommonMigrateTools {
             return result;
         }
 
+        // frm:legacy-begin (backend_trigger_mode plsql/java only)
         /**
          * A LOV sorai: az Oracle NUMBER tizedes szövegként, a dátum ISO-szövegként.
          *
@@ -809,6 +815,7 @@ public final class CommonMigrateTools {
                         source + ": hibás " + type + " érték.", e);
             }
         }
+        // frm:legacy-end
     }
 
     /**

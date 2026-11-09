@@ -53,8 +53,9 @@ GENERATED_RULE = ("Database access only through the generated repository methods
 PARTLY_GENERATED = ("\n   The generated repository methods listed below already run part of the SQL: call them. Write\n"
                     "   repository methods only for the SQL listed without one.")
 # The database routines the Forms code calls (db_routines): the migrator adds their typed methods to the service.
-ROUTINE_RULE = ("\n   The database routines of the Forms code run in Oracle through the generated methods listed below:\n"
-                "   call those methods (the only allowed PL/SQL calls); never re-implement or skip a routine.")
+ROUTINE_RULE = ("\n   The database routines of the Forms code run in Oracle through the generated methods listed below\n"
+                "   (on the service's routine field): call those (the only allowed PL/SQL calls); never re-implement\n"
+                "   or skip a routine.")
 JDBC_RULE = ("Database access: use the service's existing `jdbc` field (NamedParameterJdbcTemplate) with named,\n"
              "   bound parameters{jdbc_helpers}; never concatenate values into SQL.")
 PLSQL_VALUES = ("\n   Helpers: PlsqlValues.text(request.blocks(), \"BLOCK\", \"ITEM\"), PlsqlValues.number(...) returns\n"

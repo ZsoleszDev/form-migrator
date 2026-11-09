@@ -629,12 +629,30 @@ def common_tools_package(config) -> str:
     return config.get('common_migrate_tools_package') or config['java_package'] + '.cl'
 
 
+LEGACY = re.compile(r'^[ \t]*// frm:legacy-begin[^\n]*\n.*?^[ \t]*// frm:legacy-end\n', re.S | re.M)
+LEGACY_MARKS = re.compile(r'^[ \t]*// frm:legacy-(?:begin|end)[^\n]*\n', re.M)
+
+
+def common_tools_source(config) -> str:
+    """The CommonMigrateTools of the project's mode: backend_trigger_mode=ai leaves out what only the old plsql/java modes
+    use (the PL/SQL emulation, its output buffers, the JDBC LOV query); the same file for every module either way."""
+    text = (Path(__file__).with_name('templates') / 'CommonMigrateTools.java.tpl').read_text(encoding='utf-8')
+    if config.get('backend_trigger_mode', 'ai') == 'ai':
+        text = LEGACY.sub('', text)
+        body = text[text.index('public final class'):]
+        # an import only the left-out parts used (MapSqlParameterSource of the JDBC LOV query)
+        text = re.sub(r'^import [\w.]+\.(\w+);\n', lambda m: m[0] if re.search(r'\b' + m[1] + r'\b', body) else '', text, flags=re.M)
+    else:
+        text = LEGACY_MARKS.sub('', text)
+    # the seams of the left-out parts: no blank line before a closing brace, never two blank lines
+    text = re.sub(r'\n{3,}', '\n\n', re.sub(r'\n\n+([ \t]*\}\n)', r'\n\1', text))
+    return text.replace('@@PACKAGE@@', common_tools_package(config))
+
+
 def write_common_tools(output: Path, config) -> str:
     """CommonMigrateTools (CL): one helper file for every module of the project; identical each time."""
-    package = common_tools_package(config)
-    text = (Path(__file__).with_name('templates') / 'CommonMigrateTools.java.tpl').read_text(encoding='utf-8')
-    write(output / 'backend' / 'CL' / 'CommonMigrateTools.java', text.replace('@@PACKAGE@@', package))
-    return package
+    write(output / 'backend' / 'CL' / 'CommonMigrateTools.java', common_tools_source(config))
+    return common_tools_package(config)
 
 
 def value_class(declaration, fields, extra_constructors=()):

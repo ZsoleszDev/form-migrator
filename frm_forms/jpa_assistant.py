@@ -318,5 +318,6 @@ public class {cls} {{
         if not match: raise MigrationError("A DPS ServiceImpl osztálya nem található.")
         rendered = rendered[:match.end()] + "\n" + "\n".join(injections) + rendered[match.end():]
     files[packet["target"]] = rendered
+    files.update(engine.routine_files(output, packet, response))  # <Module>DbRoutines: the routines the proposal calls
     return files
 

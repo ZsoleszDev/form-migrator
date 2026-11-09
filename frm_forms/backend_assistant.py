@@ -270,7 +270,7 @@ def prepare_workspace(output: Path) -> dict:
             elif file.name.startswith(cls) and "RestClient" not in file.name:
                 contracts[file.name] = file.read_text(encoding="utf-8")
         sheet = schema_sheet(output, sources, blocks, schema_bundle)
-        routines, unavailable = db_routines.plan(sources, procedures, catalog)
+        routines, unavailable = db_routines.plan(sources, procedures, catalog, effective["module"])
         external = (action or {}).get("external_calls")
         if external is None:
             # A hook or the start-up code: its PKG.PROC calls (an undotted unknown name is mostly an Oracle built-in).
@@ -592,29 +592,65 @@ def finish_candidate(result: str, service: str, packet: dict, response: dict) ->
     return ensure_imports(result, mapping)
 
 
-def add_routines(result: str, packet: dict, response: dict, helper_names: list[str]) -> str:
-    """The generated methods of the database routines the proposal calls (db_routines), each once per service.
+def used_routines(packet: dict, response: dict) -> list[dict]:
+    """The database routine methods the proposal calls: on the routine field, or bare (repaired by add_routines)."""
+    from .db_routines import holder
+    routines = packet.get("db_routines") or []
+    if not routines:
+        return []
+    _, variable = holder(packet["module"])
+    code = java_mask(response["body"] + "\n" + response["private_methods"])
+    return [r for r in routines if re.search(r"(?:(?<![\w$.])|(?<=\b" + re.escape(variable) + r"\.))"
+                                             + re.escape(r["method"]) + r"\s*\(", code)]
 
-    The model calls them and never writes them; the service gets a NamedParameterJdbcTemplate when it has none.
-    """
+
+def add_routines(result: str, packet: dict, response: dict, helper_names: list[str]) -> str:
+    """The service side of the database routines the proposal calls (db_routines): the call on the routine class's
+    @Autowired field (a bare call is repaired), and the field itself. The model never writes the routine methods."""
+    from .db_routines import holder
     routines = packet.get("db_routines") or []
     clash = sorted(set(helper_names) & {r["method"] for r in routines})
     if clash:
         raise MigrationError("Az adatbázis-rutin metódusát a migrátor adja, a javaslat ne írja meg: " + ", ".join(clash))
-    code = java_mask(response["body"] + "\n" + response["private_methods"])
-    used = [r for r in routines if re.search(r"(?<![\w$.])" + re.escape(r["method"]) + r"\s*\(", code)]
-    missing = [r for r in used if r["header"] not in result]
-    if not missing:
+    used = used_routines(packet, response)
+    if not used:
         return result
-    last = java_mask(result).rfind("}")
-    result = result[:last] + "\n" + "\n".join(r["source"] for r in missing) + result[last:]
-    if not re.search(r"\bNamedParameterJdbcTemplate\s+jdbc\s*[;=]", java_mask(result)):
+    cls, variable = holder(packet["module"])
+    for routine in used:  # kodPkgCheckInsert(...) -> kodDbRoutines.kodPkgCheckInsert(...)
+        mask = java_mask(result)
+        for match in reversed(list(re.finditer(r"(?<![\w$.])" + re.escape(routine["method"]) + r"\s*\(", mask))):
+            result = result[:match.start()] + variable + "." + result[match.start():]
+    if not re.search(r"\b" + re.escape(cls) + r"\s+" + re.escape(variable) + r"\s*;", java_mask(result)):
         match = re.search(r"\bpublic\s+class\s+\w+[^{]*\{", java_mask(result))
         if not match: raise MigrationError("A DPS ServiceImpl osztálya nem található.")
         field = ("\n    @org.springframework.beans.factory.annotation.Autowired\n"
-                 "    private NamedParameterJdbcTemplate jdbc;  // the database routine methods\n")
+                 f"    private {cls} {variable};  // the database routines the Forms code calls\n")
         result = result[:match.end()] + field + result[match.end():]
     return result
+
+
+def routine_files(output: Path, packet: dict, response: dict) -> dict:
+    """backend/DPS/<Module>DbRoutines.java with the routine methods the proposal calls (an existing one is kept)."""
+    from .db_routines import MARKER, class_source, holder
+    used = used_routines(packet, response)
+    if not used:
+        return {}
+    cls, _ = holder(packet["module"])
+    path = "backend/DPS/" + cls + ".java"
+    target = safe_file(output, path)
+    service_package = re.search(r"^\s*package\s+([\w.]+)\s*;", packet.get("service_package_source") or "", re.M)
+    tools = (packet.get("common_tool_imports") or {}).get("DbCalls", "")
+    tools_package = tools.rsplit(".CommonMigrateTools.", 1)[0] if ".CommonMigrateTools." in tools else ""
+    if target.is_file():
+        source = target.read_text(encoding="utf-8")
+        if MARKER not in source:
+            raise MigrationError("Eltérő, már létező osztályt nem írunk felül: " + path)
+        missing = [r for r in used if r["header"] not in source]
+        if not missing:
+            return {}
+        last = java_mask(source).rfind("}")
+        return {path: source[:last] + "\n" + "\n".join(r["source"] for r in missing) + source[last:]}
+    return {path: class_source(service_package.group(1) if service_package else "", cls, used, tools_package)}
 
 
 # JDK types model-written code often uses without writing the import (in addition to the generator's list).
@@ -1081,7 +1117,8 @@ def _propose(prepared, options, cache, request, log, assistant_reply, jpa_assist
             return jpa_assistant.render_files(output, packet, response, service, persistence)
         if response.get("repositories") or response.get("dtos"):
             raise MigrationError("Repository/DTO-javaslathoz JPA mód szükséges.")
-        return {packet["target"]: render_candidate(service, packet, response), **helpers}
+        return {packet["target"]: render_candidate(service, packet, response), **helpers,
+                **routine_files(output, packet, response)}
 
     def parse_files(files):
         statuses = [java_parse(source, Path(path).name) for path, source in files.items()]

@@ -325,6 +325,10 @@ Forms-kommentet. Az üzleti logika a service-be, az adatbázis-műveletek a táb
 kerülnek: a generált `@Query` metódusok, és ha kellett, az AI által a lefedetlen SQL-hez írt `@Query` metódusok.
 Az importokat a migrátor teszi be a használt JDK/Spring/JPA-típusokhoz (a service-be a `NoResultException`-t is).
 
+A Forms-kód által hívott tárolt eljárások és függvények a modul rutin-osztályában vannak (`<Modul>DbRoutines`,
+`@Repository`, JDBC CallableStatement: OUT és IN OUT paraméter, író függvény is); a service `@Autowired` mezőn hívja
+őket, a migrátor adja hozzá őket az első hívásnál.
+
 A Domain oszlopai és kulcsai a blokkból, más táblánál a megadott adatbázis-metaadatból készülnek. Összetett PK
 esetén a Domain beágyazott `Key` osztálya az id (`@IdClass`). A NUMBER BigDecimal marad. A repository a service
 `@Autowired` mezője; a JPA-annotációk csomagja a `jpa_namespace` beállítás (javax vagy jakarta).

@@ -126,8 +126,15 @@
     tartalmaz, paraméterrel kapcsolva (`(:szuro = FALSE OR d.kod = :kod)`).
   - *Telepítés:* ha a projektben már van ugyanilyen nevű Domain vagy Repository, a migrátor azt használja. A sajátját
     nem másolja be, a modul fájljai a meglévőt importálják; a getter/setter-neveknek egyezniük kell.
+  - *Adatbázis-rutinok:* a Forms-kód által hívott tárolt eljárások és függvények a modul rutin-osztályába kerülnek
+    (`<Modul>DbRoutines`, `@Repository`), a service `@Autowired` mezőn hívja őket. A hívás JDBC CallableStatement
+    (`DbCalls`), így az OUT és IN OUT paraméter, valamint az adatbázisba író függvény is úgy fut, mint a PL/SQL-ben.
+    A service-ben nincs JDBC. Ha a modell előtag nélkül hívja a rutint, a migrátor helyben javítja.
   - *Beállítás:* `jpa_namespace` (`javax` vagy `jakarta`), a JPA-annotációk csomagja. `CommonMigrateTools.VERSION` = 7:
-    a `LovQuery` JDBC nélküli segédeket kapott (a régi `plsql`/`java` mód JDBC-s változata egyelőre megmaradt).
+    a `LovQuery` JDBC nélküli segédeket kapott. AI-módban a projekt CommonMigrateTools-a nem tartalmazza a régi módok
+    részeit (`FormsPlsql`, a PL/SQL-kimenetek olvasása, a JDBC-s `LovQuery.rows`); a `DbCalls` a rutin-osztályé.
+  - *A régi `plsql` / `java` mód* megmaradt, de nem ajánlott: a felületen nem választható, csak a configban vagy a
+    `FRM_BACKEND_TRIGGER_MODE` változóval.
 - **A Forms-paraméter az URL-ből jön, nincs `@Input` a képernyőn.** A generált képernyő eddig
   `@Input() migrationParameters`-t kapott, „a szülő komponens adja át” megjegyzéssel. A képernyő viszont útvonalon
   nyílik, nincs szülője, a migrátor saját navigációja (CALL_FORM / OPEN_FORM / NEW_FORM) pedig `queryParams`-ban küldi
