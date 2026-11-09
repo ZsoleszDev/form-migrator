@@ -548,7 +548,9 @@ adatait adja:
 A gomb a struktúrában `onClick: () => this.on<Gomb>Click()`. A metódus a gomb Forms-kódja szerint (4.27):
 
 1. navigál (CALL_FORM, OPEN_FORM, NEW_FORM) → `this.router.navigate([...], { queryParams })`, a paraméterek a
-   képernyő értékeivel; összetett formhívásnál TODO az eredeti kóddal;
+   képernyő értékeivel; összetett formhívásnál TODO az eredeti kóddal. A megnyitott képernyő a Forms
+   `:PARAMETER.<név>` értékét ugyanígy, az URL-ből olvassa (`migrationParameter`); `@Input` nincs, mert a képernyő
+   útvonalon nyílik, nincs szülő komponense;
 2. felismert lépések → a lekérdezés kérése, `save()`, ablak-láthatóság (lásd Gomblépések);
 3. backend-akció (az eredeti PL/SQL vagy a Java-lekérdezés) → a végpont hívása a kód által olvasott mezőkkel;
    lekérdező gombnál a sorok a táblázatba kerülnek;

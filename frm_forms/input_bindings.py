@@ -1,8 +1,9 @@
 """Frontend request inputs: evidence, explicit sources and guarded local edits.
 
-Only generated expression slots can be changed. A module parameter is a host
-integration contract, not a proven runtime value. Manual/server bindings remain
-open work; no browser value becomes trusted authentication context.
+Only generated expression slots (and the helpers they call) can be changed. A module
+parameter is the URL query parameter of the opening navigation, not a proven runtime
+value. Manual/server bindings remain open work; no browser value becomes trusted
+authentication context.
 """
 from __future__ import annotations
 
@@ -24,6 +25,53 @@ PARAMETER = re.compile(r'[A-Za-z_][A-Za-z0-9_.-]{0,127}')
 
 class BindingConflict(MigrationError):
     pass
+
+
+# The request-value helpers of the component: in the file only while a request uses them (generation and every save).
+HELPERS = {
+    'migrationParameter': """  // Forms :PARAMETER.<név>: a képernyőt megnyitó navigáció URL-paramétere (a hívó gomb queryParams-ban küldi).
+  // A Forms-paraméternév nem kis-/nagybetűérzékeny, ezért a keresés sem.
+  protected migrationParameter(name: string): string | null {
+    const params = this.router.routerState.snapshot.root.queryParamMap;
+    const key = params.keys.find(k => k.toUpperCase() === name.toUpperCase());
+    return key === undefined ? null : params.get(key);
+  }""",
+    'migrationInputText': """  // Forms szöveges kérésérték: a dátum helyi idő, nincs UTC-eltolás.
+  protected migrationInputText(value: unknown, checked?: string, unchecked?: string): string | null {
+    if (value === null || value === undefined) { return null; }
+    if (typeof value === 'boolean' && checked !== undefined) { return value ? checked : unchecked ?? null; }
+    if (value instanceof Date) {
+      if (Number.isNaN(value.getTime())) { throw new Error('Érvénytelen dátum'); }
+      const pad = (part: number) => String(part).padStart(2, '0');
+      return String(value.getFullYear()).padStart(4, '0') + '-' + pad(value.getMonth() + 1) + '-' + pad(value.getDate())
+        + 'T' + pad(value.getHours()) + ':' + pad(value.getMinutes()) + ':' + pad(value.getSeconds())
+        + '.' + String(value.getMilliseconds()).padStart(3, '0');
+    }
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') { return String(value); }
+    throw new Error('A bemenethez skalár érték szükséges');
+  }""",
+}
+
+
+def parameter_read(name: str) -> str:
+    """A Forms :PARAMETER value: the query parameter the opening navigation sent (form_calls sends them so)."""
+    return 'this.migrationParameter(' + sq(name) + ')'
+
+
+def used_helpers(text: str) -> list[str]:
+    return [name for name, helper in HELPERS.items() if re.search(r'\bthis\.' + name + r'\(', text.replace(helper, ''))]
+
+
+def with_helpers(source: str) -> str:
+    """Adds the helpers the requests now call (before the class end) and drops the ones nothing calls."""
+    used = used_helpers(source)
+    for name, helper in HELPERS.items():
+        if name in used and helper not in source:
+            end = source.rstrip().rfind('}')
+            source = source[:end].rstrip('\n') + '\n\n' + helper + '\n' + source[end:]
+        elif name not in used and helper in source:
+            source = source.replace('\n\n' + helper, '', 1)
+    return source
 
 
 def digest(value) -> str:
@@ -73,7 +121,7 @@ def selected_expression(row, binding, sources):
     if not row['automatic']:
         raise MigrationError('INPUT_BINDINGS: ehhez a végponthoz a hívást is kézzel kell bekötni.')
     if binding['kind'] == 'parameter':
-        return 'this.migrationParameters[' + sq(binding['source']) + '] ?? null'
+        return parameter_read(binding['source'])
     source = next((s for s in sources if s['owner'] == binding['source']), None)
     if source is None:
         raise MigrationError('INPUT_BINDINGS: a kiválasztott mező nincs a generált képernyőn.')
@@ -170,7 +218,6 @@ def sheet(output):
         row['status'] = ('file_changed' if changed else 'contract_changed' if report.get('contract_changed') else
                          'lifecycle' if row.get('timing') == 'constructor' else 'unwired' if not row['automatic'] else
                          'manual' if binding and binding['kind'] == 'manual' else
-                         'host_required' if binding and binding['kind'] == 'parameter' else
                          'missing' if row['expression'] == 'null' else 'review' if row['inferred'] else 'connected')
     result.update(available=True, revision=revision, file_changed=changed,
                   pending=[r['id'] for r in result['rows'] if r['status'] != 'connected'])
@@ -201,6 +248,7 @@ def save(output: Path, config: dict, revision: str, source_config: Path | None =
                 raise BindingConflict('A generált bemeneti jelölés módosult. Kézi bekötés szükséges: ' + row['source'])
             updated = updated.replace(old, marked(row['id'], expression))
         row['expression'] = expression
+    updated = with_helpers(updated)
     report['bindings'] = bindings
     report['source_sha256'] = digest(updated.encode())
     effective_path = path_in(output, 'analysis/effective-config.json')

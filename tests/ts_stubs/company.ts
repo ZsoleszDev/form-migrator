@@ -1,6 +1,7 @@
 // Stand-ins for the company classes (ServiceBase, WFF, ToastService, FormBlock): TEST DOUBLES for tsc --noEmit only.
 export class ServiceBase {
-  protected readonly router = { url: '/', navigate: async (commands: unknown[], extras?: unknown): Promise<boolean> => { void commands; void extras; return true; } };
+  protected readonly router = { url: '/', navigate: async (commands: unknown[], extras?: unknown): Promise<boolean> => { void commands; void extras; return true; },
+    routerState: { snapshot: { root: { queryParamMap: { keys: [] as string[], get: (name: string): string | null => { void name; return null; } } } } } };
   protected url(path: string): string { return path; }
   get modName(): string { return this.router.url; }
 }

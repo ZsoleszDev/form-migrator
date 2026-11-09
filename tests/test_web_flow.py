@@ -137,8 +137,8 @@ class WebFlowTests(unittest.TestCase):
         self.assertIn("  aitSearch(body: unknown) {\n    return this.http.post<any>(this.url('ait/query/search'), body).pipe(\n"
                       "      tap(res => WFF.debug(this.modName + '.aitSearch', res)),\n"
                       "      catchError(error => {\n        WFF.err('Hiba', error);\n        return EMPTY;\n      }),\n    );\n  }", component)
-        # 4.30: the only input is the module parameters a request slot can be bound to (input bindings)
-        self.assertEqual(re.findall(r'@Input\(\) (\w+)', component), ['migrationParameters'])
+        # A routed page: no inputs; Forms :PARAMETER values come from the URL (migrationParameter)
+        self.assertNotIn('@Input', component)
         self.assertNotIn('@Output', component)  # a routed component, not a child
         self.assertIn('  lovInptip(body: unknown) {', component)  # 4.27: the LOV endpoint is there; its suggestions are the developer's
         search = component[component.index('this.aitSearch({'):]

@@ -101,6 +101,13 @@
   - *Rövid kommentek.* A metódusok fölött egy segítő sor (tiltott műveletnél még egy: az ok); a „Triggerek: …”,
     „SQL és triggerkód: … backend-evidence.md”, a nem generált végpontok listája és a többi státuszsor a riportokban
     van (analysis/backend-plan.json, backend-evidence.md). A replika-űrlap DPS-e 1029 sorról 967-re rövidült.
+- **A Forms-paraméter az URL-ből jön, nincs `@Input` a képernyőn.** A generált képernyő eddig
+  `@Input() migrationParameters`-t kapott, „a szülő komponens adja át” megjegyzéssel. A képernyő viszont útvonalon
+  nyílik, nincs szülője, a migrátor saját navigációja (CALL_FORM / OPEN_FORM / NEW_FORM) pedig `queryParams`-ban küldi
+  a paramétereket. Most a `:PARAMETER.<név>` a kérésben alapból `this.migrationParameter('<név>')`: a `ServiceBase`
+  routeréből olvasott URL-paraméter, kis- és nagybetűtől függetlenül, ahogy Formsban. A bekötési panel
+  „Modulparaméter” forrása „URL-paraméter” lett. A `migrationParameter` és a `migrationInputText` segédmetódus csak
+  akkor kerül a fájlba, ha egy kérés használja, és a bekötések mentése hozzáadja vagy kiveszi őket.
 - **Frontend AI-átírás (opcionális).** A generált képernyő elküldhető a helyi modellnek: standalone komponens,
   signalok az állapotra (`signal`, `computed`, `input()`, `output()`), olvasható, magyarul kommentezett kód,
   ugyanazzal a működéssel (HTTP-hívások, metódusnevek, lépések). Bekapcsolni a Java asszisztens fül új paneljén vagy

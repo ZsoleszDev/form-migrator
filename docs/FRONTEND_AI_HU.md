@@ -31,7 +31,7 @@ A panel képernyőnként megmutatja, mekkora a fájl, mennyit kap belőle az AI,
 - **Részenként (N kérés)** — a „másik megoldás”, ha a teljes fájl nem fér bele:
   1. először a **fej** megy (importok, dekorátor a sablonnal, mezők, konstruktor): itt lesz az állapotból signal;
   2. utána a **metódusok csoportokban**, amennyi egy kérésbe belefér. Minden kérés megkapja az új fej vázlatát és a
-     signalok listáját (`tetelRows (signal)`, `migrationParameters (input)`), így minden rész ugyanúgy olvassa és
+     signalok listáját (`tetelRows (signal)`, `tetelSelection (signal)`), így minden rész ugyanúgy olvassa és
      írja az állapotot;
   3. a migrátor eredeti sorrendben összerakja a részeket, és az egészet ugyanúgy ellenőrzi, mint a teljes fájlt.
 - Ha egy metódus egymagában sem fér bele, a panel megnevezi; ilyenkor a kontextust kell növelni.
