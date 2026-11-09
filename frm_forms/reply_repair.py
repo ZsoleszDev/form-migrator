@@ -21,45 +21,9 @@ import re
 from .java_scan import java_mask, replace_identifier
 
 REQUEST_GETTERS = {"getBlocks": "blocks", "getParameters": "parameters", "getOffset": "offset", "getLimit": "limit"}
-# Spring Data CrudRepository names -> the migrator's implementation (E: the entity, I: the id type).
-STANDARD = {
-    "findById": """    public Optional<E> findById(I id) {
-        return Optional.ofNullable(entityManager.find(E.class, id));
-    }""",
-    "existsById": """    public boolean existsById(I id) {
-        return entityManager.find(E.class, id) != null;
-    }""",
-    "save": """    public E save(E entity) {
-        // INSERT or UPDATE (merge), flushed at once like the SQL statement
-        E saved = entityManager.merge(entity);
-        entityManager.flush();
-        return saved;
-    }""",
-    "delete": """    public void delete(E entity) {
-        entityManager.remove(entityManager.contains(entity) ? entity : entityManager.merge(entity));
-        entityManager.flush();
-    }""",
-    "deleteById": """    public void deleteById(I id) {
-        E found = entityManager.find(E.class, id);
-        if (found != null) {
-            entityManager.remove(found);
-            entityManager.flush();
-        }
-    }""",
-    "findAll": """    public List<E> findAll() {
-        CriteriaBuilder cb = entityManager.getCriteriaBuilder();
-        CriteriaQuery<E> query = cb.createQuery(E.class);
-        query.select(query.from(E.class));
-        return entityManager.createQuery(query).getResultList();
-    }""",
-    "count": """    public long count() {
-        CriteriaBuilder cb = entityManager.getCriteriaBuilder();
-        CriteriaQuery<Long> query = cb.createQuery(Long.class);
-        query.select(cb.count(query.from(E.class)));
-        return entityManager.createQuery(query).getSingleResult();
-    }""",
-}
-STANDARD_IMPORTS = {"findById": ["java.util.Optional"], "findAll": ["java.util.List"]}
+# What every repository inherits from JpaRepository: the service may call these, nobody writes them.
+STANDARD = {"findById", "existsById", "findAll", "findAllById", "count", "save", "saveAll", "saveAndFlush", "flush",
+            "delete", "deleteById", "deleteAll", "deleteAllById", "getById", "getOne", "getReferenceById"}
 
 
 def free(name: str) -> str:
@@ -141,7 +105,8 @@ def declared(mask: str, variable: str) -> bool:
 
 
 def repository_names(code: str, ctx, notes: list) -> str:
-    """rendelesRepository -> rendelesRendelesRepository, RendelesEntity -> RendelesRendelesEntity (unique suffix)."""
+    """A repository or entity name the model guessed: RendelesEntity -> RendelesDomain, a unique suffix (tetelRepository ->
+    rendelesTetelRepository)."""
     variables = [r.variable for r in ctx.repositories]
     classes = [r.name for r in ctx.repositories] + [r.entity for r in ctx.repositories]
     mask = java_mask(code)
@@ -152,13 +117,15 @@ def repository_names(code: str, ctx, notes: list) -> str:
             code = replace_identifier(code, unknown, target)
             renamed.append(unknown + " -> " + target)
     mask = java_mask(code)
-    for unknown in sorted(set(re.findall(r"(?<![\w$.])([A-Z][\w$]*(?:Repository|Entity))(?![\w$])", mask)) - set(classes)):
-        target = suffix_match(unknown, classes)
+    domains = {r.entity[:-len("Domain")] + "Entity": r.entity for r in ctx.repositories if r.entity.endswith("Domain")}
+    for unknown in sorted(set(re.findall(r"(?<![\w$.])([A-Z][\w$]*(?:Repository|Entity|Domain))(?![\w$])", mask)) - set(classes)):
+        # RendelesEntity: the Domain of the table (the company names the entity <Table>Domain)
+        target = domains.get(unknown) or suffix_match(unknown, classes)
         if target and not re.search(r"\b(?:class|interface|record|enum)\s+" + re.escape(unknown) + r"\b", mask):
             code = replace_identifier(code, unknown, target, allow_this=False)
             renamed.append(unknown + " -> " + target)
     if renamed:
-        notes.append("Helyben javítva (a modul előtagja hiányzott): " + ", ".join(renamed) + ".")
+        notes.append("Helyben javítva (a repository vagy a Domain neve): " + ", ".join(renamed) + ".")
     return code
 
 
@@ -171,31 +138,6 @@ def service(code: str, ctx, notes: list) -> str:
 
 
 def standard_methods(code: str, ctx, available: dict, warnings: list) -> dict:
-    """{repository: [(source, imports)]}: the Spring Data methods the service calls on a repository without them.
-
-    Only on a repository with no generated method for this task (its SQL is not the migrator's): there a call of
-    findById/save beside the generated methods means the model ignored them, which goes back to the model.
-    """
-    mask = java_mask(code)
-    result = {}
-    for repo in ctx.repositories:
-        if ctx.generated.get(repo.name) or not repo.id_type:
-            continue
-        calls = re.finditer(free(repo.variable) + r"\s*\.\s*([A-Za-z_$][\w$]*)\s*\(", mask)
-        names = [n for n in dict.fromkeys(c.group(1) for c in calls) if n in STANDARD and n not in available.get(repo.name, set())]
-        if not names:
-            continue
-        result[repo.name] = [(STANDARD[n].replace("E.class", repo.entity + ".class")
-                              .replace("<E>", "<" + repo.entity + ">")
-                              .replace("public E ", "public " + repo.entity + " ")
-                              .replace("(E entity)", "(" + repo.entity + " entity)")
-                              .replace("E saved", repo.entity + " saved").replace("E found", repo.entity + " found")
-                              .replace("(I id)", "(" + repo.id_type + " id)"),
-                              STANDARD_IMPORTS.get(n, [])) for n in names]
-        warnings.append(f"A(z) {repo.name} {', '.join(n + '()' for n in names)} metódusát a migrátor írta (Spring "
-                        "Data-szerű alapmetódus, find/merge/remove). Ellenőrizd, hogy az eredeti SQL-lel azonos-e: "
-                        "a save() INSERT vagy UPDATE (merge), létező kulcsra nem ad ORA-00001-et."
-                        if "save" in names else
-                        f"A(z) {repo.name} {', '.join(n + '()' for n in names)} metódusát a migrátor írta (Spring "
-                        "Data-szerű alapmetódus, find/remove).")
-    return result
+    """Nothing to write any more: the repository is an interface extending JpaRepository, which has findById, save,
+    delete ... (STANDARD). Kept for the callers; always {}."""
+    return {}

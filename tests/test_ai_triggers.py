@@ -326,17 +326,17 @@ class HookAssistantTests(unittest.TestCase):
         self.assertEqual(task["pending_tables"], [])
         preview = engine.preview(self.output, task["id"], self.options)
         # The sequence needs no table name in the code: the hook's own table hosts its generated method.
-        self.assertIn("Repositories:\n- ordersAppOrdersRepository (OrdersAppOrdersRepository)", preview["user"])
-        self.assertIn("- ordersAppOrdersRepository.nextAppOrdersSeq() returns BigDecimal", preview["user"])
+        self.assertIn("Repositories:\n- appOrdersRepository (AppOrdersRepository)", preview["user"])
+        self.assertIn("- appOrdersRepository.nextAppOrdersSeq() returns BigDecimal", preview["user"])
         self.assertTrue(preview["deterministic"])  # the key from a sequence needs no model (hook_java)
         with patch("frm_forms.ollama.opener", side_effect=AssertionError("no model call")):
             result = engine.propose(self.output, task["id"], self.options)
         self.assertEqual((result["status"], result["calls"]), ("proposal", 0), result)
         engine.apply_proposal(self.output, result["id"], reviewed=True)
         service = (self.output / SERVICE).read_text(encoding="utf-8")
-        self.assertIn("row.id = ordersAppOrdersRepository.nextAppOrdersSeq();", method_text(service, "triggerPreInsertOrders"))
-        self.assertIn("public BigDecimal nextAppOrdersSeq() {",
-                      (self.output / "backend/DPS/OrdersAppOrdersRepository.java").read_text(encoding="utf-8"))
+        self.assertIn("row.id = appOrdersRepository.nextAppOrdersSeq();", method_text(service, "triggerPreInsertOrders"))
+        self.assertIn('@Query(value = "SELECT APP_ORDERS_SEQ.NEXTVAL FROM DUAL", nativeQuery = true)\n    BigDecimal nextAppOrdersSeq();',
+                      (self.output / "backend/DPS/AppOrdersRepository.java").read_text(encoding="utf-8"))
         if shutil.which("java"):
             compile_module(self, self.output, Path(tempfile.mkdtemp(dir=self.root)))
 

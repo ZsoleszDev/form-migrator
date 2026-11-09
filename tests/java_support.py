@@ -177,9 +177,10 @@ JPA_API = {
     'LockModeType': 'public enum LockModeType { NONE, OPTIMISTIC, PESSIMISTIC_READ, PESSIMISTIC_WRITE }',
     'QueryHint': 'public @interface QueryHint { String name(); String value(); }',
     'Parameter': 'public interface Parameter<T> {}',
-    'PersistenceException': 'public class PersistenceException extends RuntimeException {}',
-    'NoResultException': 'public class NoResultException extends PersistenceException {}',
-    'NonUniqueResultException': 'public class NonUniqueResultException extends PersistenceException {}',
+    'PersistenceException': 'public class PersistenceException extends RuntimeException { public PersistenceException() {} public PersistenceException(String m) { super(m); } }',
+    'NoResultException': 'public class NoResultException extends PersistenceException { public NoResultException() {} public NoResultException(String m) { super(m); } }',
+    'NonUniqueResultException': 'public class NonUniqueResultException extends PersistenceException { public NonUniqueResultException() {} public NonUniqueResultException(String m) { super(m); } }',
+    'EntityExistsException': 'public class EntityExistsException extends PersistenceException { public EntityExistsException() {} public EntityExistsException(String m) { super(m); } }',
     'Query': 'public interface Query { Object getSingleResult(); java.util.List getResultList(); int executeUpdate(); '
              'Query setMaxResults(int max); Query setParameter(String name, Object value); <T> Query setParameter(Parameter<T> p, T value); }',
     'TypedQuery': 'public interface TypedQuery<X> extends Query { X getSingleResult(); java.util.List<X> getResultList(); '

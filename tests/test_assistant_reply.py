@@ -37,27 +37,22 @@ public class LookupServiceImpl extends ModuleServiceBase<DpsLogHelper> implement
 """
 REPOSITORY = """package hu.company.features.lookup.dps;
 
-import javax.persistence.EntityManager;
-import javax.persistence.PersistenceContext;
-import org.springframework.stereotype.Repository;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
-// Forms migrator JPA repository
-@Repository
-public class LookupAppAccountRepository {
-    @PersistenceContext
-    private EntityManager entityManager;
-
-    public LookupAppAccountEntity findAccount(java.math.BigDecimal id) {
-        return entityManager.find(LookupAppAccountEntity.class, id);
-    }
+// Forms migrator JPA repository: APP.ACCOUNT.
+public interface AppAccountRepository extends JpaRepository<AppAccountDomain, java.math.BigDecimal> {
+    @Query("SELECT d FROM AppAccountDomain d WHERE d.id = :id")
+    AppAccountDomain findAccount(@Param("id") java.math.BigDecimal id);
 }
 """
 
 
 def context(**changes):
     values = dict(method="onCtrlRun", service=SERVICE, module_class="Lookup", namespace="jakarta",
-                  repositories=[reply.Repository("LookupAppAccountRepository", "lookupAppAccountRepository",
-                                                 "LookupAppAccountEntity", REPOSITORY, "BigDecimal")])
+                  repositories=[reply.Repository("AppAccountRepository", "appAccountRepository",
+                                                 "AppAccountDomain", REPOSITORY, "BigDecimal")])
     values.update(changes)
     return reply.Context(**values)
 
@@ -69,7 +64,7 @@ def service_block(body, label="// SERVICE"):
 
 
 BODY = """java.math.BigDecimal id = PlsqlValues.number(request.blocks(), "CTRL", "ID");
-LookupAppAccountEntity row = lookupAppAccountRepository.loadName(id);
+AppAccountDomain row = appAccountRepository.loadName(id);
 if (row == null) {
     throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "NO_DATA_FOUND");
 }
@@ -78,10 +73,9 @@ PlsqlValues.put(blocks, "CTRL", "NAME", row.getName());
 return new ActionResult(blocks, List.of(), List.of(), Map.of());"""
 
 REPO_BLOCK = """```java
-// REPOSITORY LookupAppAccountRepository
-public LookupAppAccountEntity loadName(java.math.BigDecimal id) {
-    return entityManager.find(LookupAppAccountEntity.class, id);
-}
+// REPOSITORY AppAccountRepository
+@Query("SELECT d FROM AppAccountDomain d WHERE d.id = :id")
+AppAccountDomain loadName(@Param("id") java.math.BigDecimal id);
 ```
 """
 
@@ -97,8 +91,8 @@ class ExtractionTests(unittest.TestCase):
         self.assertTrue(response["body"].startswith("java.math.BigDecimal id = PlsqlValues.number"))
         self.assertNotIn("log1x", response["body"])
         self.assertTrue(response["private_methods"].startswith("private String cleaned(String v)"))
-        self.assertEqual(response["repositories"][0]["name"], "LookupAppAccountRepository")
-        self.assertIn("public LookupAppAccountEntity loadName", response["repositories"][0]["methods"])
+        self.assertEqual(response["repositories"][0]["name"], "AppAccountRepository")
+        self.assertIn("AppAccountDomain loadName(@Param(\"id\") java.math.BigDecimal id);", response["repositories"][0]["methods"])
         self.assertEqual(response["missing_context"], [])
         self.assertEqual(response["assumptions"], ["A NULL név megmarad."])
         self.assertEqual([b["kind"] for b in result.blocks], ["service", "repository"])
@@ -110,12 +104,12 @@ import java.util.*;
 @Service
 public class LookupServiceImpl extends ModuleServiceBase<DpsLogHelper> implements LookupService {
     @Autowired
-    private LookupAppAccountRepository lookupAppAccountRepository;
+    private AppAccountRepository appAccountRepository;
 
     @Override
     public ActionResult onCtrlRun(UserDto user, ActionRequest request) throws Exception {
         return log1x(log, LookupConstants.ON_CTRL_RUN_NAME, user, null, () -> {
-            LookupAppAccountEntity row = lookupAppAccountRepository.loadName(null);
+            AppAccountDomain row = appAccountRepository.loadName(null);
             return new ActionResult(Map.of(), List.of(row.getName()), List.of(), Map.of());
         });
     }
@@ -128,45 +122,43 @@ public class LookupServiceImpl extends ModuleServiceBase<DpsLogHelper> implement
 ```
 
 ```java
-import javax.persistence.EntityManager;
-@Repository
-public class LookupAppAccountRepository {
-    private final EntityManager em;
+import org.springframework.data.jpa.repository.Query;
+public interface AppAccountRepository extends JpaRepository<AppAccountDomain, java.math.BigDecimal> {
+    String PREFIX = "A";
 
-    public LookupAppAccountRepository(EntityManager em) {
-        this.em = em;
-    }
+    @Query("SELECT d FROM AppAccountDomain d WHERE d.id = :id")
+    AppAccountDomain loadName(@Param("id") java.math.BigDecimal id);
 
-    public LookupAppAccountEntity loadName(java.math.BigDecimal id) {
-        return em.find(LookupAppAccountEntity.class, id);
+    public String prefixed(String name) {
+        return PREFIX + name;
     }
 }
 ```"""
         result = reply.extract(text, context())
         self.assertEqual(result.problems, [])
-        self.assertIn("lookupAppAccountRepository.loadName(null)", result.response["body"])
+        self.assertIn("appAccountRepository.loadName(null)", result.response["body"])
         self.assertEqual(result.response["private_methods"], "")  # the other endpoint is never taken over
         methods = result.response["repositories"][0]["methods"]
-        self.assertIn("return entityManager.find(LookupAppAccountEntity.class, id);", methods)
-        self.assertNotIn("this.em", methods)
-        self.assertNotIn("LookupAppAccountRepository(", methods)
+        self.assertIn("AppAccountDomain loadName(@Param(\"id\") java.math.BigDecimal id);", methods)
+        self.assertIn("String PREFIX = \"A\";", methods)  # an interface field is a constant
+        self.assertIn("default String prefixed(String name) {", methods)  # a body in an interface: a default method
         self.assertTrue(any("onCtrlOther" in note for note in result.notes))
 
     def test_markdown_headings_bare_body_and_unterminated_last_block(self):
-        text = ("### SERVICE\n```java\n" + BODY + "\n```\n\n**LookupAppAccountRepository.java**\n```java\n"
-                "public LookupAppAccountEntity loadName(java.math.BigDecimal id) {\n"
-                "    return entityManager.find(LookupAppAccountEntity.class, id);\n}\n")
+        text = ("### SERVICE\n```java\n" + BODY + "\n```\n\n**AppAccountRepository.java**\n```java\n"
+                "@Query(\"SELECT d FROM AppAccountDomain d WHERE d.id = :id\")\n"
+                "AppAccountDomain loadName(@Param(\"id\") java.math.BigDecimal id);\n")
         result = reply.extract(text, context())
         self.assertEqual(result.problems, [])
         self.assertTrue(result.truncated)
-        self.assertEqual(result.blocks[1]["target"], "LookupAppAccountRepository")
-        self.assertIn("lookupAppAccountRepository.loadName(id)", result.response["body"])
+        self.assertEqual(result.blocks[1]["target"], "AppAccountRepository")
+        self.assertIn("appAccountRepository.loadName(id)", result.response["body"])
         self.assertTrue(any("nincs lezárva" in warning for warning in result.warnings))
 
     def test_plain_java_without_fences_and_thinking_text(self):
         text = "<think>Először a SELECT-et nézem.</think>\n" + BODY + "\n\nNOTES:\n- egyszerű lekérdezés\n"
         result = reply.extract(text, context(repositories=[reply.Repository(
-            "LookupAppAccountRepository", "lookupAppAccountRepository", "LookupAppAccountEntity",
+            "AppAccountRepository", "appAccountRepository", "AppAccountDomain",
             REPOSITORY.replace("findAccount", "loadName"))]))
         self.assertEqual(result.problems, [])
         self.assertEqual(result.format, "plain")
@@ -185,8 +177,8 @@ public class LookupAppAccountRepository {
         # 4.33.3 threw this answer away twice ("Hiányzó adat esetén nincs részleges repository/DTO.").
         legacy = {"status": "needs_context", "summary": "Kell a PKG_ACCOUNT forrása.", "body": "", "imports": [],
                   "private_methods": "", "assumptions": [], "missing_context": ["PKG_ACCOUNT.CHECK_LIMIT forrása"],
-                  "test_cases": [], "dtos": [], "repositories": [{"name": "LookupAppAccountRepository", "imports": [],
-                  "methods": "public LookupAppAccountEntity loadName(java.math.BigDecimal id) { return entityManager.find(LookupAppAccountEntity.class, id); }"}]}
+                  "test_cases": [], "dtos": [], "repositories": [{"name": "AppAccountRepository", "imports": [],
+                  "methods": "@Query(\"SELECT d FROM AppAccountDomain d WHERE d.id = :id\") AppAccountDomain loadName(@Param(\"id\") java.math.BigDecimal id);"}]}
         result = reply.extract(json.dumps(legacy), context())
         self.assertEqual(result.problems, [])
         self.assertEqual(result.format, "json")
@@ -195,44 +187,39 @@ public class LookupAppAccountRepository {
         self.assertEqual(len(result.response["repositories"]), 1)
         self.assertTrue(any("PKG_ACCOUNT.CHECK_LIMIT" in warning for warning in result.warnings))
 
-    def test_spring_data_and_unknown_repository_become_precise_corrections(self):
+    def test_a_spring_data_interface_is_the_repository_and_unknown_ones_are_corrected(self):
+        # The repository is an interface extending JpaRepository: a Spring Data method name is a method of it, findById
+        # is inherited. The repository without the module prefix is the one repository that ends so: repaired.
         text = ("```java\n// SERVICE\nvar row = accountRepository.findById(id).orElse(null);\n"
                 "return new ActionResult(Map.of(), List.of(), List.of(), Map.of());\n```\n"
                 "```java\n// REPOSITORY AccountRepository\npublic interface AccountRepository extends "
-                "JpaRepository<LookupAppAccountEntity, BigDecimal> {\n  List<LookupAppAccountEntity> findByName(String name);\n}\n```")
+                "JpaRepository<AppAccountDomain, BigDecimal> {\n  List<AppAccountDomain> findByName(String name);\n"
+                "  Optional<AppAccountDomain> findById(BigDecimal id);\n}\n```")
         result = reply.extract(text, context())
-        self.assertEqual(len(result.problems), 1)
-        correction = reply.correction(result, context())
-        self.assertIn("Do not write a Spring Data interface", correction)
-        self.assertIn("// REPOSITORY <Name>", correction)
-        # The repository without the module prefix is the one repository that ends so: repaired, no correction.
-        self.assertIn("lookupAppAccountRepository.findById(id)", result.response["body"])
+        self.assertEqual(result.problems, [])
+        self.assertIn("appAccountRepository.findById(id)", result.response["body"])
+        self.assertEqual(result.response["repositories"][0]["methods"], "List<AppAccountDomain> findByName(String name);")
+        self.assertTrue(any("findById() a JpaRepository része" in n for n in result.notes), result.notes)
         unknown = reply.extract(service_block("otherRepository.findById(id);\nreturn null;"), context())
-        self.assertIn("`otherRepository` does not exist. Use only these repository fields: lookupAppAccountRepository.",
+        self.assertIn("`otherRepository` does not exist. Use only these repository fields: appAccountRepository.",
                       reply.correction(unknown, context()))
 
-    def test_a_plain_spring_data_interface_is_dropped_and_its_methods_written(self):
-        """findById/save/delete ... on a repository without generated methods: the migrator's find/merge/remove."""
+    def test_jpa_repository_methods_need_no_code(self):
+        """findById/save/delete ...: JpaRepository's, also beside the generated methods; nothing to write."""
         text = ("```java\n// SERVICE\nvar row = accountRepository.findById(id).orElse(null);\nrow.setName(\"x\");\n"
                 "accountRepository.save(row);\nreturn new ActionResult(Map.of(), List.of(), List.of(), Map.of());\n```\n"
                 "```java\n// REPOSITORY AccountRepository\npublic interface AccountRepository extends "
-                "JpaRepository<LookupAppAccountEntity, BigDecimal> {}\n```")
-        ctx = context()
-        result = reply.extract(text, ctx)
+                "JpaRepository<AppAccountDomain, BigDecimal> {}\n```")
+        result = reply.extract(text, context())
         self.assertEqual(result.problems, [])
-        methods = result.response["repositories"][0]["methods"]
-        self.assertIn("public Optional<LookupAppAccountEntity> findById(BigDecimal id) {\n"
-                      "        return Optional.ofNullable(entityManager.find(LookupAppAccountEntity.class, id));", methods)
-        self.assertIn("LookupAppAccountEntity saved = entityManager.merge(entity);\n        entityManager.flush();", methods)
-        self.assertTrue(any("save() INSERT vagy UPDATE (merge)" in w for w in result.warnings), result.warnings)
-        self.assertTrue(any("Spring Data interfészt" in n for n in result.notes), result.notes)
-        # Beside generated methods (the task's SQL is the migrator's) the same call is the model ignoring them.
-        generated = context(generated={"LookupAppAccountRepository": ["lookupAppAccountRepository.loadName(BigDecimal id) returns String"]})
-        result = reply.extract(service_block("lookupAppAccountRepository.findById(id);\nreturn null;"), generated)
+        self.assertEqual(result.response["repositories"], [])
+        generated = context(generated={"AppAccountRepository": ["appAccountRepository.loadName(BigDecimal id) returns String"]})
+        self.assertEqual(reply.extract(service_block("appAccountRepository.findById(id);\nreturn null;"), generated).problems, [])
+        # a method that is neither generated nor JpaRepository's goes back to the model
+        result = reply.extract(service_block("appAccountRepository.loadEverything(id);\nreturn null;"), generated)
         self.assertEqual(len(result.problems), 1)
         self.assertIn("Call only the generated methods (their SQL is the Forms code's SQL): "
-                      "lookupAppAccountRepository.loadName(BigDecimal id) returns String.", result.problems[0].en)
-        self.assertNotIn("// REPOSITORY <Name>", reply.correction(result, generated))
+                      "appAccountRepository.loadName(BigDecimal id) returns String.", result.problems[0].en)
 
     def test_unicode_escapes_in_strings_become_characters_elsewhere_a_correction(self):
         body = 'throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "Hi\\u00e1nyz\\u00f3 \\"k\\u00f3d\\"");'
@@ -265,7 +252,7 @@ public class LookupAppAccountRepository {
     def test_called_repository_method_must_be_written(self):
         result = reply.extract(service_block(BODY), context())
         self.assertEqual(len(result.problems), 1)
-        self.assertIn("lookupAppAccountRepository.loadName", result.problems[0].hu)
+        self.assertIn("appAccountRepository.loadName", result.problems[0].hu)
         self.assertIn("does not define it", result.problems[0].en)
 
     def test_existing_repository_method_is_reused_or_renamed_with_the_call(self):
@@ -273,12 +260,11 @@ public class LookupAppAccountRepository {
         result = reply.extract(service_block(BODY.replace("loadName", "findAccount")) + same, context())
         self.assertEqual(result.problems, [])
         self.assertEqual(result.response["repositories"], [])  # identical: the existing method is used
-        different = same.replace("return entityManager.find(LookupAppAccountEntity.class, id);",
-                                 "return id == null ? null : entityManager.find(LookupAppAccountEntity.class, id);")
+        different = same.replace("WHERE d.id = :id", "WHERE d.id = :id AND d.name IS NOT NULL")
         result = reply.extract(service_block(BODY.replace("loadName", "findAccount")) + different, context())
         self.assertEqual(result.problems, [])
-        self.assertIn("public LookupAppAccountEntity onCtrlRunFindAccount(", result.response["repositories"][0]["methods"])
-        self.assertIn("lookupAppAccountRepository.onCtrlRunFindAccount(id)", result.response["body"])
+        self.assertIn("AppAccountDomain onCtrlRunFindAccount(", result.response["repositories"][0]["methods"])
+        self.assertIn("appAccountRepository.onCtrlRunFindAccount(id)", result.response["body"])
 
     def test_service_helper_named_like_an_existing_method_is_renamed(self):
         text = service_block("return new ActionResult(Map.of(), List.of(normalize(\"x\")), List.of(), Map.of());").replace(
@@ -288,20 +274,21 @@ public class LookupAppAccountRepository {
         self.assertIn("private String onCtrlRunNormalize(String v)", result.response["private_methods"])
         self.assertIn("onCtrlRunNormalize(\"x\")", result.response["body"])
 
-    def test_jpql_is_a_warning_native_sql_is_a_problem_and_sequences_are_allowed(self):
-        jpql = REPO_BLOCK.replace("return entityManager.find(LookupAppAccountEntity.class, id);",
-                                  "return entityManager.createQuery(\"select a from LookupAppAccountEntity a where a.id = :id\", "
-                                  "LookupAppAccountEntity.class).setParameter(\"id\", id).getSingleResult();")
-        result = reply.extract(service_block(BODY) + jpql, context())
+    def test_jpql_is_the_way_native_sql_a_warning_and_entity_manager_a_problem(self):
+        result = reply.extract(service_block(BODY) + REPO_BLOCK, context())
+        self.assertEqual((result.problems, [w for w in result.warnings if "natív" in w]), ([], []))
+        native = REPO_BLOCK.replace('@Query("SELECT d FROM AppAccountDomain d WHERE d.id = :id")',
+                                    '@Query(value = "SELECT * FROM APP.ACCOUNT WHERE ID = :id", nativeQuery = true)')
+        result = reply.extract(service_block(BODY) + native, context())
         self.assertEqual(result.problems, [])
-        self.assertTrue(any("JPQL" in warning for warning in result.warnings))
-        native = jpql.replace("createQuery(\"select a from LookupAppAccountEntity a where a.id = :id\", LookupAppAccountEntity.class)",
-                              "createNativeQuery(\"SELECT * FROM APP.ACCOUNT WHERE ID = ?\", LookupAppAccountEntity.class)")
-        self.assertTrue(any("natív SQL" in p.hu for p in reply.extract(service_block(BODY) + native, context()).problems))
-        sequence = REPO_BLOCK.replace("return entityManager.find(LookupAppAccountEntity.class, id);",
-                                      "return entityManager.find(LookupAppAccountEntity.class, (java.math.BigDecimal) "
-                                      "entityManager.createNativeQuery(\"SELECT APP.ACCOUNT_SEQ.NEXTVAL FROM DUAL\").getSingleResult());")
-        self.assertEqual(reply.extract(service_block(BODY) + sequence, context()).problems, [])
+        self.assertTrue(any("nativeQuery = true" in w for w in result.warnings), result.warnings)
+        manager = REPO_BLOCK.replace('@Query("SELECT d FROM AppAccountDomain d WHERE d.id = :id")\n'
+                                     'AppAccountDomain loadName(@Param("id") java.math.BigDecimal id);',
+                                     'public AppAccountDomain loadName(java.math.BigDecimal id) {\n'
+                                     '    return entityManager.find(AppAccountDomain.class, id);\n}')
+        result = reply.extract(service_block(BODY) + manager, context())
+        self.assertTrue(any("EntityManagert használ" in p.hu for p in result.problems))
+        self.assertIn("No EntityManager", reply.correction(result, context()))
 
     def test_placeholder_needs_a_missing_list_and_then_stays_a_draft(self):
         body = "throw new UnsupportedOperationException(\"PKG.CALC hiányzik\");"
@@ -328,20 +315,21 @@ public class LookupAppAccountRepository {
         self.assertIn("SERVICE", reply.extract("Sajnos nem tudom megoldani.", context()).problems[0].hu)
 
     def test_entity_block_is_skipped_and_imports_are_normalized(self):
-        text = ("```java\n// LookupAppAccountEntity.java\n@Entity\npublic class LookupAppAccountEntity { private String name; }\n```\n"
-                + service_block(BODY) + REPO_BLOCK.replace("// REPOSITORY LookupAppAccountRepository\n",
-                "// REPOSITORY LookupAppAccountRepository\nimport javax.persistence.criteria.CriteriaBuilder;\nimport com.example.Unknown;\n"
+        text = ("```java\n// AppAccountDomain.java\n@Entity\npublic class AppAccountDomain { private String name; }\n```\n"
+                + service_block(BODY) + REPO_BLOCK.replace("// REPOSITORY AppAccountRepository\n",
+                "// REPOSITORY AppAccountRepository\nimport javax.persistence.LockModeType;\nimport com.example.Unknown;\n"
                 "import java.util.List;\n"))
         result = reply.extract(text, context())
         self.assertEqual(result.problems, [])
         self.assertEqual(result.blocks[0]["kind"], "entity")
         self.assertEqual(result.response["repositories"][0]["imports"], [])  # imports only for names the code uses
-        uses = REPO_BLOCK.replace("return entityManager.find(LookupAppAccountEntity.class, id);",
-                                  "CriteriaBuilder cb = entityManager.getCriteriaBuilder();\n    return entityManager.find(LookupAppAccountEntity.class, id);")
-        uses = uses.replace("// REPOSITORY LookupAppAccountRepository\n", "// REPOSITORY LookupAppAccountRepository\n"
-                            "import javax.persistence.criteria.CriteriaBuilder;\n")
+        uses = REPO_BLOCK.replace('@Query("SELECT d FROM AppAccountDomain d WHERE d.id = :id")',
+                                  '@Lock(LockModeType.PESSIMISTIC_WRITE)\n@Query("SELECT d FROM AppAccountDomain d WHERE d.id = :id")')
+        uses = uses.replace("// REPOSITORY AppAccountRepository\n", "// REPOSITORY AppAccountRepository\n"
+                            "import javax.persistence.LockModeType;\n")
         result = reply.extract(service_block(BODY) + uses, context())
-        self.assertEqual(result.response["repositories"][0]["imports"], ["jakarta.persistence.criteria.CriteriaBuilder"])
+        # the project's persistence namespace (jakarta here), whatever the model wrote
+        self.assertEqual(result.response["repositories"][0]["imports"], ["jakarta.persistence.LockModeType"])
 
 
 class ScanTests(unittest.TestCase):

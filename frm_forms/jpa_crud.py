@@ -118,6 +118,8 @@ def domain_source(entry: dict, package: str, namespace: str) -> str:
     imports += ["java.time.LocalDateTime"] if "LocalDateTime" in types else []
     if composite:
         imports += [namespace + ".persistence.IdClass", "java.io.Serializable", "java.util.Objects"]
+    if any(c.get("lob") for c in entry["columns"].values()):
+        imports.append(namespace + ".persistence.Lob")
     table = entry["table"]
     annotation = f'@Table(name = "{table.rsplit(".", 1)[-1]}"' + (f', schema = "{table.split(".")[0]}"' if "." in table else "") + ")"
     lines = [f"// {MARKER} domain: {table} (Forms-blokkok: {', '.join(entry['blocks'])}).", "@Entity", annotation]
@@ -125,8 +127,8 @@ def domain_source(entry: dict, package: str, namespace: str) -> str:
         lines.append(f"@IdClass({entry['domain']}.Key.class)")
     lines.append(f"public class {entry['domain']} {{")
     for column, spec in entry["columns"].items():
-        lines += [""] + (["    @Id"] if column in keys else []) + [f'    @Column(name = "{column}")',
-                                                                     f"    private {spec['type']} {spec['field']};"]
+        lines += [""] + (["    @Id"] if column in keys else []) + (["    @Lob"] if spec.get("lob") else []) + [
+            f'    @Column(name = "{column}")', f"    private {spec['type']} {spec['field']};"]
     for spec in entry["columns"].values():
         field, typ = spec["field"], spec["type"]
         lines += ["", f"    public {typ} get{accessor(field)}() {{", f"        return {field};", "    }",
@@ -143,21 +145,27 @@ def domain_source(entry: dict, package: str, namespace: str) -> str:
                   "            if (this == other) {", "                return true;", "            }",
                   "            if (!(other instanceof Key)) {", "                return false;", "            }",
                   "            Key key = (Key) other;",
-                  "            return " + " && ".join(f"Objects.equals({f}, key.{f})" for _, f in key_fields) + ";",
+                  # a NUMBER key: 1 and 1.0 are the same row (BigDecimal.equals would tell them apart)
+                  "            return " + " && ".join(
+                      f"({f} == null ? key.{f} == null : key.{f} != null && {f}.compareTo(key.{f}) == 0)" if t == "BigDecimal"
+                      else f"Objects.equals({f}, key.{f})" for t, f in key_fields) + ";",
                   "        }", "", "        @Override", "        public int hashCode() {",
-                  "            return Objects.hash(" + ", ".join(f for _, f in key_fields) + ");", "        }", "    }"]
+                  "            return Objects.hash(" + ", ".join(f"{f} == null ? null : {f}.stripTrailingZeros()" if t == "BigDecimal"
+                                                                else f for t, f in key_fields) + ");", "        }", "    }"]
     lines.append("}")
     return preamble(package, imports) + "\n".join(lines) + "\n"
 
 
-def repository_source(entry: dict, package: str, namespace: str) -> str:
+def repository_source(entry: dict, package: str, namespace: str, lock: bool = True) -> str:
     key_fields = [(entry["columns"][k]["type"], entry["columns"][k]["field"]) for k in entry["key"]]
     types = ({t for t, _ in key_fields} | {t for q in entry["queries"] for t, _ in q["params"]}
              | {t for _, used in entry["extra"] for t in used})
-    imports = ["java.util.Optional", namespace + ".persistence.LockModeType", namespace + ".persistence.QueryHint",
-               "org.springframework.data.jpa.repository.JpaRepository", "org.springframework.data.jpa.repository.Lock",
-               "org.springframework.data.jpa.repository.Query", "org.springframework.data.jpa.repository.QueryHints",
-               "org.springframework.data.repository.query.Param"]
+    imports = ["org.springframework.data.jpa.repository.JpaRepository"]
+    if lock or entry["queries"] or entry["extra"] or entry["sequences"]:
+        imports += ["org.springframework.data.jpa.repository.Query", "org.springframework.data.repository.query.Param"]
+    if lock:
+        imports += ["java.util.Optional", namespace + ".persistence.LockModeType", namespace + ".persistence.QueryHint",
+                    "org.springframework.data.jpa.repository.Lock", "org.springframework.data.jpa.repository.QueryHints"]
     imports += ["java.math.BigDecimal"] if "BigDecimal" in types or entry["sequences"] else []
     imports += ["java.time.LocalDateTime"] if "LocalDateTime" in types else []
     if entry["queries"]:
@@ -178,11 +186,12 @@ def repository_source(entry: dict, package: str, namespace: str) -> str:
         lines.append(f"    Slice<{domain}> {q['method']}({', '.join(params)});")
     hint = ("javax" if namespace == "javax" else "jakarta") + ".persistence.lock.timeout"
     condition = " AND ".join(f"d.{f} = :{f}" for _, f in key_fields)
-    lines += ["", "    // A rekord zárolása módosítás és törlés előtt; ha más tartja, azonnal hiba (Forms: FOR UPDATE NOWAIT).",
-              "    @Lock(LockModeType.PESSIMISTIC_WRITE)",
-              f'    @QueryHints(@QueryHint(name = "{hint}", value = "0"))',
-              f"    @Query({jstr(f'SELECT d FROM {domain} d WHERE {condition}')})",
-              f"    Optional<{domain}> lockById(" + ", ".join(f'@Param("{f}") {t} {f}' for t, f in key_fields) + ");"]
+    if lock:
+        lines += ["", "    // A rekord zárolása módosítás és törlés előtt; ha más tartja, azonnal hiba (Forms: FOR UPDATE NOWAIT).",
+                  "    @Lock(LockModeType.PESSIMISTIC_WRITE)",
+                  f'    @QueryHints(@QueryHint(name = "{hint}", value = "0"))',
+                  f"    @Query({jstr(f'SELECT d FROM {domain} d WHERE {condition}')})",
+                  f"    Optional<{domain}> lockById(" + ", ".join(f'@Param("{f}") {t} {f}' for t, f in key_fields) + ");"]
     for source, _ in entry["extra"]:
         lines += ["", source]
     for sequence, method in entry["sequences"].items():
@@ -262,6 +271,11 @@ def write_files(tables: dict, output, package: str, namespace: str) -> list[str]
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(text, encoding="utf-8", newline="\n")
             written.append(filename)
+    # For the Java assistant (jpa_assistant.plan): which tables have a Domain, and the columns it maps.
+    from .common import write_json
+    write_json(output / "analysis" / "jpa-domains.json", {"version": 1, "tables": {
+        table: {k: entry[k] for k in ("domain", "repository", "variable", "key", "id_type")}
+        | {"columns": {c: dict(spec) for c, spec in entry["columns"].items()}} for table, entry in tables.items()}})
     return written
 
 

@@ -22,8 +22,8 @@ from test_schema_workbench import FORM, columns
 setUpModule, tearDownModule = trigger_mode('plsql')
 
 
-ENTITY = "LookupAppAccountEntity"
-REPOSITORY = "LookupAppAccountRepository"
+ENTITY = "AccountDomain"
+REPOSITORY = "AccountRepository"
 
 
 def implementation():
@@ -33,7 +33,7 @@ def implementation():
 }
 String raw = request.blocks().get("CTRL").get("ID");
 java.math.BigDecimal id = raw == null || raw.isEmpty() ? null : new java.math.BigDecimal(raw);
-LookupAppAccountEntity row = lookupAppAccountRepository.findAccount(id);
+AccountDomain row = accountRepository.findAccount(id);
 if (row == null) {
     throw new IllegalStateException("NO_DATA_FOUND");
 }
@@ -42,8 +42,8 @@ var values = new java.util.LinkedHashMap<String, String>();
 values.put("NAME", dto.getName());
 return new ActionResult(java.util.Map.of("CTRL", values), java.util.List.of(), java.util.List.of(), java.util.Map.of());""",
         repositories=[{"name": REPOSITORY, "imports": [], "methods":
-            "public LookupAppAccountEntity findAccount(java.math.BigDecimal id) {\n"
-            "    return entityManager.find(LookupAppAccountEntity.class, id);\n}"}],
+            "@Query(\"SELECT d FROM AccountDomain d WHERE d.id = :id\")\n"
+            "AccountDomain findAccount(@Param(\"id\") java.math.BigDecimal id);"}],
         dtos=[{"name": "LookupAccountDto", "fields": [
             {"name": "id", "type": "java.math.BigDecimal"}, {"name": "name", "type": "String"}]}],
         test_cases=["ID=1 → CTRL.NAME az entity neve; hiányzó ID → NO_DATA_FOUND; NULL név megmarad."])
@@ -98,11 +98,11 @@ class JpaAssistantTests(unittest.TestCase):
         self.assertIn("```java\n" + packet["existing_method"] + "\n```", sent)
         self.assertIn("SELECT a.NAME", sent)
         # The entity is described in two lines, not sent as Java source.
-        self.assertIn("- lookupAppAccountRepository (LookupAppAccountRepository) for entity LookupAppAccountEntity, "
+        self.assertIn("- accountRepository (AccountRepository) for entity AccountDomain, "
                       "table APP.ACCOUNT", sent)
         self.assertIn("fields: BigDecimal id (ID, primary key), String name (NAME)", sent)
         # The SQL has a generated repository method (jpa_sql): the answer is the service only.
-        self.assertIn("- lookupAppAccountRepository.findNameById(BigDecimal id) returns String\n"
+        self.assertIn("- accountRepository.findNameById(BigDecimal id) returns String\n"
                       "  SQL: SELECT a.NAME INTO :CTRL.NAME FROM APP.ACCOUNT a WHERE a.ID = :CTRL.ID", sent)
         self.assertNotIn("// REPOSITORY", sent)
         self.assertNotIn("@Entity", sent)
@@ -115,14 +115,15 @@ class JpaAssistantTests(unittest.TestCase):
         self.assertIn("@Entity", entity)
         self.assertIn("@Id", entity)
         self.assertIn("schema = \"APP\"", entity)
-        self.assertIn("entityManager.find", repository)
-        self.assertIn("public String findNameById(BigDecimal id) {", repository)  # generated, Criteria API
-        code = re.sub(r"/\*[\s\S]*?\*/|//[^\n]*", "", repository)  # its comment quotes the Forms SQL; the code has none
-        self.assertNotIn("SELECT ", code)
+        self.assertIn("public interface AccountRepository extends JpaRepository<AccountDomain, BigDecimal> {", repository)
+        self.assertIn("AccountDomain findAccount(@Param(\"id\") BigDecimal id);", repository)  # the model's
+        self.assertIn("default String findNameById(BigDecimal id) {", repository)  # generated: JPQL @Query + default method
+        self.assertNotIn("EntityManager", repository)
+        self.assertIn('@Query("SELECT d.name FROM AccountDomain d WHERE d.id = :id")', repository)  # JPQL over the Domain
         source = self.service.read_text()
-        self.assertIn("private LookupAppAccountRepository lookupAppAccountRepository", source)
+        self.assertIn("private AccountRepository accountRepository", source)
         start, _, end = engine.method_span(source, self.task["method"])
-        self.assertIn("lookupAppAccountRepository.findAccount", source[start:end])
+        self.assertIn("accountRepository.findAccount", source[start:end])
         self.assertNotIn("DbCalls.call", source[start:end])
         self.assertIn("log1x(", source[start:end])
         self.assertEqual({p: p.read_bytes() for p in protected}, protected)
@@ -159,7 +160,7 @@ class JpaAssistantTests(unittest.TestCase):
         descriptor = jpa.plan(packet, self.out)[0]
         path = self.out / ("backend/DPS/" + REPOSITORY + ".java")
         path.write_text(descriptor["files"][path.relative_to(self.out).as_posix()].replace(
-            "\n}", "\n    public String existingMethod() { return \"kept\"; }\n}"), encoding="utf-8")
+            "\n}", "\n    default String existingMethod() { return \"kept\"; }\n}"), encoding="utf-8")
         result, _ = self.propose()
         candidate = next(f for f in result["files"] if f["target"].endswith("Repository.java"))
         self.assertIn("existingMethod", (self.out / engine.AREA / "proposals" / result["id"] / candidate["candidate"]).read_text())
@@ -178,13 +179,17 @@ class JpaAssistantTests(unittest.TestCase):
                       "BINARY": {"data_type": "BLOB", "nullable": True}}}}},
                   "config": {"jpa_namespace": "jakarta"}, "service_package_source": "package sample.dps;"}
         descriptor = jpa.plan(packet, self.out)[0]
-        entity = descriptor["files"]["backend/DPS/SampleAppMasterEntity.java"]
-        key = descriptor["files"]["backend/DPS/SampleAppMasterEntityId.java"]
+        entity = descriptor["files"]["backend/DPS/MasterDomain.java"]
+        self.assertEqual(descriptor["repository"], "MasterRepository")
+        self.assertIn("extends JpaRepository<MasterDomain, MasterDomain.Key>",
+                      descriptor["files"]["backend/DPS/MasterRepository.java"])
         self.assertIn("import jakarta.persistence.IdClass;", entity)
+        self.assertIn("@IdClass(MasterDomain.Key.class)", entity)
         self.assertIn("@Lob", entity)
         self.assertIn("byte[] binary", entity)
-        self.assertIn("compareTo(that.id) == 0", key)
-        self.assertIn("stripTrailingZeros()", key)
+        # the composite key: a NUMBER part compares by value (1 and 1.0 are the same row)
+        self.assertIn("id.compareTo(key.id) == 0", entity)
+        self.assertIn("stripTrailingZeros()", entity)
 
     def test_two_triggers_reuse_one_repository_and_dto(self):
         tree = ET.fromstring(FORM)
@@ -211,11 +216,11 @@ class JpaAssistantTests(unittest.TestCase):
         second, client = self.propose(response)
         context = client.requests[0]["messages"][1]["content"]
         # Only the signature of the earlier trigger's method is offered for reuse, not the class.
-        self.assertIn("existing methods (reuse them): LookupAppAccountEntity findAccount(BigDecimal id)", context)
+        self.assertIn("existing methods (reuse them): AccountDomain findAccount(BigDecimal id)", context)
         self.assertNotIn("@PersistenceContext", context)
         engine.apply_proposal(self.out, second["id"], reviewed=True)
         self.assertEqual(repository.read_bytes(), original)
-        self.assertEqual(self.service.read_text().count("private LookupAppAccountRepository lookupAppAccountRepository;"), 1)
+        self.assertEqual(self.service.read_text().count("private AccountRepository accountRepository;"), 1)
         self.assertEqual(engine.prepare_workspace(self.out)["tasks"], [])
 
     def test_reported_needs_context_with_repository_is_now_a_visible_draft(self):
@@ -244,7 +249,7 @@ class JpaAssistantTests(unittest.TestCase):
 public ActionResult onCtrlRun(UserDto user, ActionRequest request) throws Exception {
     return log1x(log, LookupConstants.ON_CTRL_RUN_NAME, user, null, () -> {
         BigDecimal id = PlsqlValues.number(request.blocks(), "CTRL", "ID");
-        LookupAppAccountEntity row = lookupAppAccountRepository.loadAccount(id);
+        AccountDomain row = accountRepository.loadAccount(id);
         if (row == null) {
             throw new IllegalStateException("NO_DATA_FOUND");
         }
@@ -258,35 +263,27 @@ public ActionResult onCtrlRun(UserDto user, ActionRequest request) throws Except
 ```java
 package hu.company.features.lookup.dps;
 
-import javax.persistence.EntityManager;
-import org.springframework.stereotype.Repository;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
-@Repository
-public class LookupAppAccountRepository {
-    private final EntityManager em;
-
-    public LookupAppAccountRepository(EntityManager em) {
-        this.em = em;
-    }
-
-    public LookupAppAccountEntity loadAccount(BigDecimal id) {
-        return id == null ? null : em.find(LookupAppAccountEntity.class, id);
-    }
+public interface AccountRepository extends JpaRepository<AccountDomain, BigDecimal> {
+    @Query("SELECT d FROM AccountDomain d WHERE d.id = :id")
+    AccountDomain loadAccount(@Param("id") BigDecimal id);
 }
 ```
 """
         result, _ = self.propose(markdown)
         self.assertEqual(result["status"], "proposal")
         self.assertEqual(result["extraction"]["problems"], [])
-        self.assertTrue(any("entityManager" in note for note in result["extraction"]["notes"]))
-        self.compile_and_run(result)
+        self.compile_and_run(result, "loadAccount")
 
     def test_reviewed_service_repository_and_dto_compile_and_execute_as_java_11(self):
         if not shutil.which("java"): self.skipTest("JDK szükséges")
         result, _ = self.propose()
         self.compile_and_run(result)
 
-    def compile_and_run(self, result):
+    def compile_and_run(self, result, method="findAccount"):
         engine.apply_proposal(self.out, result["id"], reviewed=True)
         stubs = write_stubs(self.root / "stubs") + write_jpa_stubs(self.root / "stubs")
         runner = self.root / "Runner.java"
@@ -296,29 +293,17 @@ import hu.company.common.UserDto;
 import java.util.Map;
 public class Runner {
     public static void main(String[] args) throws Exception {
-        LookupAppAccountEntity entity = new LookupAppAccountEntity();
+        AccountDomain entity = new AccountDomain();
         entity.setId(new java.math.BigDecimal("1"));
         entity.setName("Teszt ügyfél");
-        LookupAppAccountRepository repository = new LookupAppAccountRepository();
-        javax.persistence.EntityManager em = new javax.persistence.EntityManager() {
-            public <T> T find(Class<T> type, Object id) {
-                return java.math.BigDecimal.ONE.equals(id) ? type.cast(entity) : null;
-            }
-            public javax.persistence.Query createNativeQuery(String sql) { throw new UnsupportedOperationException(); }
-            public void persist(Object entity) { throw new UnsupportedOperationException(); }
-            public <T> T merge(T entity) { throw new UnsupportedOperationException(); }
-            public void remove(Object entity) { throw new UnsupportedOperationException(); }
-            public javax.persistence.criteria.CriteriaBuilder getCriteriaBuilder() { throw new UnsupportedOperationException(); }
-            public <T> javax.persistence.TypedQuery<T> createQuery(javax.persistence.criteria.CriteriaQuery<T> q) {
-                throw new UnsupportedOperationException();
-            }
-            public javax.persistence.Query createQuery(javax.persistence.criteria.CriteriaUpdate q) { throw new UnsupportedOperationException(); }
-            public javax.persistence.Query createQuery(javax.persistence.criteria.CriteriaDelete q) { throw new UnsupportedOperationException(); }
-        };
-        java.lang.reflect.Field emf = LookupAppAccountRepository.class.getDeclaredField("entityManager");
-        emf.setAccessible(true); emf.set(repository, em);
+        // the repository interface as Spring Data would run its @Query method: one row by id, or none
+        AccountRepository repository = (AccountRepository) java.lang.reflect.Proxy.newProxyInstance(
+            AccountRepository.class.getClassLoader(), new Class<?>[] {AccountRepository.class}, (proxy, call, arguments) -> {
+                if (!call.getName().equals("METHOD")) throw new UnsupportedOperationException(call.getName());
+                return java.math.BigDecimal.ONE.equals(arguments[0]) ? entity : null;
+            });
         LookupServiceImpl service = new LookupServiceImpl(new org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate());
-        java.lang.reflect.Field dep = LookupServiceImpl.class.getDeclaredField("lookupAppAccountRepository");
+        java.lang.reflect.Field dep = LookupServiceImpl.class.getDeclaredField("accountRepository");
         dep.setAccessible(true); dep.set(service, repository);
         ActionResult result = service.onCtrlRun(new UserDto(), new ActionRequest(Map.of("CTRL", Map.of("ID", "1")), Map.of()));
         if (!"Teszt ügyfél".equals(result.blocks().get("CTRL").get("NAME"))) throw new AssertionError("Repository result was not returned");
@@ -333,7 +318,7 @@ public class Runner {
         }
         System.out.println("SERVICE_REPOSITORY_RUNTIME_OK");
     }
-}""")
+}""".replace("METHOD", method))
         paths = list((self.out / "backend").rglob("*.java")) + stubs + [runner]
         args = self.root / "sources.args"
         args.write_text("\n".join('"' + str(p) + '"' for p in paths))

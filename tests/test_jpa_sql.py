@@ -107,12 +107,16 @@ class TranslateTests(unittest.TestCase):
 
     def test_select_into_is_a_value_with_the_pl_sql_exceptions(self):
         [method] = self.method('SELECT nev INTO :RENDELES.VEVO_NEV FROM vevo WHERE kod = :RENDELES.VEVO;')
-        self.assertEqual((method.repository, method.signature), ('RendelesVevoRepository', 'String findNevByKod(String kod)'))
+        self.assertEqual((method.repository, method.signature), ('VevoRepository', 'String findNevByKod(String kod)'))
         self.assertEqual(method.arguments, (':RENDELES.VEVO',))
         self.assertIn(' * Forms-SQL: SELECT nev INTO :RENDELES.VEVO_NEV FROM vevo WHERE kod = :RENDELES.VEVO', method.source)
         self.assertIn('Nincs sor: NoResultException (NO_DATA_FOUND)', method.source)
-        self.assertIn('query.where(cb.equal(root.<String>get("kod"), kodValue));', method.source)
-        self.assertIn('.setParameter(kodValue, kod)\n                .getSingleResult();', method.source)
+        # the rows of a JPQL @Query, one row as PL/SQL wants it (a default method of the repository interface)
+        self.assertIn('    @Query("SELECT d.nev FROM VevoDomain d WHERE d.kod = :kod")\n'
+                      '    List<String> findNevByKodRows(@Param("kod") String kod);', method.source)
+        self.assertIn('    default String findNevByKod(String kod) {', method.source)
+        self.assertIn('throw new NoResultException("NO_DATA_FOUND");', method.source)
+        self.assertIn('throw new NonUniqueResultException("TOO_MANY_ROWS");', method.source)
 
     def test_aggregates_existence_and_lists(self):
         count, total, last = self.method(
@@ -120,37 +124,40 @@ class TranslateTests(unittest.TestCase):
             'SELECT SUM(mennyiseg) INTO v FROM rendeles_tetel WHERE rendeles_id = :RENDELES.ID;\n'
             'SELECT MAX(vevo) INTO v FROM rendeles;')
         self.assertEqual(count.signature, 'BigDecimal countByRendelesIdAndAktiv(BigDecimal rendelesId)')
-        self.assertIn('return BigDecimal.valueOf(entityManager.createQuery(query)', count.source)
+        self.assertIn('@Query("SELECT COUNT(d) FROM RendelesTetelDomain d WHERE (d.rendelesId = :rendelesId AND d.aktiv = \'I\')")', count.source)
+        self.assertIn('return BigDecimal.valueOf(countByRendelesIdAndAktivValue(rendelesId));', count.source)
         self.assertEqual(total.signature, 'BigDecimal sumMennyisegByRendelesId(BigDecimal rendelesId)')
-        self.assertIn('query.select(cb.greatest(root.<String>get("vevo")));', last.source)  # MAX of a text: greatest
+        self.assertIn('@Query("SELECT MAX(d.vevo) FROM RendelesDomain d")\n    String maxVevo();', last.source)
         exists, rows = self.method('DECLARE CURSOR c IS SELECT 1 FROM rendeles_tetel t WHERE t.rendeles_id = :RENDELES.ID;\n'
                                    'BEGIN NULL; END;\nFOR r IN (SELECT cikk FROM rendeles_tetel WHERE UPPER(cikk) LIKE '
                                    "UPPER(:CTRL.SZURO) || '%' ORDER BY cikk DESC) LOOP NULL; END LOOP;")
         self.assertEqual((exists.signature, exists.kind), ('boolean existsByRendelesId(BigDecimal rendelesId)', 'exists'))
-        self.assertIn('.setMaxResults(1)', exists.source)
-        self.assertEqual(rows.signature, 'List<RendelesRendelesTetelEntity> findAllByCikk(String cikk)')
-        self.assertIn('cb.like(cb.upper(root.<String>get("cikk")), cb.concat(cb.upper(cikkValue), cb.literal("%")))', rows.source)
-        self.assertIn('query.orderBy(cb.desc(root.get("cikk")));', rows.source)
+        self.assertIn('SELECT CASE WHEN COUNT(d) > 0 THEN true ELSE false END FROM RendelesTetelDomain d WHERE d.rendelesId = :rendelesId',
+                      exists.source.replace('"\n            + "', ''))
+        self.assertEqual(rows.signature, 'List<RendelesTetelDomain> findAllByCikk(String cikk)')
+        self.assertIn("WHERE UPPER(d.cikk) LIKE CONCAT(UPPER(:cikk), '%') ORDER BY d.cikk DESC", rows.source.replace('"\n            + "', ''))
 
     def test_writes(self):
         insert, sequence = self.method('INSERT INTO rendeles (id, vevo, datum, statusz, osszeg) '
                                        "VALUES (rendeles_seq.NEXTVAL, :RENDELES.VEVO, SYSDATE, 'U', NULL);")
         self.assertEqual(insert.signature, 'void insertRendeles(String vevo)')
-        for line in ('entity.setId(nextRendelesSeq());', 'entity.setVevo(vevo);', 'entity.setDatum(now);',
-                     'entity.setStatusz("U");', 'entityManager.persist(entity);'):
+        for line in ('default void insertRendeles(String vevo) {', 'entity.setId(nextRendelesSeq());', 'entity.setVevo(vevo);',
+                     'entity.setDatum(now);', 'entity.setStatusz("U");', 'if (existsById(entity.getId())) {',
+                     'throw new EntityExistsException("DUP_VAL_ON_INDEX");', 'saveAndFlush(entity);'):
             self.assertIn(line, insert.source)
         self.assertNotIn('setOsszeg', insert.source)  # NULL: a new entity's field is null already
         self.assertEqual(sequence.signature, 'BigDecimal nextRendelesSeq()')
         update, delete = self.method('UPDATE rendeles SET statusz = NULL, osszeg = osszeg + :CTRL.EV WHERE id = :RENDELES.ID;\n'
                                      "DELETE FROM rendeles_tetel WHERE rendeles_id = :RENDELES.ID AND aktiv IN ('N', 'X');")
         self.assertEqual(update.signature, 'int updateStatuszAndOsszegById(BigDecimal osszeg, BigDecimal id)')
-        self.assertIn('update.set(root.<String>get("statusz"), cb.nullLiteral(String.class));', update.source)
-        self.assertIn('cb.sum(root.<BigDecimal>get("osszeg"), osszegValue)', update.source)
+        self.assertIn('    @Modifying(flushAutomatically = true, clearAutomatically = true)\n'
+                      '    @Query("UPDATE RendelesDomain d SET d.statusz = NULL, d.osszeg = (d.osszeg + :osszeg) WHERE d.id = :id")',
+                      update.source)
         self.assertEqual(delete.signature, 'int deleteByRendelesIdAndAktiv(BigDecimal rendelesId)')
-        self.assertIn('root.<String>get("aktiv").in(cb.literal("N"), cb.literal("X"))', delete.source)
+        self.assertIn("d.aktiv IN ('N', 'X')", delete.source)
         [sequence] = self.method('SELECT tetel_seq.NEXTVAL INTO :TETEL.ID FROM dual;', own='RENDELES_TETEL')
-        self.assertEqual((sequence.repository, sequence.signature), ('RendelesRendelesTetelRepository', 'BigDecimal nextTetelSeq()'))
-        self.assertIn('createNativeQuery("SELECT TETEL_SEQ.NEXTVAL FROM DUAL")', sequence.source)
+        self.assertEqual((sequence.repository, sequence.signature), ('RendelesTetelRepository', 'BigDecimal nextTetelSeq()'))
+        self.assertIn('@Query(value = "SELECT TETEL_SEQ.NEXTVAL FROM DUAL", nativeQuery = true)', sequence.source)
 
     def test_what_the_subset_does_not_cover_is_named(self):
         for code, reason in (('SELECT r.nev INTO x FROM vevo r, rendeles s WHERE r.kod = s.vevo;', 'több tábla'),
@@ -172,11 +179,11 @@ class TranslateTests(unittest.TestCase):
         result, descriptors = attach(code + '\n' + code, self.root)
         self.assertEqual(len(result['methods']), 1)  # the same statement twice: one method
         vevo = next(d for d in descriptors if d['table'] == 'VEVO')
-        self.assertEqual(vevo['existing_repository'].count('public String findNevByKod('), 1)
+        self.assertEqual(vevo['existing_repository'].count('default String findNevByKod('), 1)
         # A later task finds the method in the repository file: reused as it is.
         again, _ = attach(code, self.root, descriptors=descriptors)
         self.assertEqual(again['methods'][0].name, 'findNevByKod')
-        self.assertEqual(vevo['existing_repository'].count('public String findNevByKod('), 1)
+        self.assertEqual(vevo['existing_repository'].count('default String findNevByKod('), 1)
         # Another statement with the same name: a numbered method next to it.
         other, _ = attach("SELECT nev INTO :RENDELES.VEVO_NEV FROM vevo WHERE kod = 'X';", self.root, descriptors=descriptors)
         self.assertEqual(other['methods'][0].signature, 'String findNevByKod2()')
@@ -242,7 +249,7 @@ class AssistantTests(unittest.TestCase):
         lezar = engine.preview(self.out, tasks['onCtrlPbLezar']['id'], self.options)
         self.assertTrue(lezar['deterministic'])  # the migrator writes this button (action_java); the prompt is the fallback
         self.assertIn('2. Database access only through the generated repository methods listed below', lezar['user'])
-        self.assertIn("- rendelesRendelesRepository.updateStatuszById(BigDecimal id) returns int\n"
+        self.assertIn("- rendelesRepository.updateStatuszById(BigDecimal id) returns int\n"
                       "  SQL: UPDATE rendeles SET statusz = 'L' WHERE id = :RENDELES.ID", lezar['user'])
         self.assertNotIn('// REPOSITORY', lezar['user'])
         self.assertNotIn('UPDATE / INSERT / DELETE of a table: a repository method', lezar['user'])
@@ -250,16 +257,16 @@ class AssistantTests(unittest.TestCase):
         update = engine.preview(self.out, tasks['triggerOnUpdateRendeles']['id'], self.options)
         self.assertIn('SQL without a generated method (write one public method for each, in the repository of its table):\n'
                       '- UPDATE rendeles r SET r.statusz = :RENDELES.STATUSZ', update['user'])
-        self.assertIn('// REPOSITORY RendelesRendelesRepository', update['user'])
+        self.assertIn('// REPOSITORY RendelesRepository', update['user'])
 
     def test_simple_record_triggers_need_no_model(self):
         expected = {
-            'triggerPostChangeVevoRendeles': 'try {\n    row.vevoNev = rendelesVevoRepository.findNevByKod(row.vevo);\n'
+            'triggerPostChangeVevoRendeles': 'try {\n    row.vevoNev = vevoRepository.findNevByKod(row.vevo);\n'
                                              '} catch (NoResultException e) {\n    row.vevoNev = null;\n}',
-            'triggerPreInsertTetel': 'row.id = rendelesRendelesTetelRepository.nextTetelSeq();',
+            'triggerPreInsertTetel': 'row.id = rendelesTetelRepository.nextTetelSeq();',
             'triggerWhenValidateItemMennyisegTetel': 'if (SqlValues.truth(SqlValues.compare(row.mennyiseg, new BigDecimal("1000"), ">"))) {\n'
                                                      '    context.message("Túl nagy mennyiség.");\n    context.abort();\n}',
-            'triggerOnCheckDeleteMasterRendeles': 'if (rendelesRendelesTetelRepository.existsByRendelesId(row.id)) {\n'
+            'triggerOnCheckDeleteMasterRendeles': 'if (rendelesTetelRepository.existsByRendelesId(row.id)) {\n'
                                                   '    context.message("A rendeléshez tételek tartoznak.");\n    context.abort();\n}'}
         self.assertTrue(engine.preview(self.out, self.tasks()['triggerPreInsertTetel']['id'], self.options)['deterministic'])
         for method, body in expected.items():
@@ -280,10 +287,11 @@ class AssistantTests(unittest.TestCase):
         self.assertIn('//region Eredeti Forms-kód: RENDELES.VEVO / POST-CHANGE', hook)  # the original code stays
         self.assertIn('// Bemenet/kimenet: a rekord', hook)
         self.assertNotIn('AI-ra vár', hook)  # written: it waits for nothing
-        self.assertIn('private RendelesVevoRepository rendelesVevoRepository;', service)
-        repository = (self.out / 'backend/DPS/RendelesRendelesTetelRepository.java').read_text(encoding='utf-8')
-        self.assertIn('public boolean existsByRendelesId(BigDecimal rendelesId) {', repository)
-        self.assertIn('public BigDecimal nextTetelSeq() {', repository)
+        self.assertIn('private VevoRepository vevoRepository;', service)
+        repository = (self.out / 'backend/DPS/RendelesTetelRepository.java').read_text(encoding='utf-8')
+        self.assertIn('    boolean existsByRendelesId(@Param("rendelesId") BigDecimal rendelesId);', repository)
+        self.assertIn('    BigDecimal nextTetelSeq();', repository)  # the block's sequence: jpa_crud's method, reused
+        self.assertEqual(repository.count('BigDecimal nextTetelSeq()'), 1)
         compile_java(self, self.root, list((self.out / 'backend').rglob('*.java')))
 
     def test_the_model_calls_a_generated_method(self):
@@ -298,7 +306,7 @@ public ActionResult onCtrlPbLezar(UserDto user, ActionRequest request) throws Ex
         if (!"1".equals(answers.get("FRM.ALERTS"))) {
             throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "A művelet megszakítva.");
         }
-        rendelesRendelesRepository.updateStatuszById(PlsqlValues.number(request.blocks(), "RENDELES", "ID"));
+        rendelesRepository.updateStatuszById(PlsqlValues.number(request.blocks(), "RENDELES", "ID"));
         Map<String, Map<String, String>> blocks = new LinkedHashMap<>();
         PlsqlValues.put(blocks, "RENDELES", "STATUSZ", "L");
         return new ActionResult(blocks, List.of(), List.of(), Map.of());
@@ -311,8 +319,8 @@ public ActionResult onCtrlPbLezar(UserDto user, ActionRequest request) throws Ex
             result = engine.propose(self.out, self.tasks()['onCtrlPbLezar']['id'], self.options)
         self.assertEqual((result['status'], result['calls'], result['deterministic']), ('proposal', 1, False))
         engine.apply_proposal(self.out, result['id'], reviewed=True)
-        repository = (self.out / 'backend/DPS/RendelesRendelesRepository.java').read_text(encoding='utf-8')
-        self.assertIn('public int updateStatuszById(BigDecimal id) {', repository)
+        repository = (self.out / 'backend/DPS/RendelesRepository.java').read_text(encoding='utf-8')
+        self.assertIn('    int updateStatuszById(@Param("id") BigDecimal id);', repository)
         compile_java(self, self.root, list((self.out / 'backend').rglob('*.java')))
 
     def test_entity_manager_in_the_service_is_still_refused_and_kept_as_a_draft(self):
