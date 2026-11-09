@@ -19,7 +19,7 @@ from unittest.mock import patch
 from frm_forms import backend_assistant as engine, jpa_assistant, jpa_sql, schema_workbench as schema
 from frm_forms.cli import main
 from frm_forms.common import MigrationError
-from java_support import COMPANY_IMPORTS, trigger_mode, write_jpa_stubs, write_stubs
+from java_support import COMPANY_IMPORTS, compile_copies, trigger_mode, write_jpa_stubs, write_stubs
 from test_backend_assistant import Client
 
 setUpModule, tearDownModule = trigger_mode('ai')
@@ -67,6 +67,7 @@ def compile_java(test, root: Path, sources: list[Path]) -> None:
     if not shutil.which('java'):
         return
     stubs = write_stubs(root / 'stubs') + write_jpa_stubs(root / 'stubs')
+    sources = compile_copies(sources, root)  # the frames the assistant has not written yet: written here
     args = root / 'sources.args'
     args.write_text('\n'.join('"' + str(p) + '"' for p in sources + stubs))
     built = subprocess.run(['java', 'com.sun.tools.javac.Main', '--release', '11', '-encoding', 'UTF-8', '-d', str(root / 'classes'),

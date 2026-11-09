@@ -191,23 +191,25 @@ class HeadstartCleanupTests(unittest.TestCase):
         for absent in ['Calendar', 'QmsTransErrors', 'createAit', 'deleteAit', 'listAit', 'insertRow', 'deleteRow', 'selectPage']:
             self.assertNotIn(absent, service)
         self.assertLessEqual(service.count('Tiltás oka'), 4)
-        self.assertEqual(service.count('Migrációs váz'), 1)  # module-level reason once, not per method
-        self.assertIn('static final boolean MODULE_REVIEWED = false;', service)
+        # No module switch and no module-level comment block: the review notes are in the reports.
+        self.assertEqual(service.count('Migrációs váz'), 0)
+        self.assertNotIn('MODULE_REVIEWED', service)
+        self.assertIn('Migrációs váz', (out / 'migration-report.md').read_text(encoding='utf-8'))
         plan = json.loads((out / 'analysis/backend-plan.json').read_text(encoding='utf-8'))
         self.assertEqual({s['block'] for s in plan['skipped_blocks']}, {'CALENDAR', 'QMS$TRANS_ERRORS'})
         self.assertEqual(sorted(s['operation'] for s in plan['skipped_operations'] if s['block'] == 'AIT'), ['create', 'delete', 'list'])
         schema = json.loads((out / 'analysis/backend-schema.example.json').read_text(encoding='utf-8'))
         self.assertEqual(set(schema['blocks']), {'AIT'})
 
-    def test_clean_operation_waits_only_for_the_module_switch(self):
+    def test_a_clean_operation_is_live_without_a_module_switch(self):
         out = self.generate(headstart_form(post_query=False))
         service = (out / 'backend/DPS/TesztServiceImpl.java').read_text(encoding='utf-8')
-        # the one switch in the ServiceImpl: the guard's operations follow MODULE_REVIEWED
-        self.assertRegex(' '.join(service.split()), r'MODULE_REVIEWED \? Set\.of\([^)]*"search"[^)]*\) : Set\.of\(\)')
-        self.assertIn('a MODULE_REVIEWED kapcsolóval engedélyezhető', service)
+        # No switch in the ServiceImpl: a clean operation is enabled, the developer decides when the module is used.
+        self.assertNotIn('MODULE_REVIEWED', service)
+        self.assertRegex(' '.join(service.split()), r'Set\.of\([^)]*"search"[^)]*\)')
         plan = json.loads((out / 'analysis/backend-plan.json').read_text(encoding='utf-8'))
         search = next(e for e in plan['endpoints'] if e.get('operation') == 'search')
-        self.assertEqual((search['implemented'], search['ready_after_module_review']), (False, True))
+        self.assertEqual((search['implemented'], search['ready_after_module_review']), (True, False))
 
     # 4. Spacers
     def test_catalogued_spacers_become_empty_elements(self):

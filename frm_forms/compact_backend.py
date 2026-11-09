@@ -5,7 +5,7 @@ import json
 import re
 from collections import defaultdict
 from pathlib import Path
-from textwrap import indent, wrap
+from textwrap import indent
 
 from .action_scaffold import comment_lines
 from .common import jstr, name, write_json, java_text_block
@@ -352,29 +352,13 @@ def short(text, limit=160):
 
 
 def crud_info(o, model):
-    """Two or three lines above a CRUD method: what runs, which Forms triggers, and why it may be off."""
+    """One helper line above a CRUD method (two when the operation is off: why)."""
     b, op = o['block'], o['op']
     enabled, ready, blockers = capability(b, op)
     words = {'list': 'lista', 'search': 'keresés a Forms WHERE feltételével', 'create': 'új rekord', 'update': 'módosítás', 'delete': 'törlés'}
-    state = 'engedélyezett' if enabled else 'a MODULE_REVIEWED kapcsolóval engedélyezhető' if ready else 'tiltva'
-    lines = [f"Forms blokk: {b['name']} ({b['table']}) · {words.get(op, op)} · {state}."]
-    events = {'list': {'POST-QUERY', 'POST-CHANGE'}, 'search': {'POST-QUERY', 'POST-CHANGE'},
-              'create': {'POST-CHANGE', 'WHEN-VALIDATE-ITEM', 'WHEN-VALIDATE-RECORD', 'PRE-INSERT', 'ON-INSERT', 'POST-INSERT', 'POST-QUERY'},
-              'update': {'POST-CHANGE', 'WHEN-VALIDATE-ITEM', 'WHEN-VALIDATE-RECORD', 'PRE-UPDATE', 'ON-UPDATE', 'POST-UPDATE', 'POST-QUERY'},
-              'delete': {'ON-CHECK-DELETE-MASTER', 'PRE-DELETE', 'ON-DELETE', 'POST-DELETE'}}[op]
-    how = []
-    for t in model['triggers']:
-        if t['block'] != b['name'] or t['event'] not in events:
-            continue
-        kind = ('AI-ra vár' if t.get('ai') else 'PL/SQL az adatbázisban' if t.get('passthrough') else 'Java') if t['status'] == 'converted' else \
-            ('Forms-futtatókörnyezet, kihagyva' if t.get('forms_runtime') else 'keretrendszer, kihagyva') \
-                if t['status'] == 'framework' else 'kézi átültetés'
-        how.append(t['event'] + ' (' + kind + ')')
-    if how:
-        lines.append('Triggerek: ' + ', '.join(sorted(set(how))) + '.')
+    lines = [f"{b['name']} blokk ({b['table']}): {words.get(op, op)}."]
     if not enabled and blockers:
-        lines.append('Ok: ' + short(blockers[0]) + (f' (+{len(blockers) - 1})' if len(blockers) > 1 else ''))
-    lines.append('SQL és triggerkód: ebben a DPS ServiceImpl-ben; részletek: analysis/backend-evidence.md')
+        lines.append('Tiltva: ' + short(blockers[0]) + (f' (+{len(blockers) - 1})' if len(blockers) > 1 else ''))
     return lines
 
 
@@ -451,31 +435,9 @@ def short_skip(reason):
 
 
 def module_header(model, cls):
-    """One comment for everything that is module-wide, instead of one per method."""
-    gate = model.get('module_gate', {})
-    lines = []
-    if gate.get('required'):
-        lines += ['MODULSZINTŰ ELLENŐRZÉS: minden generált adatvégpontra (CRUD, keresés, LOV) vonatkozik, ezért itt, egyszer szerepel.']
-        lines += ['  - ' + reason for reason in gate['reasons']]
-        lines += ['Ha ezeket ellenőrizted, állítsd true-ra a MODULE_REVIEWED értékét: a saját tiltás nélküli ("kész")',
-                  'műveletek ekkor élesednek; a saját tiltással rendelkezők továbbra is HTTP 501-et adnak.']
-    skipped = skipped_blocks(model)
-    ops = [(b['name'], o) for b in model['blocks'] for o in b.get('skipped_operations', [])]
-    if skipped or ops:
-        if lines: lines.append('')
-        lines.append('Nem generált végpontok (részletek: analysis/backend-plan.json):')
-        lines += ['  - ' + s['block'] + ': ' + short_skip(s['reason']) for s in skipped]
-        grouped = {}
-        for block, o in ops:
-            grouped.setdefault(block, []).append(o['operation'] + ' (' + o['reason'].split(':')[0] + ')')
-        lines += ['  - ' + block + ': ' + ', '.join(items) for block, items in grouped.items()]
-    text = ''.join('    //' + (' ' + line.replace('\\', '[backslash]') if line else '') + '\n' for line in lines)
-    if gate.get('required'):
-        live = bool(model.get('options', {}).get('backend_live'))
-        if live:
-            text += '    // backend_live: generáláskor élesítve; a fenti pontokat ettől még érdemes átnézni.\n'
-        text += '    static final boolean MODULE_REVIEWED = ' + str(live).lower() + ';\n'
-    return text
+    """Nothing module-wide in the ServiceImpl: no switch, no list of what was not generated (analysis/backend-plan.json
+    has it). The developer puts the module to use when it is done."""
+    return ''
 
 
 def manual_source(action, discovery) -> str:
@@ -508,7 +470,7 @@ def ai_action_method(o, model, discovery, log1x, user_type, blocks) -> str:
     label = action['owner'] + ' / ' + action['event']
     reads, parameters = o.get('ai_reads') or action_reads(action, discovery)
     query = o.get('query_action') or {}
-    notes = ['AI-ra vár. A képernyő ezeket küldi: ' + (', '.join(reads) or '—')
+    notes = ['A képernyő ezeket küldi: ' + (', '.join(reads) or '—')
              + ((' · paraméterek: ' + ', '.join(parameters)) if parameters else '') + '.']
     trigger = next((t for t in model['triggers'] if t['owner'] == action['owner'] and t['event'] == action['event']), {})
     notes += ai_triggers.framework_note('', None, trigger.get('framework_calls'))
@@ -517,8 +479,7 @@ def ai_action_method(o, model, discovery, log1x, user_type, blocks) -> str:
         notes.append('Lekérdezőgomb: a(z) ' + target['name'] + ' (' + target['table'] + ') sorait adja vissza '
                      '(PageResult<' + target['class'] + 'Row>), a Forms-kód szűrőjével és rendezésével.')
     original = ai_triggers.region(label, ai_action_sources(o, model, discovery), '            ', notes)
-    info = [label + ': a Forms-kód Java-változatát a Java asszisztens (helyi AI) írja ide.',
-            'A metódus kerete (végpont, DTO, tranzakció, log1x) végleges; csak a törzs változik.']
+    info = [label + ': a törzset a Java asszisztens írja meg a lenti Forms-kódból.']
     if query:
         returns, request = f"PageResult<{target['class']}Row>", 'QueryActionRequest'
     else:
@@ -528,7 +489,7 @@ def ai_action_method(o, model, discovery, log1x, user_type, blocks) -> str:
     @Override
     public {returns} {o['method']}({user_type} user, {request} request) throws Exception {{
         {log1x(o, '() -> {')}
-{original}{ai_triggers.placeholder(label, '            ')}
+{original}
         }});
     }}''')
 
@@ -977,18 +938,16 @@ public class {cls}ControllerImpl extends {controller_base} implements {cls}Contr
             evidence.append((o['method'], init_evidence(o, model) if o['action'].get('init') else action_evidence(o['action'], discovery)))
         elif o['op'] == 'action':
             reason = o.get('passthrough_reason') or 'A gomb kódja kézi átültetést igényel.'
-            info = [o['action']['owner'] + ' / ' + o['action']['event'] + ': az adatbázisban nem futtatható, kézi átültetés.',
-                    *wrap('Ok: ' + reason, width=108, break_long_words=False, break_on_hyphens=False),
-                    *(wrap('Java-lekérdezés sem készült: ' + o['query_java_reason'], width=108, break_long_words=False,
-                           break_on_hyphens=False) if o.get('query_java_reason') else []),
-                    'Teljes adapterdiagnózis: analysis/backend-plan.json; eredeti kód: analysis/backend-evidence.md']
-            # The original code where the developer ports it: trigger, local units, DO_KEY targets.
+            info = [o['action']['owner'] + ' / ' + o['action']['event'] + ': a törzs a lenti Forms-kódból készül (Java asszisztens '
+                    'vagy kézzel); az ok: analysis/backend-plan.json.']
+            # The original code where the body is written: trigger, local units, DO_KEY targets. The body stays
+            # empty: a placeholder or a half-started body only confuses whoever writes it.
             original = manual_source(o['action'], discovery)
             dps_methods.append(comment_lines('\n'.join(info), '    ') + f'''
     @Override
     public ActionResult {o['method']}({user_type} user, ActionRequest request) throws Exception {{
         {log1x(o, '() -> {')}
-{original}            throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED, {jstr('Ez a gomb még nincs átültetve: ' + o['action']['owner'])});
+{original}
         }});
     }}''')
             evidence.append((o['method'], 'Tiltás oka: ' + reason + '\n'

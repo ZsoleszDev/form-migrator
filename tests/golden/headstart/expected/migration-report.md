@@ -35,9 +35,9 @@ Ez tényleges generálási leltár, nem funkcionális azonosságot becslő száz
 | CALENDAR | calendar | — | — | — | — |
 | QMS$TRANS_ERRORS | qmsTransErrors | — | — | — | — |
 
-A „kész, MODULE_REVIEWED-re vár” műveleteknek nincs saját tiltása; a DPS ServiceImpl egyetlen MODULE_REVIEWED kapcsolója élesíti őket, ha a modulszintű ellenőrzés megtörtént:
+Modulszintű átnézendő pontok (a generált kódot nem tiltják; a modult a fejlesztő veszi használatba, ha kész):
 
-- Migrációs váz: az összes adatbázis-művelet tiltott az ellenőrzött implementációig.
+- Migrációs váz: az adatbázis-műveleteket a használatba vétel előtt ellenőrizni kell.
 
 Backend nélküli blokkok (nincs adatforrás):
 
@@ -79,7 +79,7 @@ Backend nélküli blokkok (nincs adatforrás):
 | UNSUPPORTED_TRIGGER | AIT | frontend | AIT:KEY-DELREC: billentyű-trigger: a webes képernyő saját vezérlője hívja a generált végpontot; a végpontot nem tiltja, a többletlogikát a képernyőn kell átnézni. |
 | UNSUPPORTED_TRIGGER | AIT | all | AIT:POST-QUERY: POST-QUERY nem írhat adatbázismezőt ebben a snapshot-alapú adapterben. Átfuttatás az adatbázisban sem lehetséges: A trigger ebben az eseményben nem visszaírható mezőt ír: AIT.AIT_MEGJ (lekérdezett adatbázismező, kulcs vagy nem módosítható oszlop). |
 | KEY_DISABLES_OPERATION | AIT | review | AIT:KEY-DELREC: a Forms-felületen a(z) törlés nem érhető el (a trigger nem hívja: DELETE_RECORD); a generált képernyő sem kínálja fel. |
-| SCAFFOLD_REVIEW_REQUIRED | @FORM:FRM_ANK_TESZT | all | Migrációs váz: az összes adatbázis-művelet tiltott az ellenőrzött implementációig. |
+| SCAFFOLD_REVIEW_REQUIRED | @FORM:FRM_ANK_TESZT | all | Migrációs váz: az adatbázis-műveleteket a használatba vétel előtt ellenőrizni kell. |
 
 Hatókör: all = a kapcsolódó olvasás és írás tiltva; read = csak az olvasás; write = minden írás; create/update/delete = csak az adott írás; button = az érintett gomb tiltva; frontend = képernyő-feladat, a backendet nem tiltja; review = megőrzött/ellenőrizendő elem.
 

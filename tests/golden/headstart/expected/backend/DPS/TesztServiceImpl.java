@@ -38,26 +38,14 @@ import org.springframework.web.server.ResponseStatusException;
 @XSlf4j
 @Service
 public class TesztServiceImpl extends ModuleServiceBase<DpsLogHelper> implements TesztService {
-    // MODULSZINTŰ ELLENŐRZÉS: minden generált adatvégpontra (CRUD, keresés, LOV) vonatkozik, ezért itt, egyszer szerepel.
-    //   - Migrációs váz: az összes adatbázis-művelet tiltott az ellenőrzött implementációig.
-    // Ha ezeket ellenőrizted, állítsd true-ra a MODULE_REVIEWED értékét: a saját tiltás nélküli ("kész")
-    // műveletek ekkor élesednek; a saját tiltással rendelkezők továbbra is HTTP 501-et adnak.
-    //
-    // Nem generált végpontok (részletek: analysis/backend-plan.json):
-    //   - CALENDAR: keretrendszer-blokk, nincs adatforrás
-    //   - QMS$TRANS_ERRORS: keretrendszer-blokk, nincs adatforrás
-    //   - AIT: list (A WHERE Forms-mezőre hivatkozik), create (InsertAllowed=false), delete (DeleteAllowed=false)
-    static final boolean MODULE_REVIEWED = false;
     private final NamedParameterJdbcTemplate jdbc;
 
     public TesztServiceImpl(NamedParameterJdbcTemplate jdbc) {
         this.jdbc = Objects.requireNonNull(jdbc);
     }
 
-    // Forms blokk: AIT (ANK_ADLAP_ITEMS) · módosítás · tiltva.
-    // Triggerek: POST-QUERY (kézi átültetés).
-    // Ok: A WHERE olvasási SQL-re lefordítva; írás előtt a rekordszűrést és szervercontextet külön ellenőrizni kell. (+2)
-    // SQL és triggerkód: ebben a DPS ServiceImpl-ben; részletek: analysis/backend-evidence.md
+    // AIT blokk (ANK_ADLAP_ITEMS): módosítás.
+    // Tiltva: A WHERE olvasási SQL-re lefordítva; írás előtt a rekordszűrést és szervercontextet külön ellenőrizni kell. (+2)
     @Transactional(rollbackFor = Exception.class)
     @Override
     public RowResult<AitRow> updateAit(UserDto user, AitRow original, AitRow value) throws Exception {
@@ -85,10 +73,8 @@ public class TesztServiceImpl extends ModuleServiceBase<DpsLogHelper> implements
         });
     }
 
-    // Forms blokk: AIT (ANK_ADLAP_ITEMS) · keresés a Forms WHERE feltételével · tiltva.
-    // Triggerek: POST-QUERY (kézi átültetés).
-    // Ok: AIT:POST-QUERY: POST-QUERY nem írhat adatbázismezőt ebben a snapshot-alapú adapterben. Átfuttatás az adatbázisban sem lehetséges: A trigger ebben az eseményben…
-    // SQL és triggerkód: ebben a DPS ServiceImpl-ben; részletek: analysis/backend-evidence.md
+    // AIT blokk (ANK_ADLAP_ITEMS): keresés a Forms WHERE feltételével.
+    // Tiltva: AIT:POST-QUERY: POST-QUERY nem írhat adatbázismezőt ebben a snapshot-alapú adapterben. Átfuttatás az adatbázisban sem lehetséges: A trigger ebben az eseményben…
     @Transactional(readOnly = true, rollbackFor = Exception.class)
     @Override
     public PageResult<AitRow> searchAit(UserDto user, SearchRequest<AitCriteria> request) throws Exception {
@@ -125,10 +111,6 @@ public class TesztServiceImpl extends ModuleServiceBase<DpsLogHelper> implements
     @Override
     public LovResult lovInptip(UserDto user, LovRequest request) throws Exception {
         return log1x(log, TesztConstants.LOV_INPTIP_NAME, user, null, () -> {
-            if (!MODULE_REVIEWED) {
-                throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED, "Ez a LOV ebben a modulban még nem "
-                        + "érhető el.");
-            }
             if (request == null) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Hiányzó kérés.");
             }
@@ -147,10 +129,6 @@ public class TesztServiceImpl extends ModuleServiceBase<DpsLogHelper> implements
         return log1x(log, TesztConstants.COMMIT_FORM_NAME, user, null, () -> {
             if (request == null) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Hiányzó kérés.");
-            }
-            if (!MODULE_REVIEWED) {
-                throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED, "Ez a művelet ebben a modulban még nem "
-                        + "érhető el.");
             }
             var blocks = new LinkedHashMap<String, Map<String, String>>();
             var globals = new LinkedHashMap<String, String>();

@@ -21,7 +21,7 @@ def operation_state(b: dict, op: str) -> str:
     key = "search" if op == "read" and plan.get("search") else op
     if b.get("can_" + key):
         return "igen"
-    return "kész, MODULE_REVIEWED-re vár" if b.get("ready_" + key) else "tiltva"
+    return "tiltva"
 
 
 def summary(model: dict) -> dict:
@@ -62,8 +62,8 @@ def reports(model: dict, output: Path, module: str, package: str, config: dict) 
     for b in model["blocks"]:
         lines.append("| " + " | ".join([markdown_cell(b["name"]), b["key"]] + [operation_state(b, op) for op in ["read", "create", "update", "delete"]]) + " |")
     gate = model.get("module_gate", {})
-    if gate.get("required"):
-        lines += ["", "A „kész, MODULE_REVIEWED-re vár” műveleteknek nincs saját tiltása; a DPS ServiceImpl egyetlen MODULE_REVIEWED kapcsolója élesíti őket, ha a modulszintű ellenőrzés megtörtént:", ""]
+    if gate.get("reasons"):
+        lines += ["", "Modulszintű átnézendő pontok (a generált kódot nem tiltják; a modult a fejlesztő veszi használatba, ha kész):", ""]
         lines += ["- " + markdown_cell(reason) for reason in gate["reasons"]]
     skipped = [(b["name"], b["backend_skip"]) for b in model["blocks"] if b.get("backend_skip")]
     if skipped:
@@ -93,7 +93,7 @@ def reports(model: dict, output: Path, module: str, package: str, config: dict) 
         lines += ["", "## OLB-öröklés — 2. lépés", "",
                   f"Feloldott kapcsolatok: {model['inheritance_summary']['resolved_links']}. A property-k és trigger-törzsek forrása az analysis/inheritance.json fájlban, a sablonkatalógus az analysis/olb-catalog.json fájlban található.",
                   "Az explicit értékek felülírják az örökölteket. A default jelölés a meglévő parser helyettesítő értékét jelenti; nem Oracle-verziókon át érvényes alapértéktáblát.",
-                  "Az XML-öröklés feloldása nem oldja fel a backend üzleti tiltásait. Az INHERITANCE / INHERITANCE_BACKEND_REVIEW tételek modulszintű ellenőrzésként maradnak meg: a DPS ServiceImpl MODULE_REVIEWED kapcsolója mögött, nem metódusonként ismételve.", ""]
+                  "Az XML-öröklés feloldása nem oldja fel a backend üzleti tiltásait. Az INHERITANCE / INHERITANCE_BACKEND_REVIEW tételek modulszintű átnézendő pontként maradnak meg (a riportban, nem a kódban).", ""]
     lines += ['', '## Modultérkép és gombvégpontok', '',
         'Kereshető, offline objektum- és hívástérkép: analysis/discovery/form-explorer.html. Eredeti forrás: analysis/discovery/sources/.',
         'A gombesemények fix végpontterve: analysis/action-plan.json. A lexikai hívásjelöltek szignatúrája, iránya és futási sorrendje ellenőrizendő.',

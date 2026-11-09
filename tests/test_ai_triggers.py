@@ -23,7 +23,7 @@ import xml.etree.ElementTree as ET
 from frm_forms import backend_assistant as engine
 from frm_forms.cli import main
 from frm_forms.common import MigrationError, read_json
-from java_support import COMPANY_IMPORTS, write_stubs
+from java_support import COMPANY_IMPORTS, compile_copies, write_stubs
 from screen_support import ANGULAR_CLI_OPTIONS, with_company_imports
 from test_backend_assistant import Client
 
@@ -31,7 +31,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 SERVICE = "backend/DPS/OrdersServiceImpl.java"
 HOOKS = ("triggerPostQueryOrders", "triggerPreInsertOrders", "triggerWhenValidateItemCodeOrders")
-ENDPOINTS = ("onCtrlCountBtn",)  # the query button is the migrator's (query_java), not an AI task
+ENDPOINTS = ("onCtrlCountBtn", "onCtrlSearchBtn")
 
 
 def form() -> str:
@@ -124,7 +124,8 @@ JPA_STUBS = {
 
 
 def compile_module(test: unittest.TestCase, output: Path, work: Path) -> None:
-    sources = list((output / "backend").rglob("*.java")) + write_stubs(work / "stubs")
+    # The frames the assistant has not written yet are empty (they do not compile until then): written here.
+    sources = compile_copies(list((output / "backend").rglob("*.java")), work) + write_stubs(work / "stubs")
     for name, body in JPA_STUBS.items():  # the JPA entity/repository of an applied proposal
         path = work / "stubs/javax/persistence" / (name + ".java")
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -153,6 +154,7 @@ class AiFramesTests(unittest.TestCase):
 
     def test_every_server_trigger_is_a_frame_with_its_commented_original_code(self):
         for method, line in (("onCtrlCountBtn", "SELECT count(*) INTO :CTRL.TOTAL FROM app_orders"),
+                             ("onCtrlSearchBtn", "set_block_property('ORDERS', DEFAULT_WHERE"),
                              ("triggerPostQueryOrders", "SELECT p.name INTO :ORDERS.PARTNER_NAME"),
                              ("triggerPreInsertOrders", "SELECT app_orders_seq.NEXTVAL INTO :ORDERS.ID FROM dual;"),
                              ("triggerWhenValidateItemCodeOrders", "IF length(:ORDERS.CODE) < 3 THEN")):
@@ -161,24 +163,18 @@ class AiFramesTests(unittest.TestCase):
                 self.assertIn("//region Eredeti Forms-kód: ", text)
                 self.assertIn("//endregion", text)
                 self.assertRegex(text, r"//\s+" + re.escape(line))
-                self.assertIn("// TODO(AI):", text)
-                self.assertIn("HttpStatus.NOT_IMPLEMENTED", text)
-                # Nothing of the trigger is translated: the frame only throws until the assistant writes it.
+                # Nothing is started: the body under the commented Forms code is empty until the assistant writes
+                # it (no TODO, no NOT_IMPLEMENTED throw, no half-translated code that would confuse the model).
+                self.assertNotIn("TODO(AI)", text)
+                self.assertNotIn("NOT_IMPLEMENTED", text)
+                self.assertNotIn("AI-ra vár", text)
+                self.assertRegex(text, r"//endregion\n\s*(?:\}\);\n\s*)?\}$")
                 body = code_lines(text)
                 self.assertNotIn("app_", body.lower())
                 self.assertNotIn("DbCalls", body)
+        self.assertIn("        return log1x(log, OrdersConstants.ON_CTRL_COUNT_BTN_NAME, user, null, () -> {\n", self.service)
+        self.assertNotIn("MODULE_REVIEWED", self.service)
         self.assertNotIn("DbCalls.call(", self.service)
-
-    def test_the_query_button_is_the_migrators_java_query(self):
-        """No AI task: the WHERE built like the Forms code built it, the screen value a bind, the block's JDBC query."""
-        text = method_text(self.service, "onCtrlSearchBtn")
-        self.assertNotIn("TODO(AI)", text)
-        self.assertIn('String filter = PlsqlValues.text(values, "CTRL", "FILTER");', text)
-        self.assertIn("var q = onCtrlSearchBtnQuery(filter);", text)
-        self.assertIn('jdbc.query("SELECT ID, CODE, NAME FROM APP_ORDERS WHERE " + whereText(q.where)', text)
-        self.assertIn("postQueryOrders(row, context);", text)
-        builder = self.service[self.service.index("static QueryText onCtrlSearchBtnQuery(String filter) {"):]
-        self.assertIn('q.where = "code like :filter || \'%\'";', builder[:builder.index("\n    }\n")])
 
     def test_frames_keep_the_final_contracts(self):
         self.assertIn("public ActionResult onCtrlCountBtn(UserDto user, ActionRequest request)", self.service)
@@ -196,16 +192,13 @@ class AiFramesTests(unittest.TestCase):
     def test_plan_report_and_screen_follow_the_ai_frames(self):
         plan = read_json(self.output / "analysis/backend-plan.json")
         endpoints = {e["method"]: e for e in plan["endpoints"]}
-        # The query button (DEFAULT_WHERE + EXECUTE_QUERY) needs no model: the migrator's equivalence-checked query.
-        self.assertEqual(endpoints["onCtrlSearchBtn"]["runs"], "java-query")
-        self.assertEqual(endpoints["onCtrlSearchBtn"]["blockers"], [])
         for method in ENDPOINTS:
             self.assertEqual(endpoints[method]["runs"], "ai")
             self.assertTrue(endpoints[method]["blockers"][0].startswith("AI-ra vár"))
         self.assertEqual(endpoints["onCtrlSearchBtn"]["query_block"], "ORDERS")
         self.assertEqual(plan["skipped_actions"], [])
         report = (self.output / "migration-report.md").read_text(encoding="utf-8")
-        self.assertRegex(report, r"AI-ra váró triggerek \(Java asszisztens\) \| 4 \|")
+        self.assertRegex(report, r"AI-ra váró triggerek \(Java asszisztens\) \| 5 \|")
         screen = (self.output / "frontend/orders/orders.component.ts").read_text(encoding="utf-8")
         # A plain action: its answer reaches the screen (written items, messages, GO_BLOCK/EXECUTE_QUERY).
         self.assertIn(".subscribe(res => this.applyActionResult(res));", screen)
@@ -249,6 +242,7 @@ class AiFramesTests(unittest.TestCase):
         self.assertEqual(tasks["triggerWhenValidateItemCodeOrders"]["pending_tables"], [])
         self.assertEqual(tasks["triggerPostQueryOrders"]["pending_tables"], ["APP_PARTNERS"])
         self.assertEqual(tasks["triggerPreInsertOrders"]["pending_tables"], ["APP_ORDERS"])  # the key's sequence
+        self.assertEqual(tasks["onCtrlSearchBtn"]["pending_tables"], ["APP_ORDERS"])
         self.assertEqual({t["kind"] for m, t in tasks.items() if m in HOOKS}, {"hook"})
         self.assertEqual(tasks["onCtrlCountBtn"]["event"], "WHEN-BUTTON-PRESSED")
         self.assertEqual(tasks["triggerPreInsertOrders"]["event"], "PRE-INSERT")
@@ -298,8 +292,8 @@ class HookAssistantTests(unittest.TestCase):
         self.assertIn("//region Eredeti Forms-kód: ORDERS.CODE / WHEN-VALIDATE-ITEM", hook)
         self.assertIn('context.message("Túl rövid kód");', hook)
         self.assertNotIn("NOT_IMPLEMENTED", hook)
-        # The other hooks still wait; the done one leaves the task list.
-        self.assertIn("NOT_IMPLEMENTED", method_text(service, "triggerPostQueryOrders"))
+        # The other hooks still wait (empty under their Forms code); the done one leaves the task list.
+        self.assertRegex(method_text(service, "triggerPostQueryOrders"), r"//endregion\n\s*\}$")
         remaining = {t["method"] for t in read_json(self.output / engine.AREA / "index.json")["tasks"]}
         self.assertNotIn("triggerWhenValidateItemCodeOrders", remaining)
         self.assertIn("triggerPostQueryOrders", remaining)
@@ -504,7 +498,7 @@ class QueueTests(unittest.TestCase):
         index = self.manager.index("job1")
         self.assertEqual([t["method"] for t in index["done_tasks"]], ["triggerWhenValidateItemCodeOrders"])
         self.assertEqual(index["auto"]["done"], 1)
-        self.assertEqual(index["auto"]["waiting_for_tables"], 3)  # the query button is not one: the migrator wrote it
+        self.assertEqual(index["auto"]["waiting_for_tables"], 4)
         # Nothing ready is left: a second automatic start queues nothing.
         with patch("frm_forms.ollama.opener", side_effect=AssertionError("no new request")):
             self.assertEqual(self.manager.auto_start("job1", reason="migration")["queued"], 0)

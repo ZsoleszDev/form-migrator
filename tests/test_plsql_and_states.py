@@ -123,15 +123,14 @@ class GenerationTests(unittest.TestCase):
         self.assertIn('+ PlsqlUnits.NAPLOZ +', data)
         self.assertIn('return log1x(log, PlsqlTesztConstants.ON_GOMBOK_PB_LEZAR', service)  # the button runs its PL/SQL here
         self.assertIn('return new ActionResult(blocks, PlsqlValues.lines(', service)
-        self.assertIn('static final boolean MODULE_REVIEWED = false;', service)
+        self.assertNotIn('MODULE_REVIEWED', service)
 
     def test_live_backend_is_usable_at_once(self):
         out = self.run_form(PLSQL_FORM, 'plsqlTeszt', config={'backend_live': True}, label='live')
         service = (out / 'backend/DPS/PlsqlTesztServiceImpl.java').read_text(encoding='utf-8')
         data = service
-        self.assertIn('static final boolean MODULE_REVIEWED = true;', service)
-        # one switch still turns everything off: the guard's operations follow MODULE_REVIEWED
-        self.assertRegex(' '.join(data.split()), r'MODULE_REVIEWED \? Set\.of\([^)]*"create"[^)]*\) : Set\.of\(\)')
+        self.assertNotIn('MODULE_REVIEWED', service)
+        self.assertRegex(' '.join(data.split()), r'Set\.of\([^)]*"create"[^)]*\)')
         plan = json.loads((out / 'analysis/backend-plan.json').read_text(encoding='utf-8'))
         implemented = lambda prefix: next(e['implemented'] for e in plan['endpoints'] if e['method'].startswith(prefix))
         self.assertTrue(all(implemented(m) for m in ('listB', 'createB', 'updateB', 'deleteB', 'onGombokPbLezar')))

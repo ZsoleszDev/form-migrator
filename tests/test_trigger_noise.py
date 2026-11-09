@@ -9,7 +9,7 @@ import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 
-from java_support import COMPANY_IMPORTS, trigger_mode, write_stubs
+from java_support import COMPANY_IMPORTS, compile_copies, trigger_mode, write_stubs
 from frm_forms.cli import main
 from frm_forms.framework import classify, load
 from frm_forms.plsql import Unsupported
@@ -202,15 +202,17 @@ class TriggerNoiseTests(unittest.TestCase):
             with self.subTest(body=body), self.assertRaises(Unsupported):
                 prepare(body, block='B', items={}, units={}, prefixes=())
 
-    def test_generation_is_deterministic_and_module_review_still_blocks_execution(self):
+    def test_generation_is_deterministic_and_no_module_switch_holds_it_back(self):
         one = self.generate(label='one')
         two = self.generate(label='two')
         for path in one.glob('backend/**/*.java'):
             self.assertEqual(path.read_bytes(), (two / path.relative_to(one)).read_bytes())
         plan = json.loads((one / 'analysis/backend-plan.json').read_text())
-        self.assertFalse(any(e['implemented'] for e in plan['endpoints']))
         action = next(e for e in plan['endpoints'] if e.get('owner') == 'CALENDAR.SAVE_DATE')
-        self.assertTrue(action['ready_after_module_review'])
+        # No MODULE_REVIEWED switch: a ready endpoint is live; the developer decides when the module is used.
+        self.assertTrue(action['implemented'])
+        self.assertFalse(action['ready_after_module_review'])
+        self.assertNotIn(b'MODULE_REVIEWED', b''.join(p.read_bytes() for p in one.glob('backend/**/*.java')))
 
     def test_generated_java_compiles_and_executes_typed_jdbc_binds_and_results(self):
         if not shutil.which('java'):
@@ -226,7 +228,7 @@ class TriggerNoiseTests(unittest.TestCase):
         self.assertEqual(input_keys, ['B.D', 'B.ID', 'B.NOTE'])
         smoke = self.root / 'Smoke.java'
         smoke.write_text(SMOKE.replace('__METHOD__', action['method']), encoding='utf-8')
-        sources = list(out.glob('backend/**/*.java')) + write_stubs(self.root / 'stubs') + [smoke]
+        sources = compile_copies(list(out.glob('backend/**/*.java')), self.root) + write_stubs(self.root / 'stubs') + [smoke]
         args = self.root / 'sources.args'
         args.write_text('\n'.join('"' + str(p).replace(chr(92), '/') + '"' for p in sources))
         result = subprocess.run(['java', 'com.sun.tools.javac.Main', '--release', '11', '-encoding', 'UTF-8',

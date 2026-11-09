@@ -74,7 +74,7 @@ def migrate_args(source: Path, out: Path, options) -> argparse.Namespace:
 
 
 # A survey measures every form unattended: no menu id, no window question.
-# backend_live as on the web: no MODULE_REVIEWED gate and writes allowed unless schema.json forbids them,
+# backend_live as on the web: writes allowed unless schema.json forbids them,
 # so the survey shows what the generator cannot translate, not the review policy.
 SURVEY_OVERRIDES = {'AWU_AZON': '', 'screen_window_selection': 'all', 'screen_primary_window_auto': True,
                     'backend_live': True}
@@ -270,7 +270,6 @@ def markdown(report: dict, limit: int = 15) -> str:
              '| Végpontok (CRUD + keresés) | db | arány |', '|---|---:|---:|',
              f"| Generált | {t['endpoints']} | |",
              f"| Engedélyezett | {t['enabled']} | {percent(t['enabled'], t['endpoints'])} |",
-             f"| Kész, csak a MODULE_REVIEWED kapcsolóra vár | {t['ready']} | {percent(t['ready'], t['endpoints'])} |",
              f"| Saját okkal tiltott | {t['blocked']} | {percent(t['blocked'], t['endpoints'])} |",
              f"| Nem generált (a Forms nem engedi / nincs adatforrás) | {t['skipped_operations']} művelet, {t['skipped_blocks']} blokk | |",
              f"| Gombvégpontok | {t['actions']} | |", '',
@@ -297,7 +296,7 @@ def markdown(report: dict, limit: int = 15) -> str:
     if not report['external_routines']:
         lines.append('| — | Nincs külső hívás. | 0 | 0 |')
     if report['module_gates']:
-        lines += ['', '## Modulszintű ellenőrzés', '', 'Formok száma kódonként (MODULE_REVIEWED kapcsoló mögött):', '']
+        lines += ['', '## Modulszintű ellenőrzés', '', 'Formok száma kódonként (átnézendő, a kódot nem tiltja):', '']
         lines += [f'- `{code}`: {count}' for code, count in sorted(report['module_gates'].items())]
     lines += ['', '## Formok', '', '| Form | Mód | Trigger (felismert / keretr. / átültetendő) | Végpont | Engedélyezett | Kapcsolóra vár | Tiltott | Gomb |',
               '|---|---|---|---:|---:|---:|---:|---:|']

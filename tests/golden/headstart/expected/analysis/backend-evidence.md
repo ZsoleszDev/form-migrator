@@ -94,7 +94,7 @@ FROM ANK_INPTIP
 ORDER BY KOD
 Oszlopok: KOD -> V_ELEK_ADLAP.UBI_INPTIP_KOD, NEV -> V_ELEK_ADLAP.UBI_INPTIP_KOD_NEV
 Szűrés a begépelt szövegre: KOD LIKE 'szöveg%' (kis- és nagybetűtől függetlenül)
-Generált művelet: kész, csak a modulszintű ellenőrzésre vár (MODULE_REVIEWED, lásd az osztály elején); addig HTTP 501.
+Generált művelet: engedélyezett
 ```
 
 ## commitForm

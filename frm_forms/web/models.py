@@ -65,7 +65,7 @@ class MigrationOptions(BaseModel):
     screen_button_label_property: Literal['labelText', 'btnLabel'] = 'labelText'
     screen_fold_list_buttons: bool = True
     screen_spacer_type: Literal['text', 'label', 'divider'] = 'label'
-    # Generated endpoints live at once: MODULE_REVIEWED = true and writes allowed unless schema.json forbids them.
+    # Generated writes allowed unless schema.json forbids them.
     backend_live: bool = True
     backend_lov_endpoints: bool = True
     # The module's own folders in the project (chosen before the generation): CL / DPS / WBS / frontend -> full

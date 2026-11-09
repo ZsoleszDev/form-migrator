@@ -222,7 +222,10 @@ class InheritanceTests(unittest.TestCase):
             self.assertEqual(main(args), 0)
         model = json.loads((out / "analysis/form.ir.json").read_text())
         self.assertTrue(any(issue["code"] == "INHERITANCE_BACKEND_REVIEW" for issue in model["issues"]))
-        self.assertTrue(all(not model["blocks"][0]["can_" + op] for op in ("read", "create", "update", "delete")))
+        # A review note of the module (in the reports), not a switch in the code: nothing is approved or locked by it.
+        self.assertFalse(model["module_gate"]["required"])
+        self.assertIn("INHERITANCE_BACKEND_REVIEW", model["module_gate"]["codes"])
+        self.assertNotIn("MODULE_REVIEWED", (out / "backend/DPS").joinpath(next(p.name for p in (out / "backend/DPS").glob("*ServiceImpl.java"))).read_text())
 
     def test_unused_library_chain_does_not_change_form_backend_or_frontend(self):
         self.olb("base", '<Item Name="BASE" ItemType="Text Item"/>')

@@ -131,7 +131,7 @@ class WebTests(unittest.TestCase):
         self.assertEqual(response.status_code,202,response.text)
         job = self.wait_job(response.json()['id'])
         self.assertEqual(job['status'],'completed',job); self.assertTrue(job['review_required'])
-        self.assertEqual(job['summary']['generation_mode'],'scaffold'); self.assertEqual(job['summary']['readable_blocks'],0)
+        self.assertEqual(job['summary']['generation_mode'],'scaffold'); self.assertEqual(job['summary']['readable_blocks'],1)
         preview = self.client.get(f"/api/jobs/{job['id']}/file",params={'path':'analysis/issues-summary.json'}).json()
         self.assertFalse(preview['truncated']); self.assertGreater(json.loads(preview['text'])['total'],0)
         download = self.client.get(f"/api/jobs/{job['id']}/download")

@@ -4,9 +4,9 @@ A forrás és a generált kód alapján készült. A hiányzó runtime-viselked�
 
 ## Modulszintű ellenőrzés
 
-Minden generált CRUD-műveletre vonatkozik; a kész műveleteket a `TesztServiceImpl.MODULE_REVIEWED` kapcsoló élesíti:
+Nézd át, mielőtt a modult használatba veszed (a generált kódot nem tiltja):
 
-- Migrációs váz: az összes adatbázis-művelet tiltott az ellenőrzött implementációig.
+- Migrációs váz: az adatbázis-műveleteket a használatba vétel előtt ellenőrizni kell.
 
 ## Lekérdezések
 
@@ -38,7 +38,7 @@ A RecordGroupQuery változatlanul fut; kérés: `{"term": "beg", "parameters": {
 
 | LOV | HTTP útvonal | Paraméterek | Futás |
 |---|---|---|---|
-| INPTIP | POST /api/forms/teszt/lov/inptip | — | kész, MODULE_REVIEWED-re vár |
+| INPTIP | POST /api/forms/teszt/lov/inptip | — | engedélyezett |
 
 ## Backend végpont nélkül kezelt triggerek
 
@@ -56,7 +56,7 @@ A teljes forrás megmarad az elemzésben. A szűrés a trigger tartalmán alapul
 | AIT | A WHERE olvasási SQL-re lefordítva; írás előtt a rekordszűrést és szervercontextet külön ellenőrizni kell. | Ellenőrizd a WHERE teljes SQL-jét, bindjeit és a sor-/tenant-jogosultságokat a ServiceImpl-ben. |
 | AIT | A paraméter nélküli lista tiltott. A típusos searchAit metódusnak add át: V_ELEK_ADLAP.UBI_INPTIP_KOD | A paraméter nélküli listázás helyett kösd be a típusos keresési végpontot a felsorolt Forms-mezőkből. |
 | AIT | AIT:POST-QUERY: POST-QUERY nem írhat adatbázismezőt ebben a snapshot-alapú adapterben. Átfuttatás az adatbázisban sem lehetséges: A trigger ebben az eseményben nem visszaírható mezőt ír: AIT.AIT_MEGJ (lekérdezett adatbázismező, kulcs vagy nem módosítható oszlop). | A megadott trigger és teljes híváslánca alapján implementáld/teszteld a ServiceImpl műveletet. |
-| @FORM:FRM_ANK_TESZT | Migrációs váz: az összes adatbázis-művelet tiltott az ellenőrzött implementációig. | A képernyőváz mód tiltását a ServiceImpl és a gazdaalkalmazás integrációjának ellenőrzése után a MODULE_REVIEWED kapcsoló oldja fel (egy helyen, nem metódusonként). |
+| @FORM:FRM_ANK_TESZT | Migrációs váz: az adatbázis-műveleteket a használatba vétel előtt ellenőrizni kell. | Képernyőváz mód: a ServiceImpl és a gazdaalkalmazás integrációját ellenőrizd, mielőtt a modult használatba veszed. |
 | AIT | A schema.json writable beállítása nem engedélyez írást. | Igazold a kulcsokat, DML-célt, DB-triggereket és tranzakciót, majd állítsd be a schema.json writable értékét. Ez önmagában más tiltást nem old fel. |
 
 A teljes, géppel is feldolgozható terv: [backend-handoff.json](analysis/backend-handoff.json).

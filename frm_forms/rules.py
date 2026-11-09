@@ -1221,24 +1221,9 @@ def analyze(model: dict, metadata: dict, replacements: dict, catalog: dict | Non
                                                 "scope": "frontend", "detail": trigger["id"] + ": " + trigger["reason"]})
                     continue
                 trigger["database_work"] = work
-                if target:
-                    # A query button (own DEFAULT_WHERE + EXECUTE_QUERY) is the block's query with another WHERE: the
-                    # migrator writes it (query_java: the WHERE built like the Forms code built it, every screen value
-                    # a bind, checked against the PL/SQL on input cases), the same JDBC query as the block's search.
-                    # Only what it does not cover becomes the Java assistant's task.
-                    from .query_java import plan as java_query
-                    try:
-                        java = java_query(trigger, source, model, catalog)
-                        trigger['query_action'] = {'target': java['target'], 'unit': java['unit'], 'context': None,
-                                                   'variants': [], 'message_units': {}, 'java': java,
-                                                   'prepared': {'binds': [], 'outs': [], 'inputs': java['inputs']}}
-                        trigger.update(status='converted', target='action')
-                        trigger.pop('reason', None)
-                        continue
-                    except Exception as java_error:
-                        trigger['query_java_reason'] = str(adapter_error(java_error))
-                # A backend action whose body the Java assistant writes. A query button keeps the query contract:
-                # the screen shows the returned rows.
+                # A backend action whose body the Java assistant writes, from its commented Forms code: the migrator
+                # never starts it (a half-written body confuses the model). A query button (own DEFAULT_WHERE +
+                # EXECUTE_QUERY) keeps the query contract: the screen shows the returned rows.
                 if target:
                     trigger['query_action'] = {'target': target, 'unit': trigger.get('owner') or '', 'context': None,
                                                'variants': [], 'message_units': {}, 'java': None, 'ai': True,
@@ -1352,18 +1337,13 @@ def analyze(model: dict, metadata: dict, replacements: dict, catalog: dict | Non
 
 
 def finalize_capabilities(model: dict) -> None:
-    """Per-operation blockers plus one module-level gate.
-
-    Module-wide review requirements (screen/scaffold mode, OLB inheritance) are
-    not repeated per method: they gate every otherwise clean operation behind the
-    generated MODULE_REVIEWED switch. can_* is true only without any of them.
-    """
+    """Per-operation blockers. The module-wide review notes (screen/scaffold mode, OLB inheritance) stay notes in the
+    reports: no switch gates the generated code, the developer puts a module to use when it is done."""
     from .backend_queries import query_capabilities
     form_owner = "@FORM:" + model["name"]
     policy = [i for i in model["issues"] if i["owner"] == form_owner and i["code"] in POLICY_CODES and i["scope"] == "all"]
     gate = list(dict.fromkeys(i["detail"] for i in policy))
-    model["module_gate"] = {"required": bool(gate), "switch": "MODULE_REVIEWED", "reasons": gate,
-                            "codes": sorted({i["code"] for i in policy})}
+    model["module_gate"] = {"required": False, "reasons": gate, "codes": sorted({i["code"] for i in policy})}
     policy_ids = {id(i) for i in policy}
     for b in model["blocks"]:
         relevant = [i for i in model["issues"] if i["owner"] in {form_owner, b["name"]} and id(i) not in policy_ids]
@@ -1373,18 +1353,17 @@ def finalize_capabilities(model: dict) -> None:
             for op in ("create", "update", "delete"):
                 blockers[op].append(WRITE_APPROVAL)
         b["blockers"] = blockers
-        # Complete lists, module gate included, for reports and --strict.
-        b["read_blockers"] = gate + blockers["read"]
-        b["write_blockers"] = list(dict.fromkeys(gate + blockers["create"] + blockers["update"] + blockers["delete"]))
+        # Complete lists for reports and --strict.
+        b["read_blockers"] = list(blockers["read"])
+        b["write_blockers"] = list(dict.fromkeys(blockers["create"] + blockers["update"] + blockers["delete"]))
         updatable = any(i["update_allowed"] and not i["primary_key"] for i in b["db_items"])
         ready = {"read": b["database"] and b["query_allowed"] and not blockers["read"],
                  "create": b["database"] and b["insert_allowed"] and not blockers["create"],
                  "update": b["database"] and b["update_allowed"] and not blockers["update"] and updatable,
                  "delete": b["database"] and b["delete_allowed"] and not blockers["delete"]}
-        live = bool(model.get("options", {}).get("backend_live"))
         for op, value in ready.items():
             b["ready_" + op] = bool(value)
-            b["can_" + op] = bool(value) and (not gate or live)  # backend_live: MODULE_REVIEWED starts as true
+            b["can_" + op] = bool(value)
         query_capabilities(model, b)
         b["endpoint_plan"], b["skipped_operations"] = endpoint_plan(b)
 

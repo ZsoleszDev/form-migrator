@@ -17,7 +17,7 @@ from frm_forms import backend_assistant as assistant
 from frm_forms import assistant_context, assistant_log
 from frm_forms.cli import main
 from frm_forms.common import MigrationError, read_json, write_json
-from java_support import COMPANY_IMPORTS, trigger_mode, write_stubs
+from java_support import COMPANY_IMPORTS, compile_copies, trigger_mode, write_stubs
 from test_manual_action_source import FORM
 
 setUpModule, tearDownModule = trigger_mode('plsql')
@@ -105,7 +105,10 @@ class BackendAssistantTests(unittest.TestCase):
         self.assertIn('PROCEDURE lekerdezesi_feltetelek', sources)
         self.assertIn('get_item_property', sources)
         self.assertIn('ActionRequest', str(packet['contracts']))
-        self.assertIn('HttpStatus.NOT_IMPLEMENTED', self.service.read_text())
+        # The frames wait empty under their commented Forms code: no placeholder throw, no module switch.
+        self.assertRegex(self.service.read_text(), r'//endregion\n\s*\}\);')
+        self.assertNotIn('NOT_IMPLEMENTED', self.service.read_text())
+        self.assertNotIn('MODULE_REVIEWED', self.service.read_text())
         self.assertTrue((self.output / 'JAVA_ASSISTANT.md').is_file())
         first = self.index
         self.assertEqual(first, assistant.prepare_workspace(self.output))
@@ -182,7 +185,7 @@ class BackendAssistantTests(unittest.TestCase):
         self.assertIn('List.of("minta")', service)
         self.assertIn('import java.util.List;', service)
         self.assertIn('return log1x(', service)
-        self.assertIn('if (!MODULE_REVIEWED)', service)
+        self.assertNotIn('MODULE_REVIEWED', service)
         self.assertIn('@Transactional', service)
         self.assertIn('import org.springframework.transaction.annotation.Transactional;', service)
         # Another button, controller and DTOs are not changed by this proposal.
@@ -357,7 +360,9 @@ class BackendAssistantTests(unittest.TestCase):
         for relative, text in helpers.items():
             path = self.root / 'helpers' / Path(relative).name
             path.parent.mkdir(exist_ok=True); path.write_text(text, encoding='utf-8'); helper_paths.append(path)
-        sources = list((self.output / 'backend').rglob('*.java')) + write_stubs(self.root / 'stubs') + helper_paths
+        # The other button's frame is still empty (not compilable until written): written here.
+        sources = (compile_copies(list((self.output / 'backend').rglob('*.java')), self.root)
+                   + write_stubs(self.root / 'stubs') + helper_paths)
         argsfile = self.root / 'sources.args'
         argsfile.write_text('\n'.join('"' + str(p) + '"' for p in sources))
         compiled = subprocess.run(['java', 'com.sun.tools.javac.Main', '--release', '11', '-encoding', 'UTF-8',
@@ -368,12 +373,10 @@ class BackendAssistantTests(unittest.TestCase):
     public static void main(String[] args) throws Exception {
         var service = new hu.company.features.kezi.dps.KeziServiceImpl();
         var request = new hu.company.features.kezi.cl.KeziDtos.ActionRequest(java.util.Map.of(), java.util.Map.of());
-        try {
-            service.onCgnvW011PbLekerdezes(new hu.company.common.UserDto(), request);
-            throw new AssertionError("The original module gate was bypassed");
-        } catch (org.springframework.web.server.ResponseStatusException expected) {
-            System.out.println("module gate preserved");
-        }
+        // No module switch: the applied body answers at once.
+        var result = service.onCgnvW011PbLekerdezes(new hu.company.common.UserDto(), request);
+        if (!result.messages().equals(java.util.List.of("minta"))) throw new AssertionError(result.messages());
+        System.out.println("applied body runs");
     }
 }''', encoding='utf-8')
         classes = str(self.root / 'classes')
@@ -382,7 +385,7 @@ class BackendAssistantTests(unittest.TestCase):
         self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
         ran = subprocess.run(['java', '-cp', classes, 'AssistantSmoke'], capture_output=True, text=True, timeout=15)
         self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
-        self.assertIn('module gate preserved', ran.stdout)
+        self.assertIn('applied body runs', ran.stdout)
 
     # --- 4.34: Markdown answers, AI log, visible failures ---------------------------------------------------
 

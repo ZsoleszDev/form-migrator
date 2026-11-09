@@ -51,7 +51,10 @@ AI_REGION = re.compile(r'//region Eredeti Forms-k[óo]d')
 
 
 def no_effect(body):
-    """No code at all, or only an unused error list (a validate() without field checks)."""
+    """No code at all, or only an unused error list (a validate() without field checks). An AI hook (the commented
+    Forms code, its body still empty) has an effect to come: it and its call sites stay."""
+    if AI_REGION.search(body):
+        return False
     return not NO_CHECKS.sub('', mask(body)).strip().strip(';').strip()
 
 

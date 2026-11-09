@@ -19,9 +19,9 @@ NEXT = {
     'MASTER_DETAIL':'Kösd össze a kiválasztott master rekord kulcsait a detail keresési kritériumaival; a többblokkos mentés/cascade külön feladat.',
     'DYNAMIC_LOV':'A LOV lekérdezése generált végponton fut (lásd: LOV-végpontok); a frontend host-adapterében kösd be, és íráskor a választott értéket szerveroldalon is ellenőrizd (Validate from List).',
     'NO_PRIMARY_KEY':'A schema.json primary_key mezőjében add meg az adatbázisból igazolt kulcsoszlopokat.',
-    'INHERITANCE_BACKEND_REVIEW':'Ellenőrizd az OLB-ből örökölt üzleti kódot és a hiányzó külső forrásokat, majd állítsd true-ra a ServiceImpl MODULE_REVIEWED kapcsolóját.',
-    'INHERITANCE':'Modulszintű ellenőrzés: az öröklési lánc után a ServiceImpl MODULE_REVIEWED kapcsolója oldja fel a kész műveleteket.',
-    'SCAFFOLD_REVIEW_REQUIRED':'A képernyőváz mód tiltását a ServiceImpl és a gazdaalkalmazás integrációjának ellenőrzése után a MODULE_REVIEWED kapcsoló oldja fel (egy helyen, nem metódusonként).',
+    'INHERITANCE_BACKEND_REVIEW':'Ellenőrizd az OLB-ből örökölt üzleti kódot és a hiányzó külső forrásokat, mielőtt a modult használatba veszed.',
+    'INHERITANCE':'Modulszintű ellenőrzés: nézd át az öröklési láncból jövő kódot, mielőtt a modult használatba veszed.',
+    'SCAFFOLD_REVIEW_REQUIRED':'Képernyőváz mód: a ServiceImpl és a gazdaalkalmazás integrációját ellenőrizd, mielőtt a modult használatba veszed.',
     'RUNTIME_BLOCK_PROPERTY':'A futásidőben állított blokk-property (WHERE, rendezés, DML-cél vagy engedély) feltételét vidd át a ServiceImpl-be (jogosultsági feltételt a projekt jogosultságkezelése kezel).',
     'WRITE_APPROVAL':'Igazold a kulcsokat, DML-célt, DB-triggereket és tranzakciót, majd állítsd be a schema.json writable értékét. Ez önmagában más tiltást nem old fel.',
 }
@@ -114,13 +114,13 @@ def write_handoff(model, discovery, output, config, module):
     write_json(output/'analysis/backend-schema.example.json',schema)
     lines=['# Backend bekötési terv', '', 'A forrás és a generált kód alapján készült. A hiányzó runtime-viselkedés nem válik automatikusan kész megoldássá.', '']
     gate=model.get('module_gate',{})
-    if gate.get('required'):
+    if gate.get('reasons'):
         lines += ['## Modulszintű ellenőrzés', '',
-                  'Minden generált CRUD-műveletre vonatkozik; a kész műveleteket a `'+cls+'ServiceImpl.MODULE_REVIEWED` kapcsoló élesíti:', '',
+                  'Nézd át, mielőtt a modult használatba veszed (a generált kódot nem tiltja):', '',
                   *['- '+markdown_cell(r) for r in gate['reasons']], '']
     lines += ['## Lekérdezések', '', '| Blokk | Metódus | HTTP útvonal | Futás |', '|---|---|---|---|']
     for q in queries:
-        state='engedélyezett' if q['enabled'] else 'kész, MODULE_REVIEWED-re vár' if q['ready_after_module_review'] else 'tiltott / ellenőrizendő'
+        state='engedélyezett' if q['enabled'] else 'tiltott / ellenőrizendő'
         lines.append('| '+' | '.join(markdown_cell(v) for v in [q['block'],q['method'],q['http']+' '+(q['path'] or q['path_expression']),state])+' |')
     for q in queries:
         if q['parameters']:
@@ -130,13 +130,12 @@ def write_handoff(model, discovery, output, config, module):
     lov_plans=model.get('lov_plans',[])
     if lov_plans:
         base=config['api_prefix'].rstrip('/')+'/'+module
-        gated=bool(model.get('module_gate',{}).get('required'))
         lines += ['', '## LOV-végpontok', '',
                   'A RecordGroupQuery változatlanul fut; kérés: `{"term": "beg", "parameters": {"BLOKK.MEZŐ": "érték"}, "limit": 50}`. '
                   'A válasz sorai oszlopnév szerint érkeznek; a visszaírandó mezők a LOV oszlop-leképezései.', '',
                   '| LOV | HTTP útvonal | Paraméterek | Futás |', '|---|---|---|---|']
         for l in lov_plans:
-            state='tiltott: '+'; '.join(l['blockers']) if l['blockers'] else 'kész, MODULE_REVIEWED-re vár' if gated else 'engedélyezett'
+            state='tiltott: '+'; '.join(l['blockers']) if l['blockers'] else 'engedélyezett'
             path = base+'/lov/'+l['key']
             if company_contract:
                 endpoint = endpoints['lov' + l['class']]

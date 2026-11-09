@@ -22,9 +22,9 @@ You receive one existing Java service method. The original Oracle Forms code is 
 Answer only with the requested Java code blocks and the optional MISSING/NOTES lines."""
 
 RULES = """Rules:
-1. Keep the method signature and the `return log1x(..., () -> { ... });` wrapper. Rewrite the body inside it
-   (a NOT_IMPLEMENTED throw, a PL/SQL or JDBC call) so that it implements the commented original Oracle Forms
-   code. Do not copy the commented original code into your answer; the migrator keeps it.
+1. Keep the method signature and the `return log1x(..., () -> { ... });` wrapper. Write the body inside it
+   (empty now, or a PL/SQL or JDBC call) so that it implements the commented original Oracle Forms code.
+   Do not copy the commented original code into your answer; the migrator keeps it.
 2. {data_rule}
 3. Keep the Oracle behaviour: '' and NULL are both null, NUMBER is BigDecimal, DATE is LocalDateTime,
    SELECT INTO without a row is NO_DATA_FOUND and with several rows TOO_MANY_ROWS; keep the same checks,
@@ -93,7 +93,7 @@ return new ActionResult(blocks, messages, commands, Map.of());
 # backend_trigger_mode=ai: a private hook of the CRUD flow (POST-QUERY, PRE-INSERT, ON-INSERT, WHEN-VALIDATE-ITEM ...).
 HOOK_RULES = """Rules:
 1. Keep the method signature exactly (private void {method}({row_class} row, RuleContext context)). Replace its
-   body (the TODO and the NOT_IMPLEMENTED throw) with Java that implements the commented original Oracle Forms
+   (empty) body with Java that implements the commented original Oracle Forms
    trigger. Do not copy the commented original code into your answer; the migrator keeps it.
 2. {data_rule}
 3. Keep the Oracle behaviour: '' and NULL are both null, NUMBER is BigDecimal, DATE is LocalDateTime,
@@ -124,7 +124,7 @@ EVENT_RULES = {
 
 # backend_trigger_mode=ai: PRE-COMMIT / POST-FORMS-COMMIT as a private hook of commitForm.
 COMMIT_RULES = """Rules:
-1. Keep the method signature exactly. Replace its body (the TODO and the NOT_IMPLEMENTED throw) with Java that
+1. Keep the method signature exactly. Write its (empty) body with Java that
    implements the commented original Oracle Forms trigger. Do not copy the commented original code.
 2. {data_rule}
 3. Keep the Oracle behaviour: '' and NULL are both null, NUMBER is BigDecimal, DATE is LocalDateTime,
