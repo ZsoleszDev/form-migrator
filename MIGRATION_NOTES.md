@@ -86,6 +86,21 @@
 
   A replika-űrlapon a 9 AI-feladatból most 5-höz nem kell modellhívás (a megerősítő `PB_LEZAR` gomb is ilyen);
   4 maradt az AI-é (form-csomageljárás, `DO_KEY` key-trigger, adatbázis-rutin, `|| 'x'`-es UPDATE).
+- **Üres AI-keret, nincs `MODULE_REVIEWED`, kevesebb komment a DPS-ben.**
+  - *A Java asszisztens újra látja a lekérdező gombokat.* AI-módban a lekérdező gombot (DEFAULT_WHERE +
+    EXECUTE_QUERY) a migrátor eddig maga írta meg a Forms WHERE-szövegépítés Java-másolataként, és nem adta az
+    asszisztensnek; egy ilyen gombokból álló modulnál a lista üres maradt. Most AI-feladat, mint a többi gomb.
+  - *A keret üres.* Az AI-ra váró metódusban (gomb, rekordtrigger, mentési hook, kézi gomb) csak az eredeti
+    Forms-kód áll kommentben, alatta üres törzs: nincs `TODO(AI)` sor, `NOT_IMPLEMENTED` dobás, „AI-ra vár”
+    előtag, félig elkezdett kód. Amíg egy végpont törzse üres, a ServiceImpl nem fordul (a lambda nem ad vissza
+    értéket); a hookok üresen is fordulnak. Az üres hookot a kódkarcsúsítás sem törli (a hívásával együtt maradna
+    ki az ON-INSERT, és vele a beszúrás).
+  - *Nincs modulszintű kapcsoló.* A `MODULE_REVIEWED` és minden hozzá tartozó sor kikerült a DPS-ből (kapcsoló,
+    osztályszintű kommentblokk, `if (!MODULE_REVIEWED)` őrök); a modulszintű átnézendő pontok a riportokban
+    maradnak, a kódot nem tiltják. A saját okkal tiltott műveletek (például hiányzó LOV-adapter) tiltva maradnak.
+  - *Rövid kommentek.* A metódusok fölött egy segítő sor (tiltott műveletnél még egy: az ok); a „Triggerek: …”,
+    „SQL és triggerkód: … backend-evidence.md”, a nem generált végpontok listája és a többi státuszsor a riportokban
+    van (analysis/backend-plan.json, backend-evidence.md). A replika-űrlap DPS-e 1029 sorról 967-re rövidült.
 - **Frontend AI-átírás (opcionális).** A generált képernyő elküldhető a helyi modellnek: standalone komponens,
   signalok az állapotra (`signal`, `computed`, `input()`, `output()`), olvasható, magyarul kommentezett kód,
   ugyanazzal a működéssel (HTTP-hívások, metódusnevek, lépések). Bekapcsolni a Java asszisztens fül új paneljén vagy

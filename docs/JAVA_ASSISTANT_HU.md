@@ -15,7 +15,7 @@ pedig AI sem kell. Az AI így csak a valódi üzleti logikát írja, és csak a 
 | Forms-trigger | Generált metódus | Ki hívja |
 | --- | --- | --- |
 | `WHEN-BUTTON-PRESSED`, ha adatbázismunkát végez | `public ActionResult on<Blokk><Gomb>(UserDto, ActionRequest)` | a gomb (`applyActionResult` dolgozza fel a választ) |
-| lekérdező gomb (`SET_BLOCK_PROPERTY … DEFAULT_WHERE` + `EXECUTE_QUERY`) | `public PageResult<XRow> on…(UserDto, QueryActionRequest)` — a migrátor írja meg (lásd lent), csak ha nem fér a részhalmazba, akkor AI-feladat | a gomb; a képernyő a visszaadott sorokat mutatja |
+| lekérdező gomb (`SET_BLOCK_PROPERTY … DEFAULT_WHERE` + `EXECUTE_QUERY`) | `public PageResult<XRow> on…(UserDto, QueryActionRequest)` | a gomb; a képernyő a visszaadott sorokat mutatja |
 | adatbázismunka nélküli gomb (mezőérték, ellenőrzés, lekérdezés, mentés, navigáció) | nincs Java-metódus | a képernyő maga (FRONTEND_SCREEN_HU.md) |
 | `PRE-FORM`, `WHEN-NEW-FORM-INSTANCE` | nincs Java-metódus | a képernyő kezdőállapota |
 | `POST-QUERY`, `PRE/POST/ON-INSERT|UPDATE|DELETE`, `WHEN-VALIDATE-ITEM/RECORD`, `POST-CHANGE`, `ON-CHECK-DELETE-MASTER` | `private void trigger<Esemény><Mező><Blokk>(XRow row, RuleContext context)` | a CRUD-folyamat a Forms-ponton (validálás, beszúrás előtt, lekérdezés után …) |
@@ -34,23 +34,31 @@ Gombból csak akkor lesz Java-végpont, ha a kódja (a hívott helyi eljárások
 key-triggerrel együtt) adatbázist ér: SQL, adatbázis-rutin vagy -csomagelem, a blokk SQL-jének módosítása, szerverre
 nyúló Forms-hívás (`frm_forms/database_work.py`; kétség esetén a szerveré marad). A többi a képernyőé.
 
-Minden ilyen metódus törzse:
+Minden ilyen metódus: egy rövid segítő sor fölötte, a keret, benne az eredeti Forms-kód kommentben, alatta üres törzs.
+A migrátor semmit nem kezd el benne (sem helyőrzőt, sem félig lefordított kódot), mert az csak összezavarná a modellt:
 
 ```java
-//region Eredeti Forms-kód: ORDERS.CODE / WHEN-VALIDATE-ITEM
-// AI-ra vár. Bemenet/kimenet: a rekord (row.<mező>), üzenet: context.message(...), hiba: context.abort() vagy kivétel.
-// --- ORDERS.CODE / WHEN-VALIDATE-ITEM
-// BEGIN
-//   IF length(:ORDERS.CODE) < 3 THEN
-// ...
-//endregion
-// TODO(AI): a fenti Forms-kód Java-változata ide kerül (Java asszisztens).
-throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED, "A Forms-trigger még nincs átírva …");
+// CTRL.PB_LEZAR / WHEN-BUTTON-PRESSED: a törzset a Java asszisztens írja meg a lenti Forms-kódból.
+@Transactional(rollbackFor = Exception.class)
+@Override
+public ActionResult onCtrlPbLezar(UserDto user, ActionRequest request) throws Exception {
+    return log1x(log, RendelesConstants.ON_CTRL_PB_LEZAR_NAME, user, null, () -> {
+        //region Eredeti Forms-kód: CTRL.PB_LEZAR / WHEN-BUTTON-PRESSED
+        // A képernyő ezeket küldi: RENDELES.ID, RENDELES.STATUSZ.
+        // --- CTRL.PB_LEZAR / WHEN-BUTTON-PRESSED
+        // DECLARE
+        // ...
+        //endregion
+
+    });
+}
 ```
 
 A régióban a trigger teljes kódja és a hívott helyi eljárások/csomagok kódja is benne van. A keret
-(aláírás, DTO, log1x, tranzakció, hívási pont) végleges; az AI csak a törzset cseréli, a region marad.
-Amíg nincs kész, a hívás 501-et ad, így semmi nem fut csendben rosszul.
+(aláírás, DTO, log1x, tranzakció, hívási pont) végleges; az AI csak a törzset írja meg, a region marad.
+Amíg egy végpont törzse üres, a ServiceImpl nem fordul le (a lambda nem ad vissza értéket): a modult akkor kell
+használatba venni, amikor minden törzs elkészült. A rekordtriggerek hookjai (`private void`) üresen is fordulnak.
+Modulszintű kapcsoló (`MODULE_REVIEWED`) nincs: hogy mikor kész a modul, azt a fejlesztő dönti el.
 
 ## A repository-metódusokat a migrátor írja
 
@@ -134,10 +142,9 @@ gombot (a második kérésben ugyanúgy lefut). A form saját eljárása, a `DO_
 
 ### Lekérdező gombok
 
-A lekérdező gomb (saját `DEFAULT_WHERE` + `EXECUTE_QUERY`) AI-módban sem AI-feladat: a migrátor ugyanúgy
-állítja össze a WHERE-t, ahogy a Forms-kód (`frm_forms/query_java.py`: az IF-ek Java-`if`-ek, a képernyő minden
-értéke kötött paraméter), bemeneti esetekre összeveti az eredeti PL/SQL-lel, és a blokk saját keresésével azonos
-lekérdezést futtat (a POST-QUERY hookokkal). Ha a WHERE-építés nem fér a részhalmazba vagy eltér, a gomb AI-feladat.
+A lekérdező gomb (saját `DEFAULT_WHERE` + `EXECUTE_QUERY`) AI-feladat, mint a többi gomb: a keretben (`PageResult`
+a cél blokk soraival) az eredeti Forms-kód áll, a törzs üres. A migrátor nem másolja át a Forms WHERE-szövegépítését
+Javába: a gomb Java-szerkezetű megvalósítását (repository, Criteria API) az AI írja meg.
 
 ## Automatikus AI-sor
 
@@ -254,7 +261,7 @@ A feldolgozó ennél engedékenyebb, mert a kis modellek nem mindig követik bet
 | címsor (`### LookupAppAccountRepository.java`) a `//` címke helyett | ugyanúgy besorolja |
 | `<think>…</think>` | a gondolkodást külön mutatja, a kódot feldolgozza |
 | lezáratlan utolsó kódblokk | átveszi, ha a zárójelek zárnak; különben „megszakadt válasz” |
-| az eredeti Forms-komment másolata, `MODULE_REVIEWED`-kapu | elhagyja; a migrátor a meglévő metódus kommentjét és a saját kapuját teszi be |
+| az eredeti Forms-komment másolata | elhagyja; a migrátor a meglévő metódus kommentjét teszi be |
 | meglévő repository-metódus ugyanúgy | a meglévőt használja |
 | meglévő metódusnév más tartalommal | átnevezi (`onCtrlRunFindAccount`), a hívást is |
 | régi JSON-válasz | ugyanígy ellenőrzi |
