@@ -21,7 +21,9 @@ Az egyszerű részeket a determinisztikus generátor készíti el.
 A kész modulnál kattints a **Java asszisztens** gombra, majd válaszd ki a végpontot.
 
 - **Adatbázistáblák:** a rendszer felismeri a trigger tábláit. Importáld az oszlopokat
-  CSV-ből, jelöld a tényleges elsődleges kulcsot (PK), és ments.
+  CSV-ből, jelöld a tényleges elsődleges kulcsot (PK), és ments. Az elsődleges kulcs nélküli blokk táblája
+  minden végpontnál megjelenik („Elsődleges kulcs kell a(z) … blokk adatvégpontjaihoz”): a blokk csak kulccsal
+  kap Domain-t és adatvégpontot. Mentés után futtasd újra a migrálást (**Újrafuttatás**).
 - **Trigger javásítása:** kattints a gombra. Az AI csak a kiválasztott DPS-metódust kapja
   (a kikommentezett Oracle-triggerrel) és a benne használt táblák rövid leírását.
   Az AI átírja a triggert a meglévő DPS ServiceImpl metódusához, az adatbázis-műveleteket

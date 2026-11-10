@@ -310,6 +310,11 @@ def prepare_workspace(output: Path) -> dict:
                         "event": endpoint.get("event") or (action or {}).get("event") or "", "block": endpoint.get("block"),
                         "tables": [t["table"] for t in sheet["tables"]], "pending_tables": sheet["pending"]})
     full_sheet = schema_sheet(output, bundle=schema_bundle)
+    # The table of a block without a primary key is offered with every task: its key is what gives the block its
+    # data endpoints (rules.NO_KEY), whichever trigger is selected. It never holds a task back (not pending).
+    keyless = [t["table"] for t in full_sheet["tables"] if t.get("key_for_blocks")]
+    for task in tasks:
+        task["tables"] = task["tables"] + [t for t in keyless if t not in task["tables"]]
     write_json(safe_file(output, "analysis/schema.json"), schema)
     from .assistant_context import SYSTEM as system_prompt, rules
     index = {"version": VERSION, "module": effective["module"], "tasks": tasks,

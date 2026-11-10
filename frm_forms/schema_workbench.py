@@ -326,6 +326,12 @@ def schema_sheet(output: Path, codes: list[dict] | None = None, blocks: list[dic
     # Existing imported definitions are editable/exportable even when not used
     # in the selected task; no implicit owner/schema-name resolution is done.
     tables = {t for t in set(references) | (set(metadata["tables"]) if whole_module else set()) if not is_oracle_dual(t)}
+    # backend_trigger_mode=ai: a database block without a primary key gets no JPA Domain and no data endpoint
+    # (rules.NO_KEY) until its table's structure names the key: the whole module's sheet asks for it.
+    keyless = {}
+    for block in blocks if whole_module else []:
+        if block.get("database") and block.get("no_key"):
+            keyless.setdefault(str(block.get("table") or "").strip().upper(), []).append(block["name"])
     result = []
     for table in sorted(tables):
         spec = metadata["tables"].get(table)
@@ -346,7 +352,16 @@ def schema_sheet(output: Path, codes: list[dict] | None = None, blocks: list[dic
         missing = sorted(set(expected) - set(columns))
         if missing: reasons.append("Az SQL-ben hivatkozott, még hiányzó oszlopok: " + ", ".join(missing))
         if table in conflicts: reasons.append("Az új séma és a korábbi kézi definíció eltér; ellenőrizd újra a szerkezetet.")
+        if keyless.get(table):
+            names = ", ".join(keyless[table])
+            if isinstance(keys, list) and keys and not any(r.startswith("Az elsődleges kulcs") for r in reasons):
+                warnings.append(table + ": a kulcs megvan; futtasd újra a migrálást (Újrafuttatás), hogy a(z) " + names
+                                + " blokk megkapja az adatvégpontjait.")
+            else:
+                reasons.append("Elsődleges kulcs kell a(z) " + names + " blokk adatvégpontjaihoz (JPA Domain): add meg az "
+                               "oszlopokat, jelöld a PK-t (nézetnél egy egyedi oszlopot), mentés után futtasd újra a migrálást.")
         result.append({"table": table, "status": "needs_schema" if reasons else "ready", "reasons": reasons,
+                       "key_for_blocks": keyless.get(table, []),
                        "definition": spec, "references": references.get(table, []), "referenced_columns": expected,
                        "provenance": (spec or {}).get("source", "imported_schema") if isinstance(spec, dict) else "missing",
                        "conflict": table in conflicts})

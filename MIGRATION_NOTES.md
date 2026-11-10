@@ -101,6 +101,11 @@
   - *Rövid kommentek.* A metódusok fölött egy segítő sor (tiltott műveletnél még egy: az ok); a „Triggerek: …”,
     „SQL és triggerkód: … backend-evidence.md”, a nem generált végpontok listája és a többi státuszsor a riportokban
     van (analysis/backend-plan.json, backend-evidence.md). A replika-űrlap DPS-e 1029 sorról 967-re rövidült.
+- **Javítva: az Adatbázistáblák panel nem kínálta fel a kulcs nélküli blokkok tábláit.** A panel a kiválasztott
+  végpont SQL-jének tábláit mutatja. A kulcs nélküli blokk táblája ezek között nem volt ott (a blokk JPA óta nem
+  kap adatvégpontot, így hookja sincs), pedig éppen a kulcsa kell ahhoz, hogy a blokk Domain-t és végpontokat
+  kapjon. Most minden végpontnál ott van, ezzel az okkal: „Elsődleges kulcs kell a(z) … blokk adatvégpontjaihoz”.
+  Egyik feladatot sem tartja vissza. Ha a kulcs már el van mentve, a panel azt kéri, hogy futtasd újra a migrálást.
 - **Javítva: `StopIteration` a generáláskor, ha a lekérdező gomb blokkja nem kap adatvégpontot.** Ha a
   `SET_BLOCK_PROPERTY … DEFAULT_WHERE` + `EXECUTE_QUERY` gomb cél blokkjának nincs adatvégpontja (például a táblájának
   nincs elsődleges kulcsa, így Domain-je sem), nincs `<Blokk>Row`, amit a gomb visszaadhatna. A generálás eddig itt

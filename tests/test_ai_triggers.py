@@ -287,6 +287,33 @@ class AiFramesTests(unittest.TestCase):
         self.assertFalse(any(e.get("block") == "ORDERS" and e.get("operation") in {"list", "search"} for e in endpoints.values()))
         if shutil.which("java"):
             compile_module(self, output, Path(tempfile.mkdtemp(dir=self.root)))
+        # The table that gives the block its key is offered with every task (Adatbázistáblák), and says why.
+        from frm_forms import schema_workbench as schema
+        index = engine.prepare_workspace(output)
+        self.assertTrue(index["tasks"])
+        for task in index["tasks"]:
+            self.assertIn("APP_ORDERS", task["tables"], task["method"])
+            self.assertNotIn("APP_ORDERS", task["pending_tables"] if task["method"] == "onCtrlSearchBtn" else [])
+        row = next(t for t in index["schema"]["tables"] if t["table"] == "APP_ORDERS")
+        self.assertEqual((row["status"], row["key_for_blocks"]), ("needs_schema", ["ORDERS"]))
+        self.assertTrue(any("Elsődleges kulcs kell a(z) ORDERS blokk adatvégpontjaihoz" in r for r in row["reasons"]))
+        # Saved with its key, then generated again: the block has its endpoints, the button is a query button.
+        saved = self.root / "nokey-schema.json"
+        saved.write_text("{}", encoding="utf-8")
+        sheet = schema.save_table(output, "APP_ORDERS", [
+            {"name": "ID", "data_type": "NUMBER", "nullable": False, "precision": 10, "scale": 0},
+            {"name": "CODE", "data_type": "VARCHAR2", "nullable": False, "length": 20, "length_semantics": "CHAR"},
+            {"name": "NAME", "data_type": "VARCHAR2", "nullable": True, "length": 80, "length_semantics": "CHAR"}],
+            ["ID"], schema.schema_sheet(output)["revision"], saved)
+        self.assertTrue(any("futtasd újra a migrálást" in w for w in sheet["warnings"]), sheet["warnings"])
+        again = self.root / "nokey-again"
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            code = main(["migrate", str(source), "--screen", "--module", "orders", "--config", str(config),
+                         "--schema", str(saved), "--out", str(again)])
+        self.assertEqual(code, 0, err.getvalue())
+        endpoints = {e["method"]: e for e in json.loads((again / "analysis/backend-plan.json").read_text())["endpoints"]}
+        self.assertEqual(endpoints["onCtrlSearchBtn"]["query_block"], "ORDERS")
+        self.assertTrue((again / "backend/DPS/AppOrdersRepository.java").is_file())
 
 
 class HookAssistantTests(unittest.TestCase):
