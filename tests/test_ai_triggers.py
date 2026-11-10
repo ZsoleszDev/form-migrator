@@ -266,6 +266,28 @@ class AiFramesTests(unittest.TestCase):
         work = Path(tempfile.mkdtemp(dir=self.root))
         compile_module(self, self.output, work)
 
+    def test_a_query_button_of_a_block_without_endpoints_is_an_ordinary_action(self):
+        # The query button's block has no primary key: no Domain, no data endpoint, no <Block>Row to return. The
+        # generation stops on nothing (it was a StopIteration); the button is an ordinary AI action that says why.
+        source, config = self.root / "nokey.xml", self.root / "config-nokey.json"
+        source.write_text(form().replace(' PrimaryKey="true"', ""), encoding="utf-8")
+        config.write_text(json.dumps({"java_company_imports": COMPANY_IMPORTS}), encoding="utf-8")
+        output = self.root / "nokey"
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            code = main(["migrate", str(source), "--screen", "--module", "orders", "--config", str(config), "--out", str(output)])
+        self.assertEqual(code, 0, err.getvalue())
+        service = (output / SERVICE).read_text(encoding="utf-8")
+        frame = method_text(service, "onCtrlSearchBtn")
+        self.assertIn("public ActionResult onCtrlSearchBtn(UserDto user, ActionRequest request)", frame)
+        self.assertIn("Lekérdezőgomb lenne, de a(z) ORDERS blokknak nincs adatvégpontja", frame)
+        self.assertIn("Nincs elsődleges kulcs", frame)
+        endpoints = {e["method"]: e for e in json.loads((output / "analysis/backend-plan.json").read_text())["endpoints"]}
+        self.assertNotIn("query_block", endpoints["onCtrlSearchBtn"])
+        self.assertFalse(any(e.get("block") == "ORDERS" and e.get("operation") in {"list", "search"} for e in endpoints.values()))
+        if shutil.which("java"):
+            compile_module(self, output, Path(tempfile.mkdtemp(dir=self.root)))
+
 
 class HookAssistantTests(unittest.TestCase):
     def setUp(self):

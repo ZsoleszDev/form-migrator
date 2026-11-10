@@ -101,6 +101,12 @@
   - *Rövid kommentek.* A metódusok fölött egy segítő sor (tiltott műveletnél még egy: az ok); a „Triggerek: …”,
     „SQL és triggerkód: … backend-evidence.md”, a nem generált végpontok listája és a többi státuszsor a riportokban
     van (analysis/backend-plan.json, backend-evidence.md). A replika-űrlap DPS-e 1029 sorról 967-re rövidült.
+- **Javítva: `StopIteration` a generáláskor, ha a lekérdező gomb blokkja nem kap adatvégpontot.** Ha a
+  `SET_BLOCK_PROPERTY … DEFAULT_WHERE` + `EXECUTE_QUERY` gomb cél blokkjának nincs adatvégpontja (például a táblájának
+  nincs elsődleges kulcsa, így Domain-je sem), nincs `<Blokk>Row`, amit a gomb visszaadhatna. A generálás eddig itt
+  elszállt (`compact_backend.ai_action_method`). Most a gomb sima AI-akció (`ActionResult`), és a keretében egy sor
+  megmondja, miért nem lekérdező gomb. Ha a blokk kulcsot kap a schema.json-ban, újrageneráláskor ismét lekérdező
+  gomb lesz.
 - **Adatbázis-hozzáférés a cég mintájára: Domain + `JpaRepository`, `@Query`; a ServiceImpl-ben nincs SQL és JDBC.**
   (`backend_trigger_mode: "ai"`.)
   - *Táblánként egy Domain és egy Repository, táblanévvel:* `RENDELES_TETEL` → `RendelesTetelDomain` (`@Entity`) és
