@@ -43,7 +43,7 @@ A blokkok adatvégpontjai (lista, keresés, új rekord, módosítás, törlés) 
 | Forms | Generált metódus | A megjegyzésben |
 | --- | --- | --- |
 | a blokk lekérdezése (`EXECUTE_QUERY`) | `public PageResult<XRow> list<Blokk>(UserDto, int offset, int limit)`, feltételnél `search<Blokk>(…, SearchRequest)` | a blokk SQL-je (`DEFAULT_WHERE`, `ORDER BY`, lapozás), a feltételek forrása, oszlop → mező, a POST-QUERY hookok |
-| új rekord | `create<Blokk>(UserDto, XRow row)` | mezőellenőrzés (kötelező, hossz, szám), alapérték, szekvencia, a hookok Forms-sorrendben, az `INSERT` (vagy az ON-INSERT hook) |
+| új rekord | `create<Blokk>(UserDto, XRow row)` | kis-/nagybetűsítés (CaseRestriction), mezőellenőrzés (kötelező, hossz, szám), szekvencia, a hookok Forms-sorrendben, az `INSERT` (vagy az ON-INSERT hook). Az alapértéket a képernyő adja, a mentés nem írja felül |
 | módosítás | `update<Blokk>(UserDto, XRow original, XRow value)` | a kulcs nem változhat, zárolás (`SELECT … FOR UPDATE NOWAIT`, eltérésnél 409), ellenőrzés, hookok, az `UPDATE` |
 | törlés | `delete<Blokk>(UserDto, XRow original)` | zárolás, ON-CHECK-DELETE-MASTER / PRE-DELETE, a `DELETE` |
 | LOV | `lov<Lov>(UserDto, LovRequest)` | a rekordcsoport lekérdezése a beírt szöveg szűrésével, a paraméterek forrása, az oszlopnevek |
@@ -211,6 +211,7 @@ A feldolgozó ennél engedékenyebb, mert a kis modellek nem mindig követik bet
 | `request.getBlocks()`, `request.getParameters()` | helyben javítja: `request.blocks()`, `request.parameters()` (a DTO record-stílusú) |
 | `row.getVevo()`, `row.setId(x);` egy hookban | helyben javítja: `row.vevo`, `row.id = x;` (a Row DTO-nak nyilvános mezői vannak) |
 | `PersistenceException`, `Query`, `StoredProcedureQuery`, `ParameterMode` import nélkül | beteszi az importot a `jpa_namespace` szerint (javax vagy jakarta) |
+| `.setParameter("név", érték)` egy natív lekérdezésen | helyben javítja: `SqlValues.bind(érték)`. A típus nélküli null-t a Hibernate 5 bináris értékként küldi, amit az Oracle NUMBER és DATE oszlopnál elutasít (ORA-00932); a `bind` üres szöveget küld, amit az Oracle NULL-nak olvas. A biztosan nem null értéket (szám, `offset`, `limit`) és a tárolt eljárás típusos paramétereit nem bántja |
 | címke nélküli második blokk csak privát metódusokkal | a service segédmetódusai |
 | `String record = …` | rendben (csak a `record Név(…)` deklaráció tilos) |
 
@@ -219,6 +220,22 @@ ugyanazt a hibát ismétli. Javítást csak az kér (a második hívásban az el
 egyértelmű javítása: a service JDBC-t vagy repositoryt hív (`jdbc`, `DbCalls`, `xRepository`); benne maradt a
 PL/SQL-hívás vagy a `NOT_IMPLEMENTED` helyőrző; repository-kódot küld; vagy a Java-kód nem szintaktikus (a hibás
 sorral együtt).
+
+### Ami lefordul, de futáskor hibázna
+
+A fordító nem látja a natív lekérdezések hibáit, ezért ezeket a migrátor ellenőrzi a válaszon
+(`frm_forms/answer_checks.py`), és pontos, angol nyelvű javítási kérést küld a modellnek:
+
+- **Paraméterek:** az SQL minden `:név` paramétere kap értéket, és a `setParameter` nem állít be olyan nevet, amely
+  nincs az SQL-ben. Csak a szövegliterálként írt SQL-t ítéli meg; a futáskor összerakottat és a továbbadott
+  lekérdezést nem.
+- **Adatvégpont és LOV:** a megjegyzés SQL-je változatlanul benne van a kódban (a kis- és nagybetű, a sortörés nem
+  számít), és a megjegyzésben megnevezett triggereket a metódus meghívja, a megadott sorrendben. A lista lapozása
+  kétféleképp is írható (`OFFSET … FETCH` az SQL-ben, vagy `setFirstResult`/`setMaxResults`), ezért ott csak a blokk
+  lekérdezése kötelező. Az elvárt SQL és a hívások a `backend-plan.json` végpontjának `contract` mezőjében vannak.
+
+A megjegyzések SQL-je az `analysis/db-statements.json`-ba is bekerül, így a `verify-db` még az AI futása előtt
+lefordítja az Oracle-ben (futtatás nélkül): a hibás oszlopnév vagy hiányzó jogosultság ott derül ki.
 
 ## Az AI-napló
 

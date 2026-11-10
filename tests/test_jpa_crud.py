@@ -152,6 +152,20 @@ class EntityTests(unittest.TestCase):
         self.assertEqual([e['block'] for e in plan['endpoints'] if e.get('operation') in {'list', 'create'}], ['B', 'B'])
         self.assertEqual({e['runs'] for e in plan['endpoints'] if e.get('block') == 'B'}, {'ai'})
 
+    def test_hints_for_a_one_column_block_and_a_case_restricted_item(self):
+        # A query of one column returns the values themselves, no Object[]; Forms upper-cases a CaseRestriction item
+        # as it is typed, the save does it here. Both would compile wrong-way round and fail only at run time.
+        self.form.write_text(FORM.replace('<Block Name="N" DatabaseDataBlock="true" QueryDataSourceName="T_N" RecordsDisplayCount="5">\n'
+                                          '  <Item ItemType="Text Item" Name="NEV" DataType="Char"',
+                                          '<Block Name="N" DatabaseDataBlock="true" QueryDataSourceName="T_N" RecordsDisplayCount="5">\n'
+                                          '  <Item ItemType="Text Item" Name="NEV" DataType="Char" PrimaryKey="true" CaseRestriction="Upper"'),
+                             encoding='utf-8')
+        out = generate(self.root, self.form, 'lapozas')
+        service = ' '.join(line.strip().lstrip('/').strip() for line in
+                           (out / 'backend/DPS/LapozasServiceImpl.java').read_text(encoding='utf-8').splitlines())
+        self.assertIn('Sor -> new NRow(): a lekérdezés egy oszlopa maga a sor (Object, nem Object[]): NEV -> nev (String).', service)
+        self.assertIn('Kis-/nagybetűs mezők (Forms CaseRestriction): row.nev = SqlValues.upper(row.nev).', service)
+
     def test_the_entity_maps_the_tables_reviewed_structure(self):
         schema = self.root / 'schema.json'
         schema.write_text(json.dumps({'tables': {'T_B': {'primary_key': ['ID'], 'columns': {

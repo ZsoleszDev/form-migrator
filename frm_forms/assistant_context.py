@@ -61,9 +61,9 @@ ROUTINE_RULE = ("\n   The database routines of the Forms code run in Oracle thro
 SERVICE_RULE = ("Database access: the service's `entityManager` field (an injected EntityManager). Run the Oracle SQL of\n"
                 "   the comments as written, as native SQL with named parameters (never concatenated values):\n"
                 "   entityManager.createNativeQuery(sql).setParameter(\"name\", value), then .getResultList() (List<Object[]>,\n"
-                "   or List<Object> for one column), .getSingleResult() or .executeUpdate(). Read a column value with\n"
-                "   SqlValues.text(o), SqlValues.number(o) or SqlValues.dateTime(o); bind a null String as \"\" (Oracle\n"
-                "   reads '' as NULL). No repositories, no JDBC.")
+                "   or List<Object> for one column), .getSingleResult() or .executeUpdate(). Set every :name of the SQL,\n"
+                "   a value that may be null as SqlValues.bind(value). Read a column value with SqlValues.text(o),\n"
+                "   SqlValues.number(o) or SqlValues.dateTime(o). No repositories, no JDBC.")
 SERVICE_ROUTINES = ("\n   The database routines of the Forms code keep running in Oracle: call each one through the entityManager\n"
                     "   as listed below; never re-implement or skip a routine.")
 # A data endpoint or a LOV (ai_frames): the steps are in the method's //region AI-feladat comment.

@@ -70,6 +70,10 @@ bekötni. A képernyőértékek bekötése külön, összecsukott haladó eszkö
 - Opcionálisan a generált képernyő is elküldhető az AI-nak (standalone komponens, signalok, olvasható,
   kommentezett kód, ugyanazzal a működéssel). A teljes fájl csak akkor, ha belefér a kontextusba; ha nem,
   részenként (a fej a signalokkal, utána a metódusok). Sosem automatikus, beillesztés csak átnézés után.
+- A migrátor azt is ellenőrzi a válaszon, amit a fordító nem lát: minden SQL-paraméter kap-e értéket, benne van-e
+  változatlanul a megjegyzés SQL-je, és meghívja-e a megnevezett triggereket a megadott sorrendben. Hiba esetén
+  pontos javítási kérés megy vissza a modellnek. A natív lekérdezések paramétereit null-biztosra javítja
+  (`SqlValues.bind`), mert a típus nélküli null az Oracle-nél NUMBER és DATE oszlopon hibát adna.
 - Az AI-válasz szokásos apró hibáit (`request.getBlocks()`, `row.getX()`) a migrátor helyben javítja,
   nem kér érte újabb AI-hívást. Ha az utolsó válaszban is marad hiba, az hibás vázlatként megtekinthető marad.
 - Java csak adatbázismunkából lesz: az indítókód (PRE-FORM, WHEN-NEW-FORM-INSTANCE) és az
