@@ -198,7 +198,7 @@ public final class CommonMigrateTools {
                     : BigDecimal.valueOf(value.codePointCount(0, value.length()));
         }
 
-        /** Egy natív lekérdezés oszlopa szövegként (VARCHAR2, CHAR, CLOB); az üres és a null null. */
+        /** Egy natív lekérdezés oszlopa szövegként (VARCHAR2, CHAR, CLOB); az üres is null. */
         public static String text(Object value) {
             if (value instanceof Clob) {
                 try {
