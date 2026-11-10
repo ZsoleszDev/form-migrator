@@ -53,10 +53,16 @@ class CalendarServiceLinesTests(unittest.TestCase):
             self.assertNotIn('@Service(', service)
 
     def test_no_sql_literal_line_reaches_120_characters(self):
+        # The SQL of a string literal, and the SQL hints of the Java assistant's frames (//region AI-feladat): the
+        # migrator wraps both below the 120-character limit.
         checked = 0
         for path in (self.out / 'backend').rglob('*.java'):
+            hints = False
             for line in path.read_text(encoding='utf-8').split('\n'):
-                if not line.lstrip().startswith('//') and any(SQL.search(m.group(1)) for m in LITERAL.finditer(line)):
+                stripped = line.lstrip()
+                hints = (hints or stripped.startswith('//region AI-feladat')) and not stripped.startswith('//endregion')
+                if (hints and SQL.search(stripped)) or (not stripped.startswith('//') and any(
+                        SQL.search(m.group(1)) for m in LITERAL.finditer(line))):
                     checked += 1
                     self.assertLess(len(line), 120, path.name + ': ' + line)
         self.assertGreater(checked, 0)

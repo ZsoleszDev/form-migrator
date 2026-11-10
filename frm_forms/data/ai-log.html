@@ -304,7 +304,7 @@
     let saved = {};
     try { saved = JSON.parse(localStorage.getItem('frm-assistant-options-v2:' + location.origin + '/api') || localStorage.getItem('frm-assistant-options-v2:/api') || '{}'); } catch { saved = {}; }
     const body = {task_id: task, num_ctx: Number.isInteger(saved.num_ctx) ? saved.num_ctx : 16384,
-      num_predict: Number.isInteger(saved.num_predict) ? saved.num_predict : 4096, data_access: 'jpa'};
+      num_predict: Number.isInteger(saved.num_predict) ? saved.num_predict : 4096, data_access: 'service'};
     setStatus('Előnézet készül…');
     try {
       const preview = await api('/api/jobs/' + encodeURIComponent(state.job) + '/assistant/prompt',

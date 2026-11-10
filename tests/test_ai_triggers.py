@@ -32,6 +32,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SERVICE = "backend/DPS/OrdersServiceImpl.java"
 HOOKS = ("triggerPostQueryOrders", "triggerPreInsertOrders", "triggerWhenValidateItemCodeOrders")
 ENDPOINTS = ("onCtrlCountBtn", "onCtrlSearchBtn")
+CRUD = ("listOrders", "createOrders", "updateOrders", "deleteOrders")
 
 
 def form() -> str:
@@ -110,27 +111,188 @@ private void triggerWhenValidateItemCodeOrders(OrdersRow row, RuleContext contex
 '''
 
 
-JPA_STUBS = {
-    "Entity": 'public @interface Entity { String name() default ""; }',
-    "Table": 'public @interface Table { String name(); String schema() default ""; }',
-    "Column": "public @interface Column { String name(); boolean nullable() default true; int length() default 255; "
-              "int precision() default 0; int scale() default 0; }",
-    "Id": "public @interface Id {}", "IdClass": "public @interface IdClass { Class<?> value(); }",
-    "Lob": "public @interface Lob {}", "PersistenceContext": "public @interface PersistenceContext {}",
-    "Query": "public interface Query { Object getSingleResult(); java.util.List getResultList(); "
-             "Query setParameter(String name, Object value); }",
-    "EntityManager": "public interface EntityManager { <T> T find(Class<T> type, Object id); Query createNativeQuery(String sql); "
-                     "void persist(Object entity); <T> T merge(T entity); void remove(Object entity); }"}
+# A model answer for every task of the form, in the service style the prompt asks for: the Forms SQL as native SQL
+# through the service's EntityManager, no repository, no JDBC.
+ROW = """            var row = new OrdersRow();
+            row.id = SqlValues.number(r[0]);
+            row.code = SqlValues.text(r[1]);
+            row.name = SqlValues.text(r[2]);"""
+LOCK = """        List<Object[]> locked;
+        try {
+            locked = entityManager.createNativeQuery("SELECT ID, CODE, NAME FROM APP_ORDERS WHERE ID = :id FOR UPDATE NOWAIT")
+                    .setParameter("id", original.id).getResultList();
+        } catch (PersistenceException e) {
+            throw FormsErrors.translate(e);
+        }
+        if (locked.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "A rekord nem található.");
+        }
+        Object[] current = locked.get(0);
+        if (!SqlValues.same(SqlValues.number(current[0]), original.id) || !SqlValues.same(SqlValues.text(current[1]), original.code)
+                || !SqlValues.same(SqlValues.text(current[2]), original.name)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "A rekord közben megváltozott.");
+        }"""
+CHECKS = """        var errors = new ArrayList<String>();
+        FormsChecks.required(errors, "CODE", row.code);
+        FormsChecks.maxLength(errors, "CODE", row.code, 20);
+        FormsChecks.maxLength(errors, "NAME", row.name, 80);
+        FormsChecks.throwIfAny(errors);"""
+ANSWERS = {
+    "listOrders": """```java
+// SERVICE
+public PageResult<OrdersRow> listOrders(UserDto user, int offset, int limit) throws Exception {
+    return log1x(log, OrdersConstants.LIST_ORDERS_NAME, user, null, () -> {
+        if (offset < 0 || limit < 1 || limit > 200) {
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "offset/limit");
+        }
+        var context = new RuleContext();
+        List<Object[]> result = entityManager.createNativeQuery(
+                "SELECT ID, CODE, NAME FROM APP_ORDERS ORDER BY ID OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY")
+                .setParameter("offset", offset).setParameter("limit", limit + 1).getResultList();
+        var rows = new ArrayList<OrdersRow>();
+        for (Object[] r : result) {
+            if (rows.size() == limit) {
+                break;
+            }
+""" + ROW + """
+            triggerPostQueryOrders(row, context);
+            rows.add(row);
+        }
+        return new PageResult<>(rows, context.messages(), result.size() > limit);
+    });
+}
+```""",
+    "createOrders": """```java
+// SERVICE
+public RowResult<OrdersRow> createOrders(UserDto user, OrdersRow row) throws Exception {
+    return log1x(log, OrdersConstants.CREATE_ORDERS_NAME, user, null, () -> {
+        var context = new RuleContext();
+""" + CHECKS + """
+        triggerWhenValidateItemCodeOrders(row, context);
+        triggerPreInsertOrders(row, context);
+        try {
+            entityManager.createNativeQuery("INSERT INTO APP_ORDERS (ID, CODE, NAME) VALUES (:id, :code, :name)")
+                    .setParameter("id", row.id).setParameter("code", row.code).setParameter("name", row.name).executeUpdate();
+        } catch (PersistenceException e) {
+            throw FormsErrors.translate(e);
+        }
+        return new RowResult<>(row, context.messages());
+    });
+}
+```""",
+    "updateOrders": """```java
+// SERVICE
+public RowResult<OrdersRow> updateOrders(UserDto user, OrdersRow original, OrdersRow value) throws Exception {
+    return log1x(log, OrdersConstants.UPDATE_ORDERS_NAME, user, null, () -> {
+        var context = new RuleContext();
+        if (!SqlValues.same(original.id, value.id)) {
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "id: nem módosítható.");
+        }
+""" + LOCK + """
+        var row = value;
+""" + CHECKS + """
+        triggerWhenValidateItemCodeOrders(row, context);
+        try {
+            entityManager.createNativeQuery("UPDATE APP_ORDERS SET CODE = :code, NAME = :name WHERE ID = :id")
+                    .setParameter("code", row.code).setParameter("name", row.name).setParameter("id", row.id).executeUpdate();
+        } catch (PersistenceException e) {
+            throw FormsErrors.translate(e);
+        }
+        return new RowResult<>(value, context.messages());
+    });
+}
+```""",
+    "deleteOrders": """```java
+// SERVICE
+public List<String> deleteOrders(UserDto user, OrdersRow original) throws Exception {
+    return log1x(log, OrdersConstants.DELETE_ORDERS_NAME, user, null, () -> {
+        var context = new RuleContext();
+""" + LOCK + """
+        try {
+            entityManager.createNativeQuery("DELETE FROM APP_ORDERS WHERE ID = :id").setParameter("id", original.id).executeUpdate();
+        } catch (PersistenceException e) {
+            throw FormsErrors.translate(e);
+        }
+        return context.messages();
+    });
+}
+```""",
+    "onCtrlCountBtn": """```java
+// SERVICE
+public ActionResult onCtrlCountBtn(UserDto user, ActionRequest request) throws Exception {
+    return log1x(log, OrdersConstants.ON_CTRL_COUNT_BTN_NAME, user, null, () -> {
+        var values = request.blocks() == null ? Map.<String, Map<String, String>>of() : request.blocks();
+        String filter = PlsqlValues.text(values, "CTRL", "FILTER");
+        BigDecimal total = SqlValues.number(entityManager.createNativeQuery(
+                "SELECT count(*) FROM app_orders WHERE code LIKE :filter || '%'").setParameter("filter", filter).getSingleResult());
+        List<String> messages = new ArrayList<>();
+        messages.add(SqlValues.concat("Összesen: ", total == null ? null : total.toPlainString()));
+        Map<String, Map<String, String>> blocks = new LinkedHashMap<>();
+        PlsqlValues.put(blocks, "CTRL", "TOTAL", total);
+        return new ActionResult(blocks, messages, new ArrayList<>(), Map.of());
+    });
+}
+```""",
+    "onCtrlSearchBtn": """```java
+// SERVICE
+public PageResult<OrdersRow> onCtrlSearchBtn(UserDto user, QueryActionRequest request) throws Exception {
+    return log1x(log, OrdersConstants.ON_CTRL_SEARCH_BTN_NAME, user, null, () -> {
+        var values = request.blocks() == null ? Map.<String, Map<String, String>>of() : request.blocks();
+        String filter = PlsqlValues.text(values, "CTRL", "FILTER");
+        var context = new RuleContext();
+        List<Object[]> result = entityManager.createNativeQuery("SELECT ID, CODE, NAME FROM APP_ORDERS WHERE code like :filter "
+                + "|| '%' ORDER BY ID OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY").setParameter("filter", filter)
+                .setParameter("offset", request.offset()).setParameter("limit", request.limit() + 1).getResultList();
+        var rows = new ArrayList<OrdersRow>();
+        for (Object[] r : result) {
+            if (rows.size() == request.limit()) {
+                break;
+            }
+""" + ROW + """
+            triggerPostQueryOrders(row, context);
+            rows.add(row);
+        }
+        return new PageResult<>(rows, context.messages(), result.size() > request.limit());
+    });
+}
+```""",
+    "triggerPostQueryOrders": """```java
+// SERVICE
+private void triggerPostQueryOrders(OrdersRow row, RuleContext context) {
+    List<Object> names = entityManager.createNativeQuery("SELECT p.name FROM app_partners p WHERE p.code = :code")
+            .setParameter("code", row.code).getResultList();
+    row.partnerName = names.isEmpty() ? null : SqlValues.text(names.get(0));
+}
+```""",
+    "triggerPreInsertOrders": """```java
+// SERVICE
+private void triggerPreInsertOrders(OrdersRow row, RuleContext context) {
+    row.id = SqlValues.number(entityManager.createNativeQuery("SELECT app_orders_seq.NEXTVAL FROM dual").getSingleResult());
+}
+```""",
+    "triggerWhenValidateItemCodeOrders": VALIDATE_ANSWER,
+}
+
+
+class MethodClient:
+    """Ollama double that answers each task by the method it is about (the method under "Method:")."""
+
+    def __init__(self, answers, fallback="Nem tudom."):
+        self.answers, self.fallback, self.requests = answers, fallback, []
+
+    def open(self, request, timeout):
+        body = json.loads(request.data)
+        self.requests.append(body)
+        user = body["messages"][1]["content"]
+        method = re.search(r"Method:\n```java\n[^\n(]*?(\w+)\(", user)
+        content = self.answers.get(method.group(1) if method else "", self.fallback)
+        return io.BytesIO(json.dumps({"done": True, "done_reason": "stop",
+                                      "message": {"role": "assistant", "content": content}}).encode())
 
 
 def compile_module(test: unittest.TestCase, output: Path, work: Path) -> None:
     # The frames the assistant has not written yet are empty (they do not compile until then): written here.
     sources = compile_copies(list((output / "backend").rglob("*.java")), work) + write_stubs(work / "stubs")
-    for name, body in JPA_STUBS.items():  # the JPA entity/repository of an applied proposal
-        path = work / "stubs/javax/persistence" / (name + ".java")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("package javax.persistence;\n" + body, encoding="utf-8")
-        sources.append(path)
     argsfile = work / "sources.args"
     argsfile.write_text("\n".join('"' + str(p).replace("\\", "/") + '"' for p in sources))
     build = subprocess.run(["java", "com.sun.tools.javac.Main", "--release", "11", "-encoding", "UTF-8",
@@ -182,12 +344,50 @@ class AiFramesTests(unittest.TestCase):
         self.assertIn("public PageResult<OrdersRow> onCtrlSearchBtn(UserDto user, QueryActionRequest request)", self.service)
         for hook in HOOKS:
             self.assertIn("private void " + hook + "(OrdersRow row, RuleContext context)", self.service)
-        # The CRUD flow calls the hooks at the Forms points (validation, before insert, after fetch).
-        self.assertIn("triggerWhenValidateItemCodeOrders(row, context);", method_text(self.service, "validateRulesOrders"))
-        self.assertIn("triggerPreInsertOrders(row, context);", method_text(self.service, "preInsertOrders"))
-        self.assertIn("triggerPostQueryOrders(row, context);", method_text(self.service, "postQueryOrders"))
-        self.assertIn("preInsertOrders(row, context);", method_text(self.service, "createOrders"))
-        self.assertIn("postQueryOrders(row, context);", method_text(self.service, "listOrders"))
+        # The data endpoints name the hooks at the Forms points (validation, before insert, after fetch); no
+        # dispatcher or CRUD helper is generated around them.
+        create = method_text(self.service, "createOrders")
+        self.assertLess(create.index("triggerWhenValidateItemCodeOrders(row, context)"), create.index("triggerPreInsertOrders(row, context)"))
+        self.assertLess(create.index("triggerPreInsertOrders(row, context)"), create.index("INSERT INTO APP_ORDERS"))
+        self.assertIn("triggerPostQueryOrders(row, context)", method_text(self.service, "listOrders"))
+        self.assertIn("triggerPostQueryOrders(row, context)", method_text(self.service, "onCtrlSearchBtn"))
+        for helper in ("validateRulesOrders", "preInsertOrders", "postQueryOrders", "guardOrders", "loadRowOrders"):
+            self.assertNotIn(" " + helper + "(", self.service)
+
+    def test_data_endpoints_are_frames_with_the_forms_sql(self):
+        # Every data endpoint is the assistant's too: an empty frame under its hints (the SQL Forms runs, the row
+        # mapping, the hooks in the Forms order, the result). The service runs SQL through its EntityManager only.
+        hints = {"listOrders": ["SELECT ID, CODE, NAME FROM APP_ORDERS ORDER BY ID OFFSET :offset ROWS FETCH NEXT",
+                                "[0] ID -> id (BigDecimal)", "new PageResult<>(rows, context.messages(), hasMore)"],
+                 "createOrders": ["kötelező: CODE", "INSERT INTO APP_ORDERS (ID, CODE, NAME) VALUES (:id, :code, :name)",
+                                  "new RowResult<>(row, context.messages())"],
+                 "updateOrders": ["SELECT ID, CODE, NAME FROM APP_ORDERS WHERE ID = :id FOR UPDATE NOWAIT",
+                                  "UPDATE APP_ORDERS SET CODE = :code, NAME = :name WHERE ID = :id",
+                                  "triggerWhenValidateItemCodeOrders(value, context)"],
+                 "deleteOrders": ["FOR UPDATE NOWAIT", "DELETE FROM APP_ORDERS WHERE ID = :id", "Vissza: context.messages()."]}
+        for method, expected in hints.items():
+            with self.subTest(method=method):
+                text = method_text(self.service, method)
+                self.assertIn("//region AI-feladat: ORDERS / ", text)
+                self.assertRegex(text, r"//endregion\n\s*\}\);\n\s*\}$")  # nothing started under the hints
+                flat = " ".join(line.strip().lstrip("/").strip() for line in text.splitlines())
+                for line in expected:
+                    self.assertIn(line, flat)
+                self.assertEqual(code_lines(text).count(";"), 1, text)  # only the log1x frame
+        self.assertIn("@PersistenceContext\n    private EntityManager entityManager;", self.service)
+        self.assertIn("import javax.persistence.EntityManager;", self.service)
+        for word in ("Repository", "jdbc", "@Autowired", "FormsChecks.required("):
+            self.assertNotIn(word, code_lines(self.service))
+        # The SQL of a trigger as native SQL with named parameters, beside the Forms code.
+        self.assertIn("SQL: SELECT p.name FROM app_partners p WHERE p.code = :code — :code = row.code; eredmény ->",
+                      method_text(self.service, "triggerPostQueryOrders"))
+        self.assertIn("SQL: SELECT count(*) FROM app_orders WHERE code LIKE :filter || '%' — :filter = CTRL.FILTER",
+                      method_text(self.service, "onCtrlCountBtn"))
+        # The table's entity and an empty repository: the developer's, the service does not use them.
+        domain = (self.output / "backend/DPS/AppOrdersDomain.java").read_text(encoding="utf-8")
+        self.assertIn('@Table(name = "APP_ORDERS")', domain)
+        repository = (self.output / "backend/DPS/AppOrdersRepository.java").read_text(encoding="utf-8")
+        self.assertIn("public interface AppOrdersRepository extends JpaRepository<AppOrdersDomain, BigDecimal> {\n}", repository)
 
     def test_plan_report_and_screen_follow_the_ai_frames(self):
         plan = read_json(self.output / "analysis/backend-plan.json")
@@ -238,11 +438,15 @@ class AiFramesTests(unittest.TestCase):
     def test_assistant_tasks_ask_only_for_the_tables_the_code_uses(self):
         index = engine.prepare_workspace(self.output)
         tasks = {t["method"]: t for t in index["tasks"]}
-        self.assertEqual(set(tasks), set(HOOKS) | set(ENDPOINTS))
-        self.assertEqual(tasks["triggerWhenValidateItemCodeOrders"]["pending_tables"], [])
-        self.assertEqual(tasks["triggerPostQueryOrders"]["pending_tables"], ["APP_PARTNERS"])
-        self.assertEqual(tasks["triggerPreInsertOrders"]["pending_tables"], ["APP_ORDERS"])  # the key's sequence
-        self.assertEqual(tasks["onCtrlSearchBtn"]["pending_tables"], ["APP_ORDERS"])
+        self.assertEqual(set(tasks), set(HOOKS) | set(ENDPOINTS) | set(CRUD))
+        # The model runs the Forms SQL as written: no table structure holds a task back. The tables the code uses
+        # are still listed (Adatbázistáblák): their structure gives the Domain entity.
+        self.assertEqual({m for m, t in tasks.items() if t["pending_tables"]}, set())
+        self.assertEqual(tasks["triggerPostQueryOrders"]["tables"], ["APP_PARTNERS"])
+        self.assertEqual(tasks["onCtrlSearchBtn"]["tables"], ["APP_ORDERS"])
+        self.assertEqual(tasks["createOrders"]["tables"], [])
+        self.assertEqual((tasks["createOrders"]["event"], tasks["createOrders"]["kind"]), ("ÚJ REKORD", "implement"))
+        self.assertTrue(read_json(self.output / engine.AREA / "tasks" / (tasks["listOrders"]["id"] + ".json"))["apply_allowed"])
         self.assertEqual({t["kind"] for m, t in tasks.items() if m in HOOKS}, {"hook"})
         self.assertEqual(tasks["onCtrlCountBtn"]["event"], "WHEN-BUTTON-PRESSED")
         self.assertEqual(tasks["triggerPreInsertOrders"]["event"], "PRE-INSERT")
@@ -280,13 +484,41 @@ class AiFramesTests(unittest.TestCase):
         service = (output / SERVICE).read_text(encoding="utf-8")
         frame = method_text(service, "onCtrlSearchBtn")
         self.assertIn("public ActionResult onCtrlSearchBtn(UserDto user, ActionRequest request)", frame)
-        self.assertIn("Lekérdezőgomb lenne, de a(z) ORDERS blokknak nincs adatvégpontja", frame)
-        self.assertIn("Nincs elsődleges kulcs", frame)
+        flat = " ".join(line.strip().lstrip("/").strip() for line in frame.splitlines())  # long notes wrap
+        self.assertIn("Lekérdezőgomb lenne, de a(z) ORDERS blokknak nincs adatvégpontja", flat)
+        self.assertIn("Nincs elsődleges kulcs", flat)
         endpoints = {e["method"]: e for e in json.loads((output / "analysis/backend-plan.json").read_text())["endpoints"]}
         self.assertNotIn("query_block", endpoints["onCtrlSearchBtn"])
         self.assertFalse(any(e.get("block") == "ORDERS" and e.get("operation") in {"list", "search"} for e in endpoints.values()))
         if shutil.which("java"):
             compile_module(self, output, Path(tempfile.mkdtemp(dir=self.root)))
+        # The table that gives the block its key is offered with every task (Adatbázistáblák), and says why.
+        from frm_forms import schema_workbench as schema
+        index = engine.prepare_workspace(output)
+        self.assertTrue(index["tasks"])
+        for task in index["tasks"]:
+            self.assertIn("APP_ORDERS", task["tables"], task["method"])
+            self.assertNotIn("APP_ORDERS", task["pending_tables"] if task["method"] == "onCtrlSearchBtn" else [])
+        row = next(t for t in index["schema"]["tables"] if t["table"] == "APP_ORDERS")
+        self.assertEqual((row["status"], row["key_for_blocks"]), ("needs_schema", ["ORDERS"]))
+        self.assertTrue(any("Elsődleges kulcs kell a(z) ORDERS blokk adatvégpontjaihoz" in r for r in row["reasons"]))
+        # Saved with its key, then generated again: the block has its endpoints, the button is a query button.
+        saved = self.root / "nokey-schema.json"
+        saved.write_text("{}", encoding="utf-8")
+        sheet = schema.save_table(output, "APP_ORDERS", [
+            {"name": "ID", "data_type": "NUMBER", "nullable": False, "precision": 10, "scale": 0},
+            {"name": "CODE", "data_type": "VARCHAR2", "nullable": False, "length": 20, "length_semantics": "CHAR"},
+            {"name": "NAME", "data_type": "VARCHAR2", "nullable": True, "length": 80, "length_semantics": "CHAR"}],
+            ["ID"], schema.schema_sheet(output)["revision"], saved)
+        self.assertTrue(any("futtasd újra a migrálást" in w for w in sheet["warnings"]), sheet["warnings"])
+        again = self.root / "nokey-again"
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            code = main(["migrate", str(source), "--screen", "--module", "orders", "--config", str(config),
+                         "--schema", str(saved), "--out", str(again)])
+        self.assertEqual(code, 0, err.getvalue())
+        endpoints = {e["method"]: e for e in json.loads((again / "analysis/backend-plan.json").read_text())["endpoints"]}
+        self.assertEqual(endpoints["onCtrlSearchBtn"]["query_block"], "ORDERS")
+        self.assertTrue((again / "backend/DPS/AppOrdersRepository.java").is_file())
 
 
 class HookAssistantTests(unittest.TestCase):
@@ -337,28 +569,55 @@ class HookAssistantTests(unittest.TestCase):
         for method in ("triggerPostQueryOrders", "triggerPreInsertOrders"):
             self.assertNotIn(hint, engine.preview(self.output, self.tasks[method]["id"], self.options)["user"], method)
 
-    def test_sequence_key_hook_gets_its_own_table_repository_and_compiles(self):
-        from frm_forms import schema_workbench as schema
-        sheet = schema.schema_sheet(self.output)
-        schema.save_table(self.output, "APP_ORDERS", [
-            {"name": "ID", "data_type": "NUMBER", "nullable": False, "precision": 10, "scale": 0},
-            {"name": "CODE", "data_type": "VARCHAR2", "nullable": False, "length": 20, "length_semantics": "CHAR"},
-            {"name": "NAME", "data_type": "VARCHAR2", "nullable": True, "length": 80, "length_semantics": "CHAR"}], ["ID"], sheet["revision"])
-        task = next(t for t in engine.prepare_workspace(self.output)["tasks"] if t["method"] == "triggerPreInsertOrders")
+    def test_sequence_key_hook_runs_its_sql_through_the_entity_manager(self):
+        # No table structure needed, no repository, no deterministic shortcut: the model writes the hook in the
+        # service, the sequence's SQL through the EntityManager.
+        task = self.tasks["triggerPreInsertOrders"]
         self.assertEqual(task["pending_tables"], [])
         preview = engine.preview(self.output, task["id"], self.options)
-        # The sequence needs no table name in the code: the hook's own table hosts its generated method.
-        self.assertIn("Repositories:\n- appOrdersRepository (AppOrdersRepository)", preview["user"])
-        self.assertIn("- appOrdersRepository.nextAppOrdersSeq() returns BigDecimal", preview["user"])
-        self.assertTrue(preview["deterministic"])  # the key from a sequence needs no model (hook_java)
-        with patch("frm_forms.ollama.opener", side_effect=AssertionError("no model call")):
+        self.assertFalse(preview["deterministic"])
+        self.assertEqual(preview["repositories"], [])
+        self.assertIn("the service's `entityManager` field", preview["user"])
+        self.assertIn('SEQ.NEXTVAL: SqlValues.number(entityManager.createNativeQuery("SELECT SEQ.NEXTVAL FROM DUAL")', preview["user"])
+        self.assertIn("SQL: SELECT app_orders_seq.NEXTVAL FROM dual; eredmény -> row.id", preview["user"])
+        self.assertNotIn("Repositories:", preview["user"])
+        self.assertNotIn("// REPOSITORY", preview["user"])
+        client = MethodClient(ANSWERS)
+        with patch("frm_forms.ollama.opener", return_value=client):
             result = engine.propose(self.output, task["id"], self.options)
-        self.assertEqual((result["status"], result["calls"]), ("proposal", 0), result)
+        self.assertEqual((result["status"], result["calls"], result["data_access"]), ("proposal", 1, "service"), result)
+        self.assertEqual([f["target"] for f in result["files"]], [SERVICE])
         engine.apply_proposal(self.output, result["id"], reviewed=True)
         service = (self.output / SERVICE).read_text(encoding="utf-8")
-        self.assertIn("row.id = appOrdersRepository.nextAppOrdersSeq();", method_text(service, "triggerPreInsertOrders"))
-        self.assertIn('@Query(value = "SELECT APP_ORDERS_SEQ.NEXTVAL FROM DUAL", nativeQuery = true)\n    BigDecimal nextAppOrdersSeq();',
-                      (self.output / "backend/DPS/AppOrdersRepository.java").read_text(encoding="utf-8"))
+        hook = method_text(service, "triggerPreInsertOrders")
+        self.assertIn('row.id = SqlValues.number(entityManager.createNativeQuery("SELECT app_orders_seq.NEXTVAL FROM "', hook)
+        self.assertIn("//region Eredeti Forms-kód: ORDERS / PRE-INSERT", hook)
+        self.assertIn("import hu.company.features.cl.CommonMigrateTools.SqlValues;", service)
+        if shutil.which("java"):
+            compile_module(self, self.output, Path(tempfile.mkdtemp(dir=self.root)))
+
+    def test_every_method_is_written_by_the_model_applied_and_compiles(self):
+        # The whole module from the model: the data endpoints, the buttons and the hooks, each from its own
+        # frame, through the EntityManager. Applied one by one, the service compiles as Java 11.
+        client = MethodClient(ANSWERS)
+        for method in CRUD + ENDPOINTS + HOOKS:
+            with self.subTest(method=method):
+                task = next(t for t in engine.prepare_workspace(self.output)["tasks"] if t["method"] == method)
+                with patch("frm_forms.ollama.opener", return_value=client):
+                    result = engine.propose(self.output, task["id"], self.options)
+                self.assertEqual(result["status"], "proposal", result)
+                engine.apply_proposal(self.output, result["id"], reviewed=True)
+        self.assertEqual(len(client.requests), 9)
+        crud = client.requests[0]["messages"][1]["content"]
+        self.assertIn("Write the body of this Java method from the steps of its AI-feladat comment", crud)
+        self.assertIn("FormsChecks.required(errors", crud)
+        self.assertEqual(engine.prepare_workspace(self.output)["tasks"], [])
+        service = (self.output / SERVICE).read_text(encoding="utf-8")
+        create = method_text(service, "createOrders")
+        self.assertIn("//region AI-feladat: ORDERS / új rekord", create)  # the hints stay above the written body
+        self.assertIn('"INSERT INTO APP_ORDERS (ID, CODE, NAME) VALUES (:id, :code, :name)"', create)
+        self.assertIn("import javax.persistence.PersistenceException;", service)
+        self.assertNotIn("Repository", code_lines(service))
         if shutil.which("java"):
             compile_module(self, self.output, Path(tempfile.mkdtemp(dir=self.root)))
 
@@ -494,33 +753,32 @@ class QueueTests(unittest.TestCase):
         self.manager.save_settings({"url": "http://localhost:11434", "model": "qwen-test"})
 
     def idle(self):
-        for _ in range(750):
+        # A whole module (9 tasks, each with a javac syntax check) on a busy CI machine: up to a minute.
+        for _ in range(3000):
             state = self.manager.queue_state("job1")
             if state["active"] is None and not state["queued"]:
                 return state
             time.sleep(0.02)
         self.fail("Az AI-sor nem ürült ki.")
 
-    def test_migration_completion_queues_ready_triggers_and_applies_the_answer(self):
+    def test_migration_completion_queues_every_task_and_applies_the_answers(self):
         self.assertEqual(self.jobs.on_completed, self.manager.migration_completed)
-        client = Client(VALIDATE_ANSWER)
+        client = MethodClient(ANSWERS)
         with patch("frm_forms.ollama.opener", return_value=client):
             self.jobs.on_completed("job1")
             state = self.idle()
-        # Only the trigger whose tables are known (none needed) ran; the rest waits for the table structures. A plain
-        # check with a message needs no model: the migrator wrote it (hook_java), the queue applied it.
-        self.assertEqual(len(client.requests), 0)
+        # No task waits for a table structure: every method of the module ran, one at a time, and was applied.
+        self.assertEqual(len(client.requests), 9)
         finished = state["finished"]
-        self.assertEqual([(r["method"], r["status"], r["auto"], r["applied"]) for r in finished],
-                         [("triggerWhenValidateItemCodeOrders", "completed", True, True)])
-        self.assertEqual(finished[0]["proposal_status"], "proposal")
+        self.assertEqual(sorted(r["method"] for r in finished), sorted(CRUD + ENDPOINTS + HOOKS))
+        self.assertEqual({(r["status"], r["auto"], r["applied"], r["proposal_status"]) for r in finished},
+                         {("completed", True, True, "proposal")})
         service = (self.root / "job1/module" / SERVICE).read_text(encoding="utf-8")
         self.assertIn('context.message("Túl rövid kód");', method_text(service, "triggerWhenValidateItemCodeOrders"))
-        self.assertIn("SqlValues.length(row.code)", method_text(service, "triggerWhenValidateItemCodeOrders"))
+        self.assertIn(".executeUpdate();", method_text(service, "createOrders"))
         index = self.manager.index("job1")
-        self.assertEqual([t["method"] for t in index["done_tasks"]], ["triggerWhenValidateItemCodeOrders"])
-        self.assertEqual(index["auto"]["done"], 1)
-        self.assertEqual(index["auto"]["waiting_for_tables"], 4)
+        self.assertEqual(len(index["done_tasks"]), 9)
+        self.assertEqual((index["auto"]["done"], index["auto"]["waiting_for_tables"]), (9, 0))
         # Nothing ready is left: a second automatic start queues nothing.
         with patch("frm_forms.ollama.opener", side_effect=AssertionError("no new request")):
             self.assertEqual(self.manager.auto_start("job1", reason="migration")["queued"], 0)
@@ -531,26 +789,26 @@ class QueueTests(unittest.TestCase):
             self.jobs.on_completed("job1")
             self.assertEqual(self.idle()["finished"], [])
         before = (self.root / "job1/module" / SERVICE).read_bytes()
-        with patch("frm_forms.ollama.opener", return_value=Client(VALIDATE_ANSWER)), model_path():
+        with patch("frm_forms.ollama.opener", return_value=MethodClient(ANSWERS)):
             queued = self.manager.auto_start("job1")  # the developer's own "start all"
-            self.assertEqual(queued["methods"], ["triggerWhenValidateItemCodeOrders"])
+            self.assertEqual(sorted(queued["methods"]), sorted(CRUD + ENDPOINTS + HOOKS))
             state = self.idle()
-        self.assertEqual(state["finished"][0]["status"], "completed")
-        self.assertFalse(state["finished"][0]["applied"])
+        self.assertEqual({r["status"] for r in state["finished"]}, {"completed"})
+        self.assertFalse(any(r["applied"] for r in state["finished"]))
         self.assertEqual((self.root / "job1/module" / SERVICE).read_bytes(), before)
 
     def test_a_failed_automatic_run_is_not_repeated_for_the_same_input(self):
-        self.enterContext(model_path())
-        with patch("frm_forms.ollama.opener", return_value=Client("Nem tudom.", "Most sem.")):
+        with patch("frm_forms.ollama.opener", return_value=MethodClient({}, "Nem tudom.")):
             self.manager.auto_start("job1", reason="migration")
             state = self.idle()
-        self.assertEqual(state["finished"][0]["status"], "failed")
+        self.assertEqual({r["status"] for r in state["finished"]}, {"failed"})
         self.assertIn("/ai-log?job=job1&exchange=", state["finished"][0]["error"])
         with patch("frm_forms.ollama.opener", side_effect=AssertionError("no retry")):
-            self.assertEqual(self.manager.auto_start("job1", reason="schema")["skipped"], ["triggerWhenValidateItemCodeOrders"])
-        with patch("frm_forms.ollama.opener", return_value=Client(VALIDATE_ANSWER)):
-            self.assertEqual(self.manager.auto_start("job1", force=True)["queued"], 1)
-            self.assertTrue(self.idle()["finished"][0]["applied"])
+            skipped = self.manager.auto_start("job1", reason="schema")["skipped"]
+        self.assertEqual(sorted(skipped), sorted(CRUD + ENDPOINTS + HOOKS))
+        with patch("frm_forms.ollama.opener", return_value=MethodClient(ANSWERS)):
+            self.assertEqual(self.manager.auto_start("job1", force=True)["queued"], 9)
+            self.assertTrue(all(r["applied"] for r in self.idle()["finished"][:9]))
 
     def test_runs_go_one_at_a_time_and_can_be_cancelled(self):
         from frm_forms.web.assistant import AssistantRequest, CancelRequest

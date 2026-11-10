@@ -44,7 +44,8 @@ Fontos: `DUMP=ALL` nélkül a Forms2XML csak az alapértéktől eltérő tulajdo
 ## Mi kell ahhoz, hogy a migrálás + AI után működő modul legyen?
 
 1. Teljes export: `.fmb` → `DUMP=ALL` XML, a csatolt `.pll` → `.pld`, a használt `.olb` → `_olb.xml`.
-2. A triggerekben használt táblák szerkezete (az Adatbázistáblák panel a hiányzókat triggerenként mutatja).
+2. A triggerekben használt táblák szerkezete (az Adatbázistáblák panel a hiányzókat triggerenként mutatja), és a
+   kulcs nélküli blokkok táblájának elsődleges kulcsa (ezeket a panel minden végpontnál mutatja; utána Újrafuttatás).
 3. Az AI-sor lefuttatása; a `MISSING:`-t kérő feladatokhoz a hiányzó forrás megadása.
 4. A céges projektben fordítás és a fő folyamatok kipróbálása (lekérdezés, új rekord, módosítás, törlés, gombok).
 

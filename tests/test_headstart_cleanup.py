@@ -204,12 +204,16 @@ class HeadstartCleanupTests(unittest.TestCase):
     def test_a_clean_operation_is_live_without_a_module_switch(self):
         out = self.generate(headstart_form(post_query=False))
         service = (out / 'backend/DPS/TesztServiceImpl.java').read_text(encoding='utf-8')
-        # No switch in the ServiceImpl: a clean operation is enabled, the developer decides when the module is used.
+        # No switch and no guard in the ServiceImpl: the clean search is the Java assistant's frame with its SQL, the
+        # developer decides when the module is used.
         self.assertNotIn('MODULE_REVIEWED', service)
-        self.assertRegex(' '.join(service.split()), r'Set\.of\([^)]*"search"[^)]*\)')
+        self.assertNotIn('NOT_IMPLEMENTED', service)
+        self.assertIn('//region AI-feladat: AIT / keresés', service)
         plan = json.loads((out / 'analysis/backend-plan.json').read_text(encoding='utf-8'))
         search = next(e for e in plan['endpoints'] if e.get('operation') == 'search')
-        self.assertEqual((search['implemented'], search['ready_after_module_review']), (True, False))
+        self.assertEqual((search['runs'], search['implemented'], search['ready_after_module_review']), ('ai', False, False))
+        self.assertEqual(len(search['blockers']), 1)  # only "AI-ra vár": nothing else holds it back
+        self.assertTrue(search['blockers'][0].startswith('AI-ra vár'))
 
     # 4. Spacers
     def test_catalogued_spacers_become_empty_elements(self):

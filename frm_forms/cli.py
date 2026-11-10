@@ -473,7 +473,7 @@ def main(argv=None) -> int:
     assist.add_argument("--timeout", type=int, default=600)
     assist.add_argument("--attempts", type=int, default=2, help="Legfeljebb ennyi kérés formátumjavítással együtt (1..3)")
     assist.add_argument("--think", choices=["default", "disabled", "low", "medium", "high"], default="default")
-    assist.add_argument("--data-access", choices=["jpa", "inline", "jdbc"], default="jpa")
+    assist.add_argument("--data-access", choices=["service", "jpa", "inline", "jdbc"], default="service")
     assist.add_argument("--instructions", default="", help="A kiválasztott végpont konkrét fejlesztési feladata")
     assist.add_argument("--project-context", type=Path, help="UTF-8 szöveg: céges API-minta, ellenőrzött hívott rutinok")
     assist.add_argument("--cached-only", action="store_true", help="Kizárólag korábbi, azonos kontextusú válasz")

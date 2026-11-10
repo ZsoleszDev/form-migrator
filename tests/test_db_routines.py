@@ -3,6 +3,9 @@
 A trigger like PRE-INSERT `kod_pkg.check_insert(:B.KOD, :B.DATUM, :B.NEV)` keeps running in Oracle. With its reviewed
 signature (schema.json procedures) the migrator offers `String kodPkgCheckInsert(String pKod, LocalDateTime pDatum)`;
 an applied proposal that calls it gets the method (DbCalls on the service's NamedParameterJdbcTemplate) and compiles.
+
+The jpa data access of the Java assistant (`backend-assist --data-access jpa`); the default, "service", writes
+everything in the service through the EntityManager (test_ai_triggers).
 """
 import contextlib
 import io
@@ -92,13 +95,13 @@ class RoutineAssistantTests(unittest.TestCase):
         return json.loads((self.output / engine.AREA / 'tasks' / (self.tasks[method]['id'] + '.json')).read_text(encoding='utf-8'))
 
     def test_the_prompt_offers_the_routine_methods_and_names_the_rest(self):
-        insert = engine.preview(self.output, self.tasks['triggerPreInsertB']['id'], engine.Options())['user']
+        insert = engine.preview(self.output, self.tasks['triggerPreInsertB']['id'], engine.Options(data_access="jpa"))['user']
         self.assertIn('- String dbcallDbRoutines.kodPkgCheckInsert(String pKod, LocalDateTime pDatum) = '
                       'KOD_PKG.CHECK_INSERT(P_KOD, P_DATUM, OUT P_NEV): returns P_NEV', insert)
         self.assertIn("(on the service's routine field): call those (the only allowed PL/SQL calls)", insert)
-        query = engine.preview(self.output, self.tasks['triggerPostQueryB']['id'], engine.Options())['user']
+        query = engine.preview(self.output, self.tasks['triggerPostQueryB']['id'], engine.Options(data_access="jpa"))['user']
         self.assertIn('- String dbcallDbRoutines.kodPkgGetNev(String pKod) = KOD_PKG.GET_NEV(P_KOD)', query)
-        delete = engine.preview(self.output, self.tasks['triggerPreDeleteB']['id'], engine.Options())['user']
+        delete = engine.preview(self.output, self.tasks['triggerPreDeleteB']['id'], engine.Options(data_access="jpa"))['user']
         self.assertIn('Called database routines without a method: UNDOCUMENTED_PKG.PURGE: no reviewed signature.', delete)
         self.assertNotIn('Database routine methods', delete)
         self.assertEqual(self.packet('triggerPreDeleteB')['external_calls'], ['UNDOCUMENTED_PKG.PURGE'])  # hooks too
@@ -112,7 +115,7 @@ private void triggerPreInsertB(BRow row, RuleContext context) {
 ```"""
         client = Client(answer)
         with patch('frm_forms.ollama.opener', return_value=client):
-            result = engine.propose(self.output, self.tasks['triggerPreInsertB']['id'], engine.Options())
+            result = engine.propose(self.output, self.tasks['triggerPreInsertB']['id'], engine.Options(data_access="jpa"))
         self.assertEqual(result['status'], 'proposal', result)
         engine.apply_proposal(self.output, result['id'], reviewed=True)
         service = (self.output / SERVICE).read_text(encoding='utf-8')
@@ -154,7 +157,7 @@ public ActionResult onCtrlBtn(UserDto user, ActionRequest request) throws Except
 }
 ```"""
         with patch('frm_forms.ollama.opener', return_value=Client(answer)):
-            result = engine.propose(output, task['id'], engine.Options())
+            result = engine.propose(output, task['id'], engine.Options(data_access="jpa"))
         self.assertEqual(result['status'], 'proposal', result)
         engine.apply_proposal(output, result['id'], reviewed=True)
         service = service_path.read_text(encoding='utf-8')
@@ -186,7 +189,7 @@ private void triggerPreInsertB(BRow row, RuleContext context) {
 ```"""
         client = Client(guessed, fixed)
         with patch('frm_forms.ollama.opener', return_value=client):
-            result = engine.propose(self.output, self.tasks['triggerPreInsertB']['id'], engine.Options(attempts=2))
+            result = engine.propose(self.output, self.tasks['triggerPreInsertB']['id'], engine.Options(data_access="jpa", attempts=2))
         self.assertEqual(result['calls'], 2)
         self.assertIn('Do not write kodPkgCheckInsert', client.requests[1]['messages'][-1]['content'])
 

@@ -1,22 +1,19 @@
-"""Block CRUD over Spring Data JPA (backend_trigger_mode=ai): per table a Domain entity and a JpaRepository.
+"""Per table a Domain entity and an empty JpaRepository (backend_trigger_mode=ai), for the developer.
 
-The company pattern: `interface RendelesRepository extends JpaRepository<RendelesDomain, BigDecimal>` with @Query
-methods, called by the DPS ServiceImpl through an @Autowired field. The service holds no SQL and no JDBC:
-- the block query (Forms DEFAULT_WHERE + ORDER BY) is a JPQL @Query over the Domain (backend_queries compiles it); a
-  clause outside the JPQL subset runs as written, as a native @Query of the same repository;
-- the record lock before an update or delete is @Lock(PESSIMISTIC_WRITE) with lock timeout 0, the Forms
-  FOR UPDATE NOWAIT: a record another session holds is HTTP 409 at once (FormsErrors);
-- insert, update and delete are save/delete of the Domain; a sequence key is a native NEXTVAL query.
+The generation writes the Domain of every block table (its columns, or the table's reviewed structure) and an empty
+Repository (`interface RendelesRepository extends JpaRepository<RendelesDomain, BigDecimal> {}`, the company pattern):
+the Java assistant writes the service's SQL itself (ai_frames), the developer may move a query into the repository
+later. A structure saved on the Adatbázistáblák panel gives its table the same pair (write_schema_entity).
 A table without a primary key gets no Domain (rules.NO_KEY): the block has no data endpoint until the schema names one.
 One Domain and one Repository per table, named after the table (RENDELES_TETEL -> RendelesTetelDomain,
-RendelesTetelRepository); the blocks of one table share them, each with its own query method.
+RendelesTetelRepository); the blocks of one table share them.
 """
 from __future__ import annotations
 
 import re
 
 from .backend_queries import domain_field
-from .common import MigrationError, jstr, name
+from .common import MigrationError, name
 
 JAVA_TYPES = {"text": "String", "number": "BigDecimal", "datetime": "LocalDateTime", "unsupported": "String"}
 MARKER = "Forms migrator JPA"  # the first comment line of a generated Domain / Repository (project_deploy)
@@ -34,15 +31,18 @@ def ai_mode(model: dict) -> bool:
     return (model.get("options") or {}).get("backend_trigger_mode") == "ai"
 
 
-def plan(blocks: list[dict]) -> dict[str, dict]:
-    """table -> Domain/Repository plan of the served blocks (the union of their columns, the shared key)."""
+def plan(blocks: list[dict], schema_tables: dict | None = None) -> dict[str, dict]:
+    """table -> Domain/Repository plan of the served blocks (the union of their columns, the shared key).
+
+    With the table's reviewed structure (schema.json tables: data dictionary, Adatbázistáblák panel) the Domain maps
+    every column of the table, typed by the database; without it, the columns of the blocks."""
     tables: dict[str, dict] = {}
     for b in blocks:
         table = b["table"].upper()
         if not b["pk"]:
             raise MigrationError(b["name"] + ": JPA Domain kulcs nélkül nem készül.")
         entry = tables.setdefault(table, {"table": table, "class": table_class(table), "columns": {}, "key": None,
-                                          "blocks": [], "sequences": {}})
+                                          "blocks": []})
         for item in b["db_items"]:
             column = item["column"].upper()
             typ = JAVA_TYPES[item["type"]]
@@ -54,8 +54,7 @@ def plan(blocks: list[dict]) -> dict[str, dict]:
             raise MigrationError(table + ": a blokkok eltérő elsődleges kulcsot adnak meg.")
         entry["key"] = key
         entry["blocks"].append(b["name"])
-        if b.get("sequence"):
-            entry["sequences"][b["sequence"].upper()] = "next" + name(b["sequence"].rsplit(".", 1)[-1], "pascal")
+        add_schema_columns(entry, schema_tables or {})
     classes: dict[str, str] = {}
     for table, entry in tables.items():
         fields = [c["field"] for c in entry["columns"].values()]
@@ -69,44 +68,38 @@ def plan(blocks: list[dict]) -> dict[str, dict]:
         entry["variable"] = name(entry["class"]) + "Repository"
         key_types = [entry["columns"][k]["type"] for k in entry["key"]]
         entry["id_type"] = key_types[0] if len(key_types) == 1 else entry["domain"] + ".Key"
-        entry["queries"] = []
-        entry["extra"] = []  # further repository methods: (source, the Java types it uses), e.g. the LOVs (jpa_lov)
     return tables
+
+
+def add_schema_columns(entry: dict, schema_tables: dict) -> None:
+    """The table's columns the blocks do not show, from its reviewed structure (a type JPA cannot map is left out)."""
+    from .rules import dictionary_table
+    spec = dictionary_table(schema_tables, entry["table"])
+    if not isinstance(spec, dict) or not isinstance(spec.get("columns"), dict):
+        return
+    from .jpa_assistant import java_type
+    taken = {c["field"] for c in entry["columns"].values()}
+    for column, definition in spec["columns"].items():
+        column = str(column).upper()
+        if column in entry["columns"] or not re.fullmatch(r"[A-Z][A-Z0-9_$#]*", column):
+            continue
+        try:
+            typ = java_type(definition if isinstance(definition, dict) else {})
+        except MigrationError:
+            continue
+        typ = {"java.math.BigDecimal": "BigDecimal", "java.time.LocalDateTime": "LocalDateTime",
+               "java.time.OffsetDateTime": "OffsetDateTime"}.get(typ, typ)
+        if typ not in {"String", "BigDecimal", "LocalDateTime"} or domain_field(column) in taken:
+            continue
+        lob = str((definition or {}).get("data_type", "")).upper() in {"CLOB", "NCLOB"}
+        entry["columns"][column] = {"field": domain_field(column), "type": typ, **({"lob": True} if lob else {})}
+        taken.add(domain_field(column))
 
 
 def bind_names(text: str, binds: list[dict]) -> str:
     """:q0, :q1 ... (backend_queries) -> the readable parameter names (the criteria fields); never inside a literal."""
     names = {":" + b["parameter"]: ":" + b["field"] for b in binds}
     return re.sub(r"'(?:[^']|'')*'|:q\d+\b", lambda m: names.get(m[0], m[0]), text)
-
-
-def block_query(b: dict, entry: dict) -> dict:
-    """The block's list or search method of the repository: JPQL when the clause compiles to it, else native SQL."""
-    query = b.get("query_plan") or {}
-    binds = query.get("binds", []) if query.get("status") == "compiled" else []
-    search = bool(binds)
-    method = ("search" if search else "list") + b["class"]
-    alias = "d"
-    key_order = ", ".join(f"{alias}.{entry['columns'][k]['field']}" for k in entry["key"])
-    # backend_queries sets where_jpql / order_jpql together, only when both compile to JPQL
-    native = query.get("status") == "compiled" and "where_jpql" not in query and bool(query.get("where_sql") or query.get("order_sql"))
-    if native:
-        from .generate import table_alias
-        sql = "SELECT * FROM " + b["table"] + table_alias(b, b["table"])
-        if query["where_sql"]:
-            sql += " WHERE " + query["where_sql"]
-        sql += " ORDER BY " + (query["order_sql"] or ", ".join(entry["key"]))
-        text, kind = bind_names(sql, binds), "native"
-    else:
-        jpql = f"SELECT {alias} FROM {entry['domain']} {alias}"
-        if query.get("where_jpql"):
-            jpql += " WHERE " + query["where_jpql"]
-        jpql += " ORDER BY " + (query.get("order_jpql") or key_order)
-        text, kind = bind_names(jpql, binds), "jpql"
-    params = [(JAVA_TYPES[v["item"]["type"]], v["field"]) for v in binds]
-    reason = query.get("jpql_reason") or query.get("closed_reason") or ""
-    return {"block": b["name"], "method": method, "kind": kind, "text": text, "params": params, "binds": binds,
-            "search": search, "reason": reason}
 
 
 def domain_source(entry: dict, package: str, namespace: str) -> str:
@@ -156,104 +149,24 @@ def domain_source(entry: dict, package: str, namespace: str) -> str:
     return preamble(package, imports) + "\n".join(lines) + "\n"
 
 
-def repository_source(entry: dict, package: str, namespace: str, lock: bool = True) -> str:
-    key_fields = [(entry["columns"][k]["type"], entry["columns"][k]["field"]) for k in entry["key"]]
-    types = ({t for t, _ in key_fields} | {t for q in entry["queries"] for t, _ in q["params"]}
-             | {t for _, used in entry["extra"] for t in used})
+def empty_repository_source(entry: dict, package: str, note: bool = True) -> str:
+    """The table's repository without methods: the service runs its own SQL (written by the Java assistant); the
+    developer may move a query here as a @Query method (nativeQuery = true keeps the Oracle SQL as written).
+    note=False: the jpa data access of the assistant adds its methods to it (jpa_assistant)."""
     imports = ["org.springframework.data.jpa.repository.JpaRepository"]
-    if lock or entry["queries"] or entry["extra"] or entry["sequences"]:
-        imports += ["org.springframework.data.jpa.repository.Query", "org.springframework.data.repository.query.Param"]
-    if lock:
-        imports += ["java.util.Optional", namespace + ".persistence.LockModeType", namespace + ".persistence.QueryHint",
-                    "org.springframework.data.jpa.repository.Lock", "org.springframework.data.jpa.repository.QueryHints"]
-    imports += ["java.math.BigDecimal"] if "BigDecimal" in types or entry["sequences"] else []
-    imports += ["java.time.LocalDateTime"] if "LocalDateTime" in types else []
-    if entry["queries"]:
-        imports += ["org.springframework.data.domain.Pageable", "org.springframework.data.domain.Slice"]
-    imports += ["java.util.List"] if "List" in types else []
-    domain = entry["domain"]
-    lines = [f"// {MARKER} repository: {entry['table']}.",
-             f"public interface {entry['repository']} extends JpaRepository<{domain}, {entry['id_type']}> {{"]
-    for q in entry["queries"]:
-        what = "keresése (a Forms-lekérdezés WHERE és ORDER BY része)" if q["search"] else "listája (Forms ORDER BY / DEFAULT_WHERE)"
-        lines += ["", f"    // {q['block']} blokk {what}."]
-        if q["kind"] == "native":
-            lines.append(f"    // Natív SQL: JPQL-ben nem írható le ({q['reason'] or 'Oracle-specifikus feltétel'}).")
-            lines.append(f"    @Query(value = {jstr(q['text'])}, nativeQuery = true)")
-        else:
-            lines.append(f"    @Query({jstr(q['text'])})")
-        params = [f'@Param("{f}") {t} {f}' for t, f in q["params"]] + ["Pageable pageable"]
-        lines.append(f"    Slice<{domain}> {q['method']}({', '.join(params)});")
-    hint = ("javax" if namespace == "javax" else "jakarta") + ".persistence.lock.timeout"
-    condition = " AND ".join(f"d.{f} = :{f}" for _, f in key_fields)
-    if lock:
-        lines += ["", "    // A rekord zárolása módosítás és törlés előtt; ha más tartja, azonnal hiba (Forms: FOR UPDATE NOWAIT).",
-                  "    @Lock(LockModeType.PESSIMISTIC_WRITE)",
-                  f'    @QueryHints(@QueryHint(name = "{hint}", value = "0"))',
-                  f"    @Query({jstr(f'SELECT d FROM {domain} d WHERE {condition}')})",
-                  f"    Optional<{domain}> lockById(" + ", ".join(f'@Param("{f}") {t} {f}' for t, f in key_fields) + ");"]
-    for source, _ in entry["extra"]:
-        lines += ["", source]
-    for sequence, method in entry["sequences"].items():
-        lines += ["", f"    // Az új rekord kulcsa (Forms: {sequence}.NEXTVAL).",
-                  f"    @Query(value = {jstr('SELECT ' + sequence + '.NEXTVAL FROM DUAL')}, nativeQuery = true)",
-                  f"    BigDecimal {method}();"]
-    lines.append("}")
+    imports += ["java.math.BigDecimal"] if entry["id_type"] == "BigDecimal" else []
+    imports += ["java.time.LocalDateTime"] if entry["id_type"] == "LocalDateTime" else []
+    lines = [f"// {MARKER} repository: {entry['table']}."]
+    if note:
+        lines += ["// Üres: a service maga futtatja az SQL-jét (EntityManager). Ide tehető át egy lekérdezés @Query metódusként,",
+                  '// például @Query(value = "<az eredeti SQL>", nativeQuery = true) List<Object[]> findX(@Param("x") String x);']
+    lines += [f"public interface {entry['repository']} extends JpaRepository<{entry['domain']}, {entry['id_type']}> {{", "}"]
     return preamble(package, imports) + "\n".join(lines) + "\n"
 
 
 def preamble(package: str, imports) -> str:
     return ("package " + package + ";\n\n" if package else "") + "".join(
         "import " + value + ";\n" for value in sorted(set(imports))) + "\n"
-
-
-def block_values(b: dict, entry: dict, query: dict | None) -> dict:
-    """The JPA parts of CompactBlockJpa.java.tpl for one block (generate.block_values gives the rest)."""
-    columns = entry["columns"]
-    by_item = [(i, columns[i["column"].upper()]) for i in b["db_items"]]
-    keys = [(i, columns[i["column"].upper()]) for i in b["pk"]]
-
-    def key_of(var):
-        values = ", ".join(f"{var}.{i['field']}" for i, _ in keys)
-        return values if len(keys) == 1 else f"new {entry['domain']}.Key({values})"
-
-    def check(var):
-        return ("if (" + " || ".join(f"SqlValues.isNull({var}.{i['field']})" for i, _ in keys)
-                + ') throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "Hiányzó elsődleges kulcs.");')
-    inserts = [(i, c) for i, c in by_item if i["insert_allowed"] or i["primary_key"]]
-    updates = [(i, c) for i, c in by_item if i["update_allowed"] and not i["primary_key"]]
-    values = {"DOMAIN": entry["domain"], "REPOSITORY_CLASS": entry["repository"], "REPOSITORY": entry["variable"],
-              "LOCK_METHOD": "lockById", "LOCK_ARGS": ", ".join(f"key.{i['field']}" for i, _ in keys),
-              "ID_OF_KEY": key_of("key"), "ID_OF_ROW": key_of("row"), "KEY_CHECK": check("key"), "ROW_KEY_CHECK": check("row"),
-              "MAPPING": "\n".join(f"        row.{i['field']} = domain.get{accessor(c['field'])}();" for i, c in by_item),
-              "APPLY_INSERT": "\n".join(f"        domain.set{accessor(c['field'])}(row.{i['field']});" for i, c in inserts),
-              "APPLY_UPDATE": "\n".join(f"        domain.set{accessor(c['field'])}(row.{i['field']});" for i, c in updates),
-              "LIST_METHOD": query["method"] if query and not query["search"] else "listUnavailable",
-              "SEQUENCE_METHOD": (f"public BigDecimal nextId() {{ return {entry['variable']}."
-                                  f"{entry['sequences'][b['sequence'].upper()]}(); }}") if b.get("sequence") else ""}
-    return values
-
-
-def search_method(b: dict, query: dict, criteria_checks: str, repository: str) -> str:
-    # A native query's text parameter is never null: Oracle reads '' as NULL, and the bind stays a VARCHAR.
-    text = "SqlValues.nvl(SqlValues.normalize(criteria.{}), \"\")" if query["kind"] == "native" else "SqlValues.normalize(criteria.{})"
-    args = ", ".join(text.format(v["field"]) if v["item"]["type"] == "text" else "criteria." + v["field"] for v in query["binds"])
-    return f'''        public PageResult<{b["class"]}Row> search(SearchRequest<{b["class"]}Criteria> request) {{
-            guard("search");
-            if (request == null || request.criteria() == null) throw bad("Hiányzó keresési feltételek.");
-            if (request.offset() < 0 || request.offset() > 1000000 || request.limit() < 1 || request.limit() > 200
-                    || request.offset() % request.limit() != 0)
-                throw bad("offset: 0..1000000 (a limit többszöröse), limit: 1..200 szükséges.");
-            var criteria = request.criteria();
-            var errors = new ArrayList<String>();
-{criteria_checks}
-            if (!errors.isEmpty()) throw bad("Hibás keresési feltételek: " + String.join("; ", errors));
-            var page = {repository}.{query["method"]}({args}{", " if args else ""}PageRequest.of(request.offset() / request.limit(), request.limit()));
-            var rows = mapAll(page);
-            var context = new RuleContext();
-            for (var row : rows) postQuery(row, context);
-            return new PageResult<>(rows, context.messages(), page.hasNext());  // hasNext: the page left rows out
-        }}'''
 
 
 def write_files(tables: dict, output, package: str, namespace: str) -> list[str]:
@@ -263,7 +176,7 @@ def write_files(tables: dict, output, package: str, namespace: str) -> list[str]
     written = []
     for entry in tables.values():
         for cls, source in ((entry["domain"], domain_source(entry, package, namespace)),
-                            (entry["repository"], repository_source(entry, package, namespace))):
+                            (entry["repository"], empty_repository_source(entry, package))):
             filename = cls + ".java"
             # The javax/jakarta imports stay: jpa_namespace says which one the project has.
             text = wrap_strings(layout(tidy(source, filename, preserve_explicit=True), filename))
@@ -279,5 +192,68 @@ def write_files(tables: dict, output, package: str, namespace: str) -> list[str]
     return written
 
 
-def service_fields(tables: dict) -> list[str]:
-    return [f"    @Autowired\n    private {e['repository']} {e['variable']};" for e in tables.values()]
+def write_schema_entity(output, table: str, definition: dict) -> list[str]:
+    """A saved table structure (Adatbázistáblák panel) as its Domain entity and an empty Repository (AI mode).
+
+    Deterministic, for the developer: the Domain maps every column of the structure with its key; the Repository is
+    written only when there is none yet (the developer may have moved queries into it). A table without a primary key
+    gets nothing (an entity needs its @Id); a project class of the same name (no generator marker) is never touched."""
+    from .common import read_json, write_json
+    from .java_imports import layer_package
+    from .jpa_assistant import java_type
+    effective = read_json(output / "analysis" / "effective-config.json")
+    config = effective.get("config", {})
+    if config.get("backend_trigger_mode", "ai") != "ai":
+        return []
+    columns = definition.get("columns") or {}
+    keys = [str(k).upper() for k in definition.get("primary_key") or []]
+    if not columns or not keys or not all(k in {str(c).upper() for c in columns} for k in keys):
+        return []
+    simple = {"java.math.BigDecimal": "BigDecimal", "java.time.LocalDateTime": "LocalDateTime"}
+    entry = {"table": table, "class": table_class(table), "key": keys, "columns": {}}
+    for column, spec in columns.items():
+        column = str(column).upper()
+        try:
+            typ = simple.get(java_type(spec), java_type(spec))
+        except MigrationError:
+            if column in keys:
+                return []
+            continue
+        if typ not in {"String", "BigDecimal", "LocalDateTime"}:
+            if column in keys:
+                return []
+            continue
+        lob = str(spec.get("data_type", "")).upper() in {"CLOB", "NCLOB"}
+        entry["columns"][column] = {"field": domain_field(column), "type": typ, **({"lob": True} if lob else {})}
+    if any(k not in entry["columns"] for k in keys) or len({c["field"] for c in entry["columns"].values()}) != len(entry["columns"]):
+        return []
+    ir = output / "analysis" / "form.ir.json"
+    blocks = [b["name"] for b in read_json(ir).get("blocks", []) if b.get("database")
+              and str(b.get("table") or "").upper() == table] if ir.is_file() else []
+    entry["blocks"] = blocks or ["(trigger)"]
+    entry["domain"], entry["repository"] = entry["class"] + "Domain", entry["class"] + "Repository"
+    entry["variable"] = name(entry["class"]) + "Repository"
+    key_types = [entry["columns"][k]["type"] for k in keys]
+    entry["id_type"] = key_types[0] if len(key_types) == 1 else entry["domain"] + ".Key"
+    package = layer_package(config, effective.get("package", ""), "DPS")
+    namespace = config.get("jpa_namespace") or "javax"
+    from .java_style import layout
+    from .java_tidy import tidy, wrap_strings
+    written = []
+    for cls, source, keep in ((entry["domain"], domain_source(entry, package, namespace), False),
+                              (entry["repository"], empty_repository_source(entry, package), True)):
+        path = output / "backend" / "DPS" / (cls + ".java")
+        if path.is_file() and (keep or MARKER not in path.read_text(encoding="utf-8")):
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(wrap_strings(layout(tidy(source, path.name, preserve_explicit=True), path.name)),
+                        encoding="utf-8", newline="\n")
+        written.append(path.name)
+    known_file = output / "analysis" / "jpa-domains.json"
+    known = read_json(known_file) if known_file.is_file() else {"version": 1, "tables": {}}
+    known.setdefault("tables", {})[table] = ({k: entry[k] for k in ("domain", "repository", "variable", "key", "id_type")}
+                                            | {"columns": {c: dict(spec) for c, spec in entry["columns"].items()}})
+    write_json(known_file, known)
+    return written
+
+

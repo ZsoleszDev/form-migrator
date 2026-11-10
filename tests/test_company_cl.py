@@ -3,6 +3,7 @@ import contextlib
 import copy
 import io
 import json
+import re
 from pathlib import Path
 import tempfile
 import unittest
@@ -126,7 +127,13 @@ class CompanyClTests(unittest.TestCase):
         company, _ = self.generate('company')
         old_service = (legacy / 'backend/DPS/RtServiceImpl.java').read_text()
         new_service = (company / 'backend/DPS/RtServiceImpl.java').read_text()
-        self.assertEqual(JAVA_NONCODE.findall(old_service), JAVA_NONCODE.findall(new_service))
+        # SQL, PL/SQL and the commented Forms code stay byte for byte; only the migrator's hints for the Java
+        # assistant name the company DTOs (new BRow() -> new RtBDto()), like the code does.
+        names = self.report(company)['dto_types']
+        rename = lambda text: re.sub(r'\b\w+\b', lambda m: names.get(m[0], m[0]), text)
+        hints = [rename(t) if t.startswith('//') else t for t in JAVA_NONCODE.findall(old_service)]
+        self.assertEqual(hints, JAVA_NONCODE.findall(new_service))
+        self.assertIn('new RtBDto()', new_service)
         self.assertEqual((legacy / 'analysis/backend-evidence.md').read_bytes(),
                          (company / 'analysis/backend-evidence.md').read_bytes())
         report = self.report(company)

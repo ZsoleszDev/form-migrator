@@ -56,6 +56,30 @@ PARTLY_GENERATED = ("\n   The generated repository methods listed below already 
 ROUTINE_RULE = ("\n   The database routines of the Forms code run in Oracle through the generated methods listed below\n"
                 "   (on the service's routine field): call those (the only allowed PL/SQL calls); never re-implement\n"
                 "   or skip a routine.")
+# data access "service" (the default): the model writes everything in the service, the Forms SQL as native SQL through
+# the EntityManager. No repository (the developer may move the SQL there later), no JDBC, no generated methods.
+SERVICE_RULE = ("Database access: the service's `entityManager` field (an injected EntityManager). Run the Oracle SQL of\n"
+                "   the comments as written, as native SQL with named parameters (never concatenated values):\n"
+                "   entityManager.createNativeQuery(sql).setParameter(\"name\", value), then .getResultList() (List<Object[]>,\n"
+                "   or List<Object> for one column), .getSingleResult() or .executeUpdate(). Read a column value with\n"
+                "   SqlValues.text(o), SqlValues.number(o) or SqlValues.dateTime(o); bind a null String as \"\" (Oracle\n"
+                "   reads '' as NULL). No repositories, no JDBC.")
+SERVICE_ROUTINES = ("\n   The database routines of the Forms code keep running in Oracle: call each one through the entityManager\n"
+                    "   as listed below; never re-implement or skip a routine.")
+# A data endpoint or a LOV (ai_frames): the steps are in the method's //region AI-feladat comment.
+FRAME_RULES = """Rules:
+1. Keep the method signature and the `return log1x(..., () -> { ... });` wrapper. Write the body inside it so that it
+   does the steps of the AI-feladat comment, in that order. Do not copy the comment into your answer.
+2. {data_rule}
+3. Keep the Oracle behaviour: '' and NULL are both null, NUMBER is BigDecimal, DATE is LocalDateTime.
+4. Field checks: var errors = new ArrayList<String>(); FormsChecks.required(errors, "ITEM", row.field);
+   FormsChecks.maxLength(errors, "ITEM", row.field, length); FormsChecks.digits(errors, "ITEM", row.field, integer
+   digits, scale); FormsChecks.throwIfAny(errors). Call the trigger hooks the comment names (they exist; do not write
+   them). Row DTOs have public fields (row.code); requests have accessors (request.limit()).
+5. An HTTP answer: throw new ResponseStatusException(HttpStatus.NOT_FOUND / CONFLICT / UNPROCESSABLE_ENTITY, "text").
+   Run the lock and the writes in try { ... } catch (PersistenceException e) { throw FormsErrors.translate(e); }
+   (a record locked by another session, a constraint or a database trigger error: its Forms-like answer).
+6. Do not create new classes and do not change other methods. Private helper methods are allowed."""
 JDBC_RULE = ("Database access: use the service's existing `jdbc` field (NamedParameterJdbcTemplate) with named,\n"
              "   bound parameters{jdbc_helpers}; never concatenate values into SQL.")
 PLSQL_VALUES = ("\n   Helpers: PlsqlValues.text(request.blocks(), \"BLOCK\", \"ITEM\"), PlsqlValues.number(...) returns\n"
@@ -77,6 +101,14 @@ QUERY_RESULT = """4. Screen values: request.blocks().get("BLOCK").get("ITEM") (a
    Domain) that holds every condition the code can add, each switched by a parameter, e.g.
    (:withKod = FALSE OR d.kod = :kod); bound values, never string concatenation. Map every Domain to a new
    {row_class} (its fields are listed below) and return new PageResult<>(rows, messages). MESSAGE texts go to messages; an error:
+   throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "text")."""
+
+SERVICE_QUERY_RESULT = """4. Screen values: request.blocks().get("BLOCK").get("ITEM") (a String or null); parameters:
+   request.parameters().get("NAME"); paging: request.offset(), request.limit().
+5. This button queries the {block} block: its query, the row mapping and the fetch hooks are in the comment. Put the
+   WHERE (and ORDER BY) the Forms code sets with SET_BLOCK_PROPERTY DEFAULT_WHERE / ORDER_BY into that query, with
+   named parameters for the screen values (never concatenated), run it through the entityManager, map every row to a
+   new {row_class} and return new PageResult<>(rows, messages, hasMore). MESSAGE texts go to messages; an error:
    throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "text")."""
 
 # A plain button (ActionResult): the shape of a body the migrator can insert as it is. Small local models copy a
@@ -123,6 +155,16 @@ EVENT_RULES = {
     "ON-UPDATE": "ON-UPDATE replaces the UPDATE: this method must save the changes itself (through the repository).",
     "ON-DELETE": "ON-DELETE replaces the DELETE: this method must delete the record itself (through the repository).",
     "ON-CHECK-DELETE-MASTER": "ON-CHECK-DELETE-MASTER runs before a master record is deleted: refuse the delete (context.abort()) when details exist.",
+}
+
+# data access "service": the data endpoints (written by the model too) run the block's INSERT/UPDATE/DELETE.
+SERVICE_EVENT_RULES = {
+    "PRE-INSERT": "PRE-INSERT runs just before the INSERT (for example the key from a sequence); the create endpoint does the INSERT.",
+    "PRE-UPDATE": "PRE-UPDATE runs just before the UPDATE; the update endpoint does the UPDATE.",
+    "PRE-DELETE": "PRE-DELETE runs just before the DELETE (row is the locked current record); the delete endpoint deletes it.",
+    "ON-INSERT": "ON-INSERT replaces the INSERT: this method must save the record itself (its INSERT through the entityManager).",
+    "ON-UPDATE": "ON-UPDATE replaces the UPDATE: this method must save the changes itself (through the entityManager).",
+    "ON-DELETE": "ON-DELETE replaces the DELETE: this method must delete the record itself (through the entityManager).",
 }
 
 # backend_trigger_mode=ai: PRE-COMMIT / POST-FORMS-COMMIT as a private hook of commitForm.
@@ -177,6 +219,16 @@ COMMON_HINTS = [
 ]
 
 
+# data access "service": the SQL lines of COMMON_HINTS, for the EntityManager.
+SERVICE_SQL_HINTS = {
+    'SEQ.NEXTVAL:': 'SEQ.NEXTVAL: SqlValues.number(entityManager.createNativeQuery("SELECT SEQ.NEXTVAL FROM DUAL").getSingleResult()).',
+    'CURSOR / FOR': 'CURSOR / FOR r IN (SELECT ...): getResultList() of the query, then a Java loop over its rows.',
+    'SELECT ... INTO:': 'SELECT ... INTO: getResultList(); no row is NO_DATA_FOUND, more than one TOO_MANY_ROWS: handle them '
+                        'where the Forms code does.',
+    'UPDATE / INSERT / DELETE': 'UPDATE / INSERT / DELETE: the statement as written, with executeUpdate().',
+}
+
+
 def format_hints(code: str) -> list[str]:
     """The exact java.time pattern of every TO_CHAR / TO_DATE call with a literal format model in the Forms code."""
     from .oracle_formats import format_calls, has_time, is_number_format, java_pattern
@@ -219,13 +271,17 @@ def jpa_rule(has_tables: bool, generated: dict | None) -> str:
 
 def rules(data_access: str = "jpa", has_tables: bool = True, plsql_values: bool = True, jdbc_helpers: bool = False,
           action_api: bool = True, routines: bool = False, generated: dict | None = None) -> str:
-    if data_access == "jpa":
-        data_rule = jpa_rule(has_tables, generated)
+    if data_access == "service":
+        data_rule = SERVICE_RULE + (SERVICE_ROUTINES if routines else "")
+    elif data_access == "jpa":
+        data_rule = jpa_rule(has_tables, generated) + (ROUTINE_RULE if routines else "")
     else:
         data_rule = JDBC_RULE.replace("{jdbc_helpers}", " and the generated helpers below where they fit" if jdbc_helpers else "")
-    data_rule += ROUTINE_RULE if routines else ""
+        data_rule += ROUTINE_RULE if routines else ""
     # Plain replacement: the rules quote Java code with literal braces.
     text = RULES.replace("{data_rule}", data_rule).replace("{helpers}", PLSQL_VALUES if plsql_values else "")
+    if data_access == "service":
+        text = text.replace("(empty now, or a PL/SQL or JDBC call)", "(empty now)")
     if not action_api:
         # Query buttons and CRUD endpoints have their own request/result DTOs, not ActionRequest/ActionResult.
         text = re.sub(r"\n4\. Screen values:[\s\S]*?(?=\n6\. )", "\n" + OTHER_RESULT, text)
@@ -234,14 +290,18 @@ def rules(data_access: str = "jpa", has_tables: bool = True, plsql_values: bool 
 
 def hook_rules(packet: dict, data_access: str, has_tables: bool, generated: dict | None = None) -> str:
     hook = packet.get("hook") or {}
-    data_rule = jpa_rule(has_tables, generated) if data_access == "jpa" else JDBC_RULE.replace("{jdbc_helpers}", "")
-    data_rule += ROUTINE_RULE if packet.get("db_routines") else ""
+    if data_access == "service":
+        data_rule = SERVICE_RULE + (SERVICE_ROUTINES if packet.get("db_routines") else "")
+    else:
+        data_rule = jpa_rule(has_tables, generated) if data_access == "jpa" else JDBC_RULE.replace("{jdbc_helpers}", "")
+        data_rule += ROUTINE_RULE if packet.get("db_routines") else ""
     if hook.get("kind") == "commit":
         return COMMIT_RULES.replace("{data_rule}", data_rule).replace("{event}", hook.get("event", ""))
     event = hook.get("event", "")
+    events = {**EVENT_RULES, **SERVICE_EVENT_RULES} if data_access == "service" else EVENT_RULES
     return (HOOK_RULES.replace("{data_rule}", data_rule).replace("{method}", packet["method"])
             .replace("{row_class}", hook.get("row_class", "Row")).replace("{block}", hook.get("block", "BLOCK"))
-            .replace("{event_rule}", EVENT_RULES.get(event, event + ": keep the original behaviour of this Forms event.")))
+            .replace("{event_rule}", events.get(event, event + ": keep the original behaviour of this Forms event.")))
 
 
 def original_code(method: str) -> str:
@@ -273,11 +333,13 @@ SQL_HINTS = {text for _, text in COMMON_HINTS if text.startswith(('SEQ.NEXTVAL:'
                                                                    'UPDATE / INSERT / DELETE'))}
 
 
-def hints(code: str, kind: str, sql_generated: bool = False) -> list[str]:
+def hints(code: str, kind: str, sql_generated: bool = False, service: bool = False) -> list[str]:
     """Forms -> Java lines for the built-ins and references the Forms code (forms_code) uses."""
     chosen = (HOOK_HINTS if kind == "hook" else [] if kind == "commit" else ACTION_HINTS) + COMMON_HINTS
     found = []
     for pattern, text in chosen:
+        if service and text in SQL_HINTS:
+            text = next(v for k, v in SERVICE_SQL_HINTS.items() if text.startswith(k))
         if re.search(pattern, code, re.I) and text not in found and not (sql_generated and text in SQL_HINTS):
             found.append(text)
     return found + format_hints(code)
@@ -373,10 +435,13 @@ def build(packet: dict, persistence: list[dict], helpers: dict, options, *, plsq
           generated: dict | None = None) -> dict:
     method = packet["existing_method"]
     data_access = options.data_access
+    service = data_access == "service"
     kind = packet.get("kind")
     hook = kind == "hook"
+    # A data endpoint or a LOV (ai_frames): its //region AI-feladat holds the steps; there is no Forms code to read.
+    frame = re.search(r"^[ \t]*//[ \t]*region[ \t]+AI-feladat\b", method, re.M) is not None
     own = own_table(packet, method) if hook else None
-    generated = generated if data_access == "jpa" and generated else {"methods": [], "refused": []}
+    generated = generated if data_access == "jpa" and generated else {"methods": [], "refused": []}  # never in "service"
     hosts = {m.repository for m in generated["methods"]}  # e.g. the repository of a sequence query
     used = ([p for p in persistence if table_used(p, method) or (own and p["table"].rsplit(".", 1)[-1].upper() == own)
              or p["repository"] in hosts] if data_access == "jpa" else [])
@@ -394,11 +459,22 @@ def build(packet: dict, persistence: list[dict], helpers: dict, options, *, plsq
             if fields:
                 parts.append("The record (" + (packet.get("hook") or {}).get("row_class", "Row") + " row):\n" + "\n".join(fields))
         hint_kind = "hook" if hook_kind == "record" else "commit"
+    elif frame:
+        parts = ["Write the body of this Java method from the steps of its AI-feladat comment (the original Oracle Forms "
+                 "block behaviour), in plain Java.",
+                 FRAME_RULES.replace("{data_rule}", SERVICE_RULE if service else
+                                     jpa_rule(bool(used), generated) if data_access == "jpa" else JDBC_RULE.replace("{jdbc_helpers}", ""))]
+        hint_kind = "frame"
     else:
         parts = ["Rewrite this Java method so that it implements the original Oracle Forms code in plain Java.",
                  rules(data_access, bool(used), plsql_values, bool(helpers), action_api, bool(packet.get("db_routines")),
                        generated)]
-        if query_api:
+        if query_api and service:
+            target = (packet.get("endpoint") or {}).get("query_block") or "target"
+            row_class = re.search(r"PageResult<(\w+)>", header)
+            parts[1] = re.sub(r"\n4\. Keep the return type[\s\S]*?(?=\n6\. )", "\n" + SERVICE_QUERY_RESULT
+                              .replace("{block}", target).replace("{row_class}", row_class.group(1) if row_class else "Row"), parts[1])
+        elif query_api:
             target = (packet.get("endpoint") or {}).get("query_block") or "target"
             block = next((b for b in packet.get("blocks", []) if b.get("name") == target), {})
             row_class = re.search(r"PageResult<(\w+)>", header)
@@ -409,7 +485,10 @@ def build(packet: dict, persistence: list[dict], helpers: dict, options, *, plsq
             if fields:
                 parts.append("Fields of " + (row_class.group(1) if row_class else "the row") + " (public, set them directly):\n" + "\n".join(fields))
         hint_kind = "action"
-    found = hints(forms_code(packet, method), hint_kind, all_generated)
+    found = [] if hint_kind == "frame" else hints(forms_code(packet, method), hint_kind, all_generated, service)
+    if query_api and service and not hook:
+        # The rows are the answer: the query's own built-ins are no screen commands here.
+        found = [line for line in found if not line.startswith(("GO_BLOCK", "EXECUTE_QUERY", "SET_BLOCK_PROPERTY"))]
     if found:
         parts.append("Forms -> Java for this code:\n" + "\n".join("- " + line for line in found))
     if generated["methods"]:
@@ -420,7 +499,10 @@ def build(packet: dict, persistence: list[dict], helpers: dict, options, *, plsq
         parts.append("SQL without a generated method (write one public method for each, in the repository of its table):\n"
                      + "\n".join("- " + r["statement"] for r in generated["refused"]))
     routines = packet.get("db_routines") or []
-    if routines:
+    if routines and service:
+        parts.append("Database routines (call them through the entityManager):\n"
+                     + "\n".join("- " + r.get("service_hint", r["describe"]) for r in routines))
+    elif routines:
         parts.append("Database routine methods (generated; call them, do not write them):\n"
                      + "\n".join("- " + r["describe"] for r in routines))
     if packet.get("unavailable_routines"):
@@ -446,7 +528,7 @@ def build(packet: dict, persistence: list[dict], helpers: dict, options, *, plsq
     if options.instructions.strip():
         parts.append("Additional requirements from the developer:\n" + options.instructions.strip())
     if not hook and action_api and plsql_values:
-        parts.append(ACTION_SKELETON)
+        parts.append(ACTION_SKELETON.replace("the repository methods", "the entityManager queries") if service else ACTION_SKELETON)
     parts.append("Method:\n```java\n" + method.strip("\n") + "\n```")
     answer = ["Answer format (code only, no explanation):", "```java", "// SERVICE",
               "<the complete rewritten method, followed by any new private helper methods>", "```"]

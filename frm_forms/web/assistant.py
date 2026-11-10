@@ -17,7 +17,7 @@ import threading
 import time
 import uuid
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Literal
 
 from frm_forms import backend_assistant as engine
@@ -36,6 +36,12 @@ def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def service_access(value):
+    """The packaged UI (web-dist) still sends the former default "jpa": the Java assistant writes the service itself
+    (EntityManager), never repository code, so "jpa" from the web means "service"."""
+    return "service" if value == "jpa" else value
+
+
 class AssistantRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     task_id: str = Field(pattern=r"^[a-f0-9]{20}$")
@@ -46,10 +52,12 @@ class AssistantRequest(BaseModel):
     timeout: int = Field(default=900, ge=1, le=3600, strict=True)
     attempts: int = Field(default=2, ge=1, le=3, strict=True)
     think: Literal["default", "disabled", "low", "medium", "high"] = "default"
-    data_access: Literal["jpa", "inline", "jdbc"] = "jpa"
+    data_access: Literal["service", "jpa", "inline", "jdbc"] = "service"
     instructions: str = Field(default="", max_length=8000)
     project_context: str = Field(default="", max_length=24000)
     cached_only: bool = False
+
+    _access = field_validator("data_access", mode="after")(service_access)
 
 
 class PromptRequest(BaseModel):
@@ -58,9 +66,11 @@ class PromptRequest(BaseModel):
     task_id: str = Field(pattern=r"^[a-f0-9]{20}$")
     num_ctx: int = Field(default=16384, ge=4096, le=65536, strict=True)
     num_predict: int = Field(default=4096, ge=512, le=16384, strict=True)
-    data_access: Literal["jpa", "inline", "jdbc"] = "jpa"
+    data_access: Literal["service", "jpa", "inline", "jdbc"] = "service"
     instructions: str = Field(default="", max_length=8000)
     project_context: str = Field(default="", max_length=24000)
+
+    _access = field_validator("data_access", mode="after")(service_access)
 
 
 class AutoSettings(BaseModel):
@@ -165,7 +175,7 @@ class AssistantManager:
     def options_from_settings(self, settings: dict | None = None) -> engine.Options:
         s = settings or self.settings()
         options = engine.Options(url=s["url"], model=s["model"], num_ctx=s["num_ctx"], num_predict=s["num_predict"],
-                                 timeout=s["timeout"], attempts=s["attempts"], think=s["think"], data_access="jpa")
+                                 timeout=s["timeout"], attempts=s["attempts"], think=s["think"], data_access="service")
         options.validate()
         return options
 
@@ -458,7 +468,7 @@ class AssistantManager:
         values = {k: getattr(request, k) for k in ("url", "model", "num_ctx", "num_predict", "timeout", "attempts", "think")
                   if request is not None and getattr(request, k, None) not in (None, "")}
         merged = {**{k: settings[k] for k in ("url", "model", "num_ctx", "num_predict", "timeout", "attempts", "think")}, **values}
-        options = engine.Options(**merged, data_access="jpa",
+        options = engine.Options(**merged, data_access="service",
                                  instructions=getattr(request, "instructions", "") if request is not None else "")
         options.validate()
         return options

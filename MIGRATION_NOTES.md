@@ -1,4 +1,38 @@
-# Következő változat (a 4.35 után) — Java csak adatbázismunkából, generált repository, kevesebb AI-hívás; valódi mentés, Forms-sorrend
+# Következő változat (a 4.35 után) — minden metódust az AI ír a service-ben, tippekkel; entity és üres repository; valódi mentés, Forms-sorrend
+
+- **Minden metódust az AI ír, a service-ben; a migrátor tippeket ad, entityt és üres repositoryt készít.**
+  A visszajelzés: ne terheljük a kis helyi AI-t a repositoryval, a Java service-ben csináljon meg mindent úgy, ahogy a
+  Forms (ugyanaz az SQL, ugyanaz a mentés), a repositoryba a fejlesztő teszi át, ha akarja. Minden végpontban legyen
+  rövid, lényegre törő kommentes segítség.
+  - *Adatvégpontok és LOV-ok is AI-feladatok* (`frm_forms/ai_frames.py`): a lista, keresés, új rekord, módosítás és
+    törlés, valamint a LOV kerete üres, fölötte `//region AI-feladat` megjegyzés. Benne a Forms által futtatott SQL
+    (a blokk lekérdezése a `DEFAULT_WHERE`-rel és a lapozással, a `FOR UPDATE NOWAIT` zárolás az original-eltérés
+    409-ével, az `INSERT`/`UPDATE`/`DELETE` `:mező` paraméterekkel), az oszlop → mező megfeleltetés, a mezőellenőrzés
+    (kötelező, hossz, szám), az alapérték és a szekvencia, a trigger-hookok a Forms-sorrendben (az ON-INSERT/UPDATE/
+    DELETE hook helyettesíti a Forms DML-jét), és a visszatérési érték. A korábbi CRUD-gépezet (repository-CRUD,
+    `guard`/`normalize`/`validate`/`loadRow` segédek, a hookok elosztói) nem készül; a `commitForm` determinisztikus
+    marad, mert csak a végpontokat hívja.
+  - *SQL-tipp a triggerekben és a gombokban:* a Forms-kód minden SQL-utasítása natív SQL-ként, nevesített
+    paraméterekkel, a forrásukkal (`row.mező`, `BLOKK.MEZŐ`, `GLOBAL.X`) és a `SELECT … INTO` eredményének helyével. A
+    lekérdező gomb a célblokk lekérdezését, sorleképezését és POST-QUERY hookjait is megkapja.
+  - *Adatelérés: `EntityManager` a service-ben.* A ServiceImpl `@PersistenceContext private EntityManager
+    entityManager;` mezőt kap (javax vagy jakarta a `jpa_namespace` szerint); repository-mező, JDBC és konstruktor nincs.
+    A `CommonMigrateTools` (VERSION 8) új segédei: `SqlValues.text/number/dateTime(Object)` a natív sorok
+    oszlopaihoz, `FormsErrors.translate(RuntimeException)` a `PersistenceException` okláncában lévő Oracle-hibához
+    (zárolt rekord 409, `RAISE_APPLICATION_ERROR` 422).
+  - *Entity és üres repository:* a blokk táblájának Domain-je a tábla igazolt szerkezetéből (ha van) minden oszlopot
+    leképez. A repository üres `JpaRepository`-interfész, magyarázó megjegyzéssel. Az **Adatbázistáblák** panelen
+    mentett szerkezetből (PK-val) azonnal elkészül a tábla Domain-je és üres repositoryja; a meglévő repositoryhoz a
+    migrátor nem nyúl.
+  - *Java asszisztens:* az alapértelmezett adatelérés `service`. A prompt szabálya az `entityManager` natív
+    lekérdezése, a repository-rész és a generált repository-metódusok listája elmarad, és nincs AI nélküli
+    (determinisztikus) javaslat sem: minden metódust az AI ír. Az adatvégpont/LOV promptja az `AI-feladat`
+    lépéseit kéri, a `FormsChecks` és `FormsErrors` használatával. Az adatbázis-rutinok hívását az igazolt
+    szignatúrából mondja meg: `SELECT PKG.F(:a) FROM DUAL`, `BEGIN PKG.P(:a); END;`, OUT paraméternél
+    `StoredProcedureQuery`. A táblaszerkezet nem tartja vissza a feladatokat, a migrálás után az összes sorba áll.
+    Ha a válasz JDBC-t vagy repositoryt hív, javítást kér. A webes felület (a régi `web-dist` is) mindig `service`
+    módban fut; a korábbi repository-mód parancssorból elérhető (`--data-access jpa`).
+  - *Céges DTO-k (AWU_AZON):* a tippekben a DTO-nevek a céges nevek (`new RtBDto()`), ahogy a kódban.
 
 - **Magyar tizedesvessző a UI-modellben is.** A magyar Forms Builder a számpropertyket tizedesvesszővel
   exportálja (`HighestAllowedValue="9999999999,99"`). A backend eddig is elfogadta, a UI-modell `INVALID_NUMBER`-rel
@@ -101,6 +135,11 @@
   - *Rövid kommentek.* A metódusok fölött egy segítő sor (tiltott műveletnél még egy: az ok); a „Triggerek: …”,
     „SQL és triggerkód: … backend-evidence.md”, a nem generált végpontok listája és a többi státuszsor a riportokban
     van (analysis/backend-plan.json, backend-evidence.md). A replika-űrlap DPS-e 1029 sorról 967-re rövidült.
+- **Javítva: az Adatbázistáblák panel nem kínálta fel a kulcs nélküli blokkok tábláit.** A panel a kiválasztott
+  végpont SQL-jének tábláit mutatja. A kulcs nélküli blokk táblája ezek között nem volt ott (a blokk JPA óta nem
+  kap adatvégpontot, így hookja sincs), pedig éppen a kulcsa kell ahhoz, hogy a blokk Domain-t és végpontokat
+  kapjon. Most minden végpontnál ott van, ezzel az okkal: „Elsődleges kulcs kell a(z) … blokk adatvégpontjaihoz”.
+  Egyik feladatot sem tartja vissza. Ha a kulcs már el van mentve, a panel azt kéri, hogy futtasd újra a migrálást.
 - **Javítva: `StopIteration` a generáláskor, ha a lekérdező gomb blokkja nem kap adatvégpontot.** Ha a
   `SET_BLOCK_PROPERTY … DEFAULT_WHERE` + `EXECUTE_QUERY` gomb cél blokkjának nincs adatvégpontja (például a táblájának
   nincs elsődleges kulcsa, így Domain-je sem), nincs `<Blokk>Row`, amit a gomb visszaadhatna. A generálás eddig itt

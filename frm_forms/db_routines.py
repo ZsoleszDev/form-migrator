@@ -175,9 +175,34 @@ def plan(sources: list[dict], procedures: dict, catalog: dict | None = None, mod
                       or (entry["holder"] and m["holder"] == entry["holder"]) for m in methods):
                 method, n = base + str(n), n + 1
                 entry = method_source(method, name, key, signature, params, owner, variable)
+            entry["service_hint"] = entity_manager_hint(name, signature, params)
             shapes[shape] = entry
             methods.append(entry)
     return methods, refused
+
+
+def entity_manager_hint(routine: str, signature: dict, params: list[dict]) -> str:
+    """How the service calls the routine through its EntityManager (data access "service"): the routine keeps
+    running in Oracle, with the call's own parameters (by position or by name)."""
+    named = any(p.get("named") for p in params)
+    names = []
+    for index, param in enumerate(params):
+        variable = java_name((param["name"] or "arg" + str(index + 1)).lower())
+        while variable in names:
+            variable += "_"
+        names.append(variable)
+    args = ", ".join((p["name"].upper() + " => " if named else "") + ":" + names[i] for i, p in enumerate(params))
+    described = ", ".join(f":{names[i]} {p['mode']} {JAVA[p['type']]}" for i, p in enumerate(params))
+    if signature["kind"] == "function":
+        return (f"{routine}: SELECT {routine}({args}) FROM DUAL, getSingleResult() ({JAVA[signature['returns']]})"
+                + (f"; parameters {described}" if params else ""))
+    outs = [p for p in params if "OUT" in p["mode"]]
+    if not outs:
+        return f"{routine}: BEGIN {routine}({args}); END; with executeUpdate()" + (f"; parameters {described}" if params else "")
+    return (f"{routine}: it has OUT parameters: StoredProcedureQuery q = entityManager.createStoredProcedureQuery("
+            f"\"{routine}\"); q.registerStoredProcedureParameter(\"<NAME>\", <Type>.class, ParameterMode.IN / OUT / INOUT) "
+            "for each parameter in order, q.setParameter(...), q.execute(), q.getOutputParameterValue(\"<NAME>\"); "
+            "parameters " + ", ".join(f"{(p['name'] or '?').upper()} {p['mode']} {JAVA[p['type']]}" for p in params))
 
 
 MARKER = "Forms migrator database routines"

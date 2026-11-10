@@ -7,6 +7,21 @@ from .generate import write
 from .java_dto import bean_source
 
 
+REGION = re.compile(r'^[ \t]*//region [^\n]*\n(?:[^\n]*\n)*?[ \t]*//endregion\b', re.M)
+
+
+def region_types(source, types):
+    """The migrator's hints in a //region (its notes, before the first "// ---" Forms source) name the DTOs as the
+    company contract does: new PageResult<>(...) -> new RendelesPageResultDto<>(...). The Forms code stays as written."""
+    def notes(match):
+        lines, result, forms = match.group(0).split('\n'), [], False
+        for line in lines:
+            forms = forms or bool(re.match(r'[ \t]*// --- ', line))
+            result.append(line if forms else types(line))
+        return '\n'.join(result)
+    return REGION.sub(notes, source)
+
+
 def generate(output, config, package, cls, blocks, ops, contract):
     from .java_imports import cl_package, layer_package
     cl = cl_package(config, package)  # the module's CL package (cl_package setting)
@@ -44,6 +59,7 @@ def generate(output, config, package, cls, blocks, ops, contract):
     at = (anchor.start() if anchor.group().startswith('import') else anchor.end()) if anchor else 0
     source = source[:at] + dto_imports + source[at:]
     source = bean_source(source, names, blocks)
+    source = region_types(source, types)
     # The DPS ServiceImpl extends the module's own ServiceBase (getModuleName); the company base class and its
     # imports move there, the layout step drops the imports the ServiceImpl no longer uses.
     source, declarations = re.subn(rf'^public class {cls}ServiceImpl extends [^{{\n]+? implements {cls}Service \{{',

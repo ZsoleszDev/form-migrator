@@ -140,7 +140,13 @@ END;""")
         self.assertIn('UnrecognizedBehavior'.lower(), (out/'analysis/ui-model.json').read_text().lower())
         base = next(out.glob('backend/DPS/*ServiceImpl.java')).read_text()
         # The original Forms code is evidence, not commented-out code in the ServiceImpl.
-        self.assertIn('pkg.load(p_id => :B.ID', (out/'analysis/backend-evidence.md').read_text()); self.assertIn('HttpStatus.NOT_IMPLEMENTED', base)
+        self.assertIn('pkg.load(p_id => :B.ID', (out/'analysis/backend-evidence.md').read_text())
+        # The data endpoints are the Java assistant's frames; what still holds a write back is in the plan.
+        self.assertIn('//region AI-feladat: B / ', base)
+        endpoints = json.loads((out/'analysis/backend-plan.json').read_text())['endpoints']
+        writes = [e for e in endpoints if e.get('operation') in {'create', 'update', 'delete'}]
+        self.assertTrue(writes)
+        self.assertTrue(all(e['runs'] == 'ai' and any('writable' in b for b in e['blockers']) for e in writes), writes)
         structure = next(out.glob('frontend/*/review-structure.ts')).read_text()
         self.assertIn('"disabled": true', structure); self.assertIn('"startValue": null', structure)
         plan = json.loads((out/'analysis/action-plan.json').read_text())['actions'][0]

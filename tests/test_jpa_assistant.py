@@ -1,4 +1,8 @@
-"""Simple trigger -> JPA repository -> existing service, including Java execution."""
+"""Simple trigger -> JPA repository -> existing service, including Java execution.
+
+The jpa data access of the Java assistant (`backend-assist --data-access jpa`); the default, "service", writes
+everything in the service through the EntityManager (test_ai_triggers).
+"""
 import contextlib
 import copy
 import io
@@ -83,7 +87,7 @@ class JpaAssistantTests(unittest.TestCase):
     def propose(self, response=None):
         client = Client(response or implementation())
         with patch("frm_forms.ollama.opener", return_value=client):
-            result = engine.propose(self.out, self.task["id"], engine.Options(attempts=1))
+            result = engine.propose(self.out, self.task["id"], engine.Options(data_access="jpa", attempts=1))
         return result, client
 
     def test_entity_repository_dto_and_existing_service_apply_together(self):
@@ -132,7 +136,7 @@ class JpaAssistantTests(unittest.TestCase):
         sheet = schema.schema_sheet(self.out)
         schema.save_table(self.out, "APP.ACCOUNT", columns(), [], sheet["revision"])
         with patch("frm_forms.ollama.opener", side_effect=AssertionError("No invented key")), self.assertRaisesRegex(MigrationError, "PK"):
-            engine.propose(self.out, self.task["id"], engine.Options())
+            engine.propose(self.out, self.task["id"], engine.Options(data_access="jpa"))
 
     def test_repository_code_and_dto_shapes_are_checked(self):
         for methods in ("public class WrongController {}", "private String field;",

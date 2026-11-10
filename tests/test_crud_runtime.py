@@ -9,7 +9,6 @@ Like Forms, a missing Required item or a too long value is refused (422) before 
 import contextlib
 import io
 import json
-import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -28,7 +27,7 @@ FORM = '''<Module><FormModule Name="LAPOZAS"><Coordinate CoordinateSystem="Real"
  </Block><Canvas Name="C" CanvasType="Content" WindowName="W"/><Window Name="W"/>
 </FormModule></Module>'''
 
-# Required KOD (at most 3 characters) with a WHEN-VALIDATE-ITEM the Java assistant has not written yet (HTTP 501).
+# Required KOD (at most 3 characters) with a WHEN-VALIDATE-ITEM (written by the Java assistant).
 REQUIRED_FORM = '''<Module><FormModule Name="KOTELEZO"><Coordinate CoordinateSystem="Real" RealUnit="Pixel"/>
  <Block Name="B" DatabaseDataBlock="true" QueryDataSourceName="T_B" RecordsDisplayCount="5">
   <Item ItemType="Text Item" Name="ID" DataType="Number" PrimaryKey="true" CanvasName="C" XPosition="10" YPosition="10" Width="80" Height="20"/>
@@ -36,35 +35,6 @@ REQUIRED_FORM = '''<Module><FormModule Name="KOTELEZO"><Coordinate CoordinateSys
    Width="80" Height="20"><Trigger Name="WHEN-VALIDATE-ITEM" TriggerText="IF :B.KOD = 'X' THEN message('x'); END IF;"/></Item>
  </Block><Canvas Name="C" CanvasType="Content" WindowName="W"/><Window Name="W"/>
 </FormModule></Module>'''
-
-REQUIRED = r'''
-import hu.company.common.UserDto;
-import hu.company.features.kotelezo.cl.KotelezoDtos.*;
-import hu.company.features.kotelezo.dps.KotelezoServiceImpl;
-import org.springframework.http.HttpStatus;
-import org.springframework.web.server.ResponseStatusException;
-
-public class Required {
-    static Object create(String kod) throws Exception {  // the status of the refusal
-        var row = new BRow();
-        row.kod = kod;
-        try {
-            new KotelezoServiceImpl().createB(new UserDto(), row);  // the checks come before the repository
-        } catch (ResponseStatusException e) {
-            return e.status;
-        }
-        throw new AssertionError("expected an error for " + kod);
-    }
-
-    public static void main(String[] args) throws Exception {
-        if (create(null) != HttpStatus.UNPROCESSABLE_ENTITY) throw new AssertionError("Required: 422 before the trigger");
-        if (create("ABCD") != HttpStatus.UNPROCESSABLE_ENTITY) throw new AssertionError("too long: 422 before the trigger");
-        // A valid value reaches WHEN-VALIDATE-ITEM (its hook, written by the test, refuses with 501).
-        if (create("A") != HttpStatus.NOT_IMPLEMENTED) throw new AssertionError("the trigger runs after the checks");
-        System.out.println("validation order checks passed");
-    }
-}
-'''
 
 SMOKE = r'''
 import java.math.BigDecimal;
@@ -193,18 +163,14 @@ class CrudRuntimeTests(unittest.TestCase):
         self.assertIn('paging and lock checks passed', self.run_java(self.generate(), 'Smoke', SMOKE))
 
     def test_an_items_own_checks_come_before_its_triggers(self):
+        # backend_trigger_mode=ai: the Java assistant writes createB from its hints, which keep the Forms order: the
+        # item's own checks (Required, length) first, then its WHEN-VALIDATE-ITEM, then the INSERT.
         out = self.generate(REQUIRED_FORM, 'kotelezo', backend_trigger_mode='ai')
         service = (out / 'backend/DPS/KotelezoServiceImpl.java').read_text(encoding='utf-8')
         create = service[service.index('public RowResult<BRow> createB('):service.index('public RowResult<BRow> updateB(')]
-        self.assertLess(create.index('validateB(row);'), create.index('validateRulesB(row, context);'))
-        # The hook waits empty for the Java assistant; written here as a refusal, so the order is visible at run time.
-        hook = re.search(r'(private void triggerWhenValidateItem\w*\(BRow row, RuleContext context\) \{[\s\S]*?//endregion\n)(\s*\})', service)
-        self.assertIsNotNone(hook)
-        written = service[:hook.end(1)] + ('        throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED, "trigger");\n'
-                                           + service[hook.start(2):])
-        (out / 'backend/DPS/KotelezoServiceImpl.java').write_text(written, encoding='utf-8')
-        self.assertIn('validation order checks passed', self.run_java(out, 'Required', REQUIRED))
-
+        checks, hook = create.index('Mezőellenőrzés (HTTP 422, FormsChecks): kötelező:'), create.index('triggerWhenValidateItem')
+        self.assertLess(checks, hook)
+        self.assertLess(hook, create.index('INSERT INTO '))
 
 if __name__ == '__main__':
     unittest.main()

@@ -169,8 +169,10 @@ class SchemaWorkflowTests(unittest.TestCase):
         self.assertEqual(sheet['pending'], ['APP.ACCOUNT'])
         self.assertIsNone(sheet['tables'][0]['definition'])
         self.assertEqual(sheet['tables'][0]['referenced_columns'], ['ID', 'NAME'])
+        # The jpa data access builds the table's entity for the model: it asks for the structure first. (The default
+        # "service" access runs the Forms SQL as written and never waits for one.)
         with patch('frm_forms.ollama.opener', side_effect=AssertionError('must ask for schema')), self.assertRaisesRegex(MigrationError, 'táblaszerkezet'):
-            assistant.propose(self.out, self.task['id'], assistant.Options())
+            assistant.propose(self.out, self.task['id'], assistant.Options(data_access='jpa'))
 
     def test_saved_schema_reaches_model_and_trigger_only_repository(self):
         self.assertEqual(self.save()['pending'], [])

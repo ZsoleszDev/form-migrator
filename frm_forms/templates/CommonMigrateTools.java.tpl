@@ -11,6 +11,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -37,7 +38,7 @@ import org.springframework.web.server.ResponseStatusException;
  */
 public final class CommonMigrateTools {
     /** A változat, amelyet a generált modulok várnak. */
-    public static final String VERSION = "7";
+    public static final String VERSION = "8";
 
     private CommonMigrateTools() {
         // Csak statikus segédek.
@@ -195,6 +196,36 @@ public final class CommonMigrateTools {
                     ? null
                     : BigDecimal.valueOf(value.codePointCount(0, value.length()));
         }
+
+        /** Egy natív lekérdezés oszlopa szövegként (VARCHAR2, CHAR(1)); az üres és a null null. */
+        public static String text(Object value) {
+            return value == null ? null : normalize(value.toString());
+        }
+
+        /** Egy natív lekérdezés NUMBER oszlopa (BigDecimal, Long, Integer ...) BigDecimal-ként. */
+        public static BigDecimal number(Object value) {
+            if (value == null || value instanceof BigDecimal) {
+                return (BigDecimal) value;
+            }
+            return new BigDecimal(value.toString());
+        }
+
+        /** Egy natív lekérdezés DATE/TIMESTAMP oszlopa LocalDateTime-ként. */
+        public static LocalDateTime dateTime(Object value) {
+            if (value == null || value instanceof LocalDateTime) {
+                return (LocalDateTime) value;
+            }
+            if (value instanceof Timestamp) {
+                return ((Timestamp) value).toLocalDateTime();
+            }
+            if (value instanceof Date) {
+                return new Timestamp(((Date) value).getTime()).toLocalDateTime();
+            }
+            if (value instanceof LocalDate) {
+                return ((LocalDate) value).atStartOfDay();
+            }
+            throw new IllegalArgumentException("Nem dátum: " + value.getClass().getName());
+        }
     }
 
     /** Egy Forms-trigger futásának üzenetei (MESSAGE), és a FORM_TRIGGER_FAILURE megfelelője. */
@@ -231,35 +262,51 @@ public final class CommonMigrateTools {
         /** Üzleti hiba: 422, zárolt rekord: 409, migrációs korlát: 501, különben az eredeti. */
         public static RuntimeException translate(DataAccessException e) {
             if (e.getMostSpecificCause() instanceof SQLException) {
-                SQLException ora = (SQLException) e.getMostSpecificCause();
-                String text = ora.getMessage() == null ? "" : ora.getMessage();
-                // ORA-00054 / ORA-30006 (FOR UPDATE NOWAIT / WAIT): another session holds the
-                // record, like the Forms "Could not reserve record": the user tries again later.
-                if (ora.getErrorCode() == 54 || ora.getErrorCode() == 30006) {
-                    return new ResponseStatusException(HttpStatus.CONFLICT,
-                            "A rekordot most más felhasználó zárolja; próbáld újra később.");
-                }
-                // ORA-20998: the migrated code changed an item it may not write back in this event.
-                if (ora.getErrorCode() == 20998) {
-                    return new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED,
-                            "Migrációs korlát: " + message(text));
-                }
-                // PLS-00201 (language-independent code): a routine the database does not know -
-                // Forms-side code not yet in the framework catalog, or a missing database object.
-                // Only this operation stops.
-                Matcher missing = MISSING_ROUTINE.matcher(text);
-                if (missing.find()) {
-                    return new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED,
-                            "Nem futtatható az adatbázisban: " + missing.group(1)
-                            + " nem található az adatbázisban (Forms-oldali rutin vagy hiányzó"
-                            + " adatbázis-objektum); ezt a műveletet kézzel kell átültetni.");
-                }
-                // RAISE_APPLICATION_ERROR (ORA-20000..20999) is a business message: HTTP 422,
-                // like a failed Forms trigger.
-                if (ora.getErrorCode() >= 20000 && ora.getErrorCode() <= 20999) {
-                    return new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
-                            message(text));
-                }
+                return oracle((SQLException) e.getMostSpecificCause(), e);
+            }
+            return translate((RuntimeException) e);
+        }
+
+        /**
+         * Ugyanez az EntityManager hibáira (PersistenceException): az okok láncában keresett
+         * Oracle-hiba szerint.
+         */
+        public static RuntimeException translate(RuntimeException e) {
+            Throwable cause = e;
+            while (cause != null && !(cause instanceof SQLException)) {
+                cause = cause.getCause() == cause ? null : cause.getCause();
+            }
+            return cause == null ? e : oracle((SQLException) cause, e);
+        }
+
+        private static RuntimeException oracle(SQLException ora, RuntimeException e) {
+            String text = ora.getMessage() == null ? "" : ora.getMessage();
+            // ORA-00054 / ORA-30006 (FOR UPDATE NOWAIT / WAIT): another session holds the
+            // record, like the Forms "Could not reserve record": the user tries again later.
+            if (ora.getErrorCode() == 54 || ora.getErrorCode() == 30006) {
+                return new ResponseStatusException(HttpStatus.CONFLICT,
+                        "A rekordot most más felhasználó zárolja; próbáld újra később.");
+            }
+            // ORA-20998: the migrated code changed an item it may not write back in this event.
+            if (ora.getErrorCode() == 20998) {
+                return new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED,
+                        "Migrációs korlát: " + message(text));
+            }
+            // PLS-00201 (language-independent code): a routine the database does not know -
+            // Forms-side code not yet in the framework catalog, or a missing database object.
+            // Only this operation stops.
+            Matcher missing = MISSING_ROUTINE.matcher(text);
+            if (missing.find()) {
+                return new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED,
+                        "Nem futtatható az adatbázisban: " + missing.group(1)
+                        + " nem található az adatbázisban (Forms-oldali rutin vagy hiányzó"
+                        + " adatbázis-objektum); ezt a műveletet kézzel kell átültetni.");
+            }
+            // RAISE_APPLICATION_ERROR (ORA-20000..20999) is a business message: HTTP 422,
+            // like a failed Forms trigger.
+            if (ora.getErrorCode() >= 20000 && ora.getErrorCode() <= 20999) {
+                return new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                        message(text));
             }
             return e;
         }
