@@ -54,14 +54,24 @@ def operations(model, actions):
             result.append(dict(block=b, op='search', verb='read', http='Post', returns=f'PageResult<{row}>',
                                args=arg, controller_args='@RequestBody '+arg, call='request', method='search'+b['class'],
                                constant=b['class'].upper()+'_SEARCH_PATH'))
+    served = {b['name']: b for b in backend_blocks(model)}
     for a in actions:
         trigger = next((t for t in model['triggers'] if t['owner'] == a['owner'] and t['event'] == a['event']), {})
         query = trigger.get('query_action')
-        target = next((b for b in model['blocks'] if query and b['name'] == query['target']), None)
+        target = served.get(query['target']) if query else None
+        unserved = None
+        if query and target is None:
+            # The target block has no data endpoint (no primary key for its Domain, QueryAllowed=false ...): there is
+            # no <Block>Row to return. The button stays an ordinary action; its Forms code is still there to write.
+            block = next((b for b in model['blocks'] if b['name'] == query['target']), {})
+            reasons = [s['reason'] for s in block.get('skipped_operations', []) if s.get('reason')]
+            unserved = {'block': query['target'], 'reason': reasons[0] if reasons else 'a blokk nem kap adatvégpontot.'}
+            query = None
         returns = f'PageResult<{target["class"]}Row>' if target else 'ActionResult'
         request = 'QueryActionRequest request' if target else 'ActionRequest request'
         result.append(dict(action=a, op='action', verb='action:'+a['key'], http='Post', returns=returns,
                            args=request, controller_args='@RequestBody '+request, query_action=query,
+                           query_unserved=unserved,
                            call='request', method=a['method_name'], api_name=a['api_name'],
                            constant='ACTION_'+a['method_name'].upper()+'_PATH'))
     return result
@@ -474,13 +484,17 @@ def ai_action_method(o, model, discovery, log1x, user_type, blocks) -> str:
              + ((' · paraméterek: ' + ', '.join(parameters)) if parameters else '') + '.']
     trigger = next((t for t in model['triggers'] if t['owner'] == action['owner'] and t['event'] == action['event']), {})
     notes += ai_triggers.framework_note('', None, trigger.get('framework_calls'))
-    if query:
-        target = next(b for b in blocks if b['name'] == query['target'])
+    target = next((b for b in blocks if b['name'] == query['target']), None) if query else None
+    if target:
         notes.append('Lekérdezőgomb: a(z) ' + target['name'] + ' (' + target['table'] + ') sorait adja vissza '
                      '(PageResult<' + target['class'] + 'Row>), a Forms-kód szűrőjével és rendezésével.')
+    elif o.get('query_unserved'):
+        unserved = o['query_unserved']
+        notes.append('Lekérdezőgomb lenne, de a(z) ' + unserved['block'] + ' blokknak nincs adatvégpontja, így sorokat '
+                     'sem adhat vissza: ' + unserved['reason'])
     original = ai_triggers.region(label, ai_action_sources(o, model, discovery), '            ', notes)
     info = [label + ': a törzset a Java asszisztens írja meg a lenti Forms-kódból.']
-    if query:
+    if target:
         returns, request = f"PageResult<{target['class']}Row>", 'QueryActionRequest'
     else:
         returns, request = 'ActionResult', 'ActionRequest'
