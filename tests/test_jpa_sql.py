@@ -4,6 +4,9 @@ A small local model fails most often on the repository (EntityManager code in th
 method it never wrote), and each such answer costs a correction call. So the migrator writes the repository
 methods of the SQL it can translate exactly (Criteria API, persist, the sequence query; the Forms SQL in their
 comment), the prompt offers them and asks for the service only; a simple record trigger needs no model at all.
+
+The jpa data access of the Java assistant (`backend-assist --data-access jpa`); the default, "service", writes
+everything in the service through the EntityManager (test_ai_triggers).
 """
 import contextlib
 import io
@@ -236,7 +239,7 @@ class AssistantTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.out = migrate(self.root)
-        self.options = engine.Options(num_ctx=16384)
+        self.options = engine.Options(data_access="jpa", num_ctx=16384)
 
     def tearDown(self):
         self.temp.cleanup()
@@ -335,7 +338,7 @@ public ActionResult onCtrlPbLezar(UserDto user, ActionRequest request) throws Ex
 ```
 '''
         with patch('frm_forms.ollama.opener', return_value=Client(answer)), model_path():
-            result = engine.propose(self.out, self.tasks()['onCtrlPbLezar']['id'], engine.Options(num_ctx=16384, attempts=1))
+            result = engine.propose(self.out, self.tasks()['onCtrlPbLezar']['id'], engine.Options(data_access="jpa", num_ctx=16384, attempts=1))
         # The call is not lost: a draft with the problem, which can be read but not applied.
         self.assertEqual((result['status'], result['calls'], result['validation']['structural_checks']), ('draft', 1, 'failed'))
         self.assertIn('Az AI utolsó válaszának hibája: A service közvetlenül EntityManagert használ', result['extraction']['warnings'][0])
@@ -345,7 +348,7 @@ public ActionResult onCtrlPbLezar(UserDto user, ActionRequest request) throws Ex
             engine.apply_proposal(self.out, result['id'], reviewed=True)
         # Not cached: the next run asks the model again.
         with patch('frm_forms.ollama.opener', return_value=Client(answer)) as opener, model_path():
-            engine.propose(self.out, self.tasks()['onCtrlPbLezar']['id'], engine.Options(num_ctx=16384, attempts=1))
+            engine.propose(self.out, self.tasks()['onCtrlPbLezar']['id'], engine.Options(data_access="jpa", num_ctx=16384, attempts=1))
         self.assertEqual(opener.call_count, 1)
 
 

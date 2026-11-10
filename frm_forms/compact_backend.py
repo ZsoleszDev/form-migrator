@@ -485,14 +485,27 @@ def ai_action_method(o, model, discovery, log1x, user_type, blocks) -> str:
     trigger = next((t for t in model['triggers'] if t['owner'] == action['owner'] and t['event'] == action['event']), {})
     notes += ai_triggers.framework_note('', None, trigger.get('framework_calls'))
     target = next((b for b in blocks if b['name'] == query['target']), None) if query else None
+    from . import ai_frames
+    sources = ai_action_sources(o, model, discovery)
     if target:
         notes.append('Lekérdezőgomb: a(z) ' + target['name'] + ' (' + target['table'] + ') sorait adja vissza '
                      '(PageResult<' + target['class'] + 'Row>), a Forms-kód szűrőjével és rendezésével.')
+        # The target block's own query, its row mapping and fetch hooks: the button changes only its WHERE / ORDER BY.
+        sql = ai_frames.block_sql(model, target)
+        _, calls = ai_frames.hooks(model, target)
+        notes.append('A blokk lekérdezése: ' + sql['query'] + ' OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY'
+                     ' (offset = request.offset(); :limit = request.limit() + 1, a plusz sor jelzi: hasMore).')
+        notes.append(f"Sor -> new {target['class']}Row(): " + ai_frames.mapping_line(target) + '.')
+        if calls.get('FETCH'):
+            notes.append('Minden sorra (POST-QUERY): ' + ai_frames.call_line(calls, ['FETCH']).replace(' (FETCH)', '')
+                         + '; var context = new RuleContext(), az üzenetei: context.messages().')
     elif o.get('query_unserved'):
         unserved = o['query_unserved']
         notes.append('Lekérdezőgomb lenne, de a(z) ' + unserved['block'] + ' blokknak nincs adatvégpontja, így sorokat '
                      'sem adhat vissza: ' + unserved['reason'])
-    original = ai_triggers.region(label, ai_action_sources(o, model, discovery), '            ', notes)
+    if model.get('options', {}).get('backend_trigger_mode') == 'ai':
+        notes += ai_frames.sql_hints([code for _, code in sources], model)
+    original = ai_triggers.region(label, sources, '            ', notes)
     info = [label + ': a törzset a Java asszisztens írja meg a lenti Forms-kódból.']
     if target:
         returns, request = f"PageResult<{target['class']}Row>", 'QueryActionRequest'
@@ -932,26 +945,21 @@ public class {cls}ControllerImpl extends {controller_base} implements {cls}Contr
     support, operation_bodies = [], {}
     from .service_inline import inline_block
     vals = {b['name']: block_values(model, b) for b in blocks}
-    # backend_trigger_mode=ai: the blocks' data access is Spring Data JPA (jpa_crud), a Domain and a Repository per table.
-    from . import jpa_crud
-    tables = jpa_crud.plan(blocks) if blocks and jpa_crud.ai_mode(model) else {}
+    # backend_trigger_mode=ai: every method is the Java assistant's (ai_frames): the endpoints are empty frames with
+    # their hints, the block's triggers private hooks. The table's Domain entity and an empty Repository are written
+    # for the developer (jpa_crud); the service does not use them.
+    from . import ai_frames, jpa_crud
+    ai = jpa_crud.ai_mode(model)
+    tables = jpa_crud.plan(blocks, model.get('schema_tables')) if blocks and ai else {}
+    block_calls = {}
     for b in blocks:
+        if ai:
+            sources, block_calls[b['name']] = ai_frames.hooks(model, b)
+            support.append('\n\n'.join(sources))
+            continue
         # Only the internals of generated endpoints: no create() for InsertAllowed=false.
         sections = set().union(*(OPERATION_SECTIONS[op] for op in OPERATION_SECTIONS if b['endpoint_plan'].get(op)))
-        if tables:
-            entry = tables[b['table'].upper()]
-            reads = b['endpoint_plan'].get('list') or b['endpoint_plan'].get('search')
-            query = jpa_crud.block_query(b, entry) if reads else None
-            if query:
-                entry['queries'].append(query)
-            values = {**vals[b['name']], **jpa_crud.block_values(b, entry, query), 'SEARCH_METHOD': ''}
-            if query and query['search']:
-                from .generate import check_lines
-                checks = '\n'.join('            ' + line for line in check_lines((v['item'], 'criteria.' + v['field']) for v in query['binds']))
-                values['SEARCH_METHOD'] = jpa_crud.search_method(b, query, checks, entry['variable'])
-            source = template('CompactBlockJpa.java.tpl', {**values, 'RULE_METHODS': rule_methods(model, b)}, config, sections)
-        else:
-            source = template('CompactBlock.java.tpl', {**vals[b['name']], 'RULE_METHODS': rule_methods(model, b)}, config, sections)
+        source = template('CompactBlock.java.tpl', {**vals[b['name']], 'RULE_METHODS': rule_methods(model, b)}, config, sections)
         bodies, helpers = inline_block(source, b, b['endpoint_plan'])
         operation_bodies[b['name']] = bodies
         support.append(helpers)
@@ -965,13 +973,19 @@ public class {cls}ControllerImpl extends {controller_base} implements {cls}Contr
     public {o['returns']} {o['method']}({user_type} user, {o['args']}) throws Exception {{
         {log1x(o, '() -> client.' + o['method'] + '(' + o['call'] + ')')}
     }}''')
-        if o['op'] == 'lov' and jpa_crud.ai_mode(model):
-            # The record group's query is a native @Query of a repository (jpa_lov): no JDBC in the service.
-            from . import jpa_lov
-            entry = jpa_lov.prepare(o['lov'], tables, blocks)
-            dps_methods.append(jpa_lov.service_method(o['lov'], comment_lines, log1x(o, '() -> {'), user_type, o['method'],
-                                                      entry['variable'] if entry else None))
+        if o['op'] == 'lov' and ai:
+            # The record group's query and its typed-text filter, for the Java assistant (ai_frames).
+            dps_methods.append(ai_frames.lov_frame(o, log1x, user_type))
             evidence.append((o['method'], '\n'.join(lov_evidence(o['lov'], gated))))
+        elif o['op'] in {'list', 'search', 'create', 'update', 'delete'} and ai:
+            b = o['block']
+            calls = block_calls[b['name']]
+            # A POST-QUERY hook may write (logging, DML): its read is no read-only transaction.
+            txn = ('@Transactional(readOnly = true)' if o['op'] in {'list', 'search'} and not calls.get('FETCH')
+                   else '@Transactional(rollbackFor = Exception.class)')
+            info = f"{b['name']} blokk ({b['table']}): {ai_frames.OPERATION_TITLES[o['op']]}."
+            dps_methods.append(ai_frames.crud_frame(o, model, calls, log1x, user_type, txn, info))
+            evidence.append((o['method'], ai_frames.evidence(o, model)))
         elif o['op'] == 'lov':
             dps_methods.append(lov_method(o['lov'], gated, comment_lines, log1x(o, '() -> {'), user_type, o['method']))
             evidence.append((o['method'], '\n'.join(lov_evidence(o['lov'], gated))))
@@ -1036,11 +1050,14 @@ public class {cls}ControllerImpl extends {controller_base} implements {cls}Contr
     write(output/'analysis/backend-evidence.md', '# Backend-bizonyíték\n\nA DPS ServiceImpl metódusai mögötti eredeti Forms SQL és PL/SQL, '
                                                  'és a generált SQL. A kódban csak rövid összefoglaló áll; a részletek itt vannak.\n\n'
           + ''.join('## ' + method + '\n\n```text\n' + text.strip() + '\n```\n\n' for method, text in evidence))
-    # JPA blocks: the repositories, @Autowired like the company services; JDBC only for what still runs SQL itself.
-    jdbc = bool(((blocks or lovs) and not jpa_crud.ai_mode(model)) or runnable_actions)
+    # AI mode: the service runs its SQL through the EntityManager (written by the Java assistant); the Domain and the
+    # empty Repository of each table are for the developer. JDBC only for what still runs SQL itself (old modes).
+    jdbc = bool(((blocks or lovs) and not ai) or runnable_actions)
+    namespace = config.get('jpa_namespace') or 'javax'
     if tables:
-        jpa_crud.write_files(tables, output, layer_package(config, package, 'DPS'), config.get('jpa_namespace') or 'javax')
-    dps_fields = jpa_crud.service_fields(tables)
+        jpa_crud.write_files(tables, output, layer_package(config, package, 'DPS'), namespace)
+    entity_manager = ai and bool(blocks or lovs or any(o.get('ai') for o in ops))
+    dps_fields = (['    @PersistenceContext\n    private EntityManager entityManager;'] if entity_manager else [])
     dps_fields += ['    private final NamedParameterJdbcTemplate jdbc;'] if jdbc else []
     ctor_args = 'NamedParameterJdbcTemplate jdbc' if jdbc else ''
     ctor_body = '\n'.join(['        this.jdbc = Objects.requireNonNull(jdbc);'] if jdbc else [])
@@ -1107,8 +1124,15 @@ import org.springframework.transaction.annotation.Transactional;
 {ctor_body}
     }}
 ''' if ctor_args else ''
-    header = ('CREATE_ONCE: --regenerate preserves this file. The data access is in the repositories (Spring Data JPA).'
-              if tables else 'CREATE_ONCE: --regenerate preserves this file. SQL/PLSQL and private helpers are kept here; no domain/repository layer.')
+    if entity_manager:
+        # jpa_namespace names the project's JPA (javax or jakarta): the service's EntityManager is imported from it
+        # (java_tidy imports no javax/jakarta name it is not told about; java-imports.json still wins).
+        from . import java_tidy
+        for simple in ('EntityManager', 'PersistenceContext'):
+            java_tidy.IMPORT_MAP.setdefault(simple, f'{namespace}.persistence.{simple}')
+    header = ('CREATE_ONCE: --regenerate preserves this file. The Java assistant writes every method from its hints, '
+              'native SQL through the EntityManager; the developer may move the SQL into the table repositories.'
+              if ai else 'CREATE_ONCE: --regenerate preserves this file. SQL/PLSQL and private helpers are kept here; no domain/repository layer.')
     emit('DPS', 'ServiceImpl', f'''/** {header} */
 @XSlf4j
 @Service
@@ -1188,6 +1212,10 @@ import org.springframework.boot.web.client.RestTemplateBuilder;
                 entry['query_java_reason'] = o['query_java_reason']
             if java_query:
                 entry['equivalence'] = o['query_action']['java'].get('equivalence')
+        elif o['op'] == 'lov' and ai and not o['lov']['blockers']:
+            entry.update(block=o['lov']['block'], operation='lov', lov=o['lov']['name'], implemented=False,
+                         ready_after_module_review=False, runs='ai', ai=True,
+                         blockers=['AI-ra vár: a Java asszisztens írja meg a rekordcsoport lekérdezéséből.'])
         elif o['op'] == 'lov':
             ready = not o['lov']['blockers']
             entry.update(block=o['lov']['block'], operation='lov', lov=o['lov']['name'], implemented=ready and (not gated or live),
@@ -1197,6 +1225,11 @@ import org.springframework.boot.web.client.RestTemplateBuilder;
             entry.update(block='@FORM', operation='commit', implemented=not gated or live,
                          ready_after_module_review=gated and not live, blockers=[],
                          blocks=[b['name'] for b in o['blocks']])
+        elif o['op'] != 'action' and ai:
+            # The frame is final; the body waits for the Java assistant (ai_frames).
+            entry.update(block=o['block']['name'], operation=o['op'], implemented=False, ready_after_module_review=False,
+                         runs='ai', ai=True, blockers=['AI-ra vár: a Java asszisztens írja meg a kikommentezett SQL-ből.']
+                         + capability(o['block'], o['op'])[2])
         elif o['op'] != 'action':
             enabled, ready, blockers = capability(o['block'], o['op'])
             entry.update(block=o['block']['name'], operation=o['op'], implemented=enabled,

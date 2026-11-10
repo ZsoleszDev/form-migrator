@@ -104,10 +104,10 @@ def plan(packet: dict, output: Path) -> list[dict]:
             if any(types[k] == "byte[]" for k in keys):
                 raise MigrationError(table + ": a bináris elsődleges kulcshoz céges JPA-leképezés szükséges.")
             lobs = {c for c, v in spec["columns"].items() if str(v.get("data_type", "")).upper() in {"CLOB", "NCLOB", "BLOB"}}
-            entry = {"table": table, "class": jpa_crud.table_class(table), "blocks": ["(trigger)"], "sequences": {},
+            entry = {"table": table, "class": jpa_crud.table_class(table), "blocks": ["(trigger)"],
                      "columns": {c: {"field": jpa_crud.domain_field(c), "type": types[c], **({"lob": True} if c in lobs else {})}
                                  for c in spec["columns"]},
-                     "key": [k.upper() for k in keys], "queries": [], "extra": []}
+                     "key": [k.upper() for k in keys]}
             entry["domain"], entry["repository"] = entry["class"] + "Domain", entry["class"] + "Repository"
             entry["variable"] = name(entry["class"]) + "Repository"
             key_types = [entry["columns"][k]["type"] for k in entry["key"]]
@@ -120,7 +120,7 @@ def plan(packet: dict, output: Path) -> list[dict]:
             key = [entry["columns"][k]["field"] for k in entry["key"]]
             all_columns = sorted(columns)
             files = {"backend/DPS/" + domain + ".java": jpa_crud.domain_source(entry, package, namespace),
-                     "backend/DPS/" + repository + ".java": jpa_crud.repository_source(entry, package, namespace, lock=False)}
+                     "backend/DPS/" + repository + ".java": jpa_crud.empty_repository_source(entry, package, note=False)}
             for path in list(files):  # an earlier run's file of the same class: it may hold methods already
                 target = engine.safe_file(output, path)
                 if target.is_file():

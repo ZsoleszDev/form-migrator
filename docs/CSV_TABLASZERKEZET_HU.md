@@ -7,8 +7,10 @@
    Alternatíva: nyisd le a **CSV-szöveg beillesztése és exportminta** részt,
    illeszd be a tartalmat és kattints a **CSV beolvasása** gombra.
 3. Ellenőrizd a kulcsot és a hosszakat. A beolvasás vázlatot készít; a meglévő fájlokat nem írja át.
-4. Kattints a **Táblaszerkezet mentése** gombra. A séma bekerül az AI kontextusába,
-   a friss ZIP-be és a schema.json-exportba, valamint a webes újrafuttatáskor is megmarad.
+4. Kattints a **Táblaszerkezet mentése** gombra. A szerkezetből (PK-val) azonnal elkészül a tábla JPA
+   entityje (`<Tábla>Domain`) és üres repositoryja; a séma bekerül a friss ZIP-be és a schema.json-exportba,
+   valamint a webes újrafuttatáskor is megmarad. Az AI-feladatokat nem tartja vissza: az AI az eredeti SQL-t
+   futtatja, a táblaszerkezetet nem kéri.
 
 Fejléc nélküli, hatoszlopos export:
 
@@ -43,7 +45,7 @@ scale=0** töltődik be; a 22 byte a tárolási hossz, nem a számjegyek száma.
 
 - **Elsődleges kulcs:** a NOT NULL nem bizonyítja, hogy egy mező PK. A jelölőnégyzetet
   az adatbázis tényleges kulcsa alapján állítsd be. Kulcs nélküli táblánál üresen maradhat;
-  ilyen táblához a kulcs szerinti repository nem készül el.
+  ilyen táblához entity és repository nem készül (az entitynek `@Id` kell).
 - **Karakter- vagy bytehossz:** a DATA_LENGTH bytehossz. A hagyományos CHAR/VARCHAR2
   mezők BYTE-korláttal kerülnek a szerkesztőbe, figyelmeztetéssel; ebből nem állapítható
   meg az eredeti CHAR/BYTE deklaráció. CHAR deklarációnál add meg a valódi

@@ -374,6 +374,9 @@ def apply_metadata(model: dict, metadata: dict) -> None:
         raise MigrationError("schema.json: blocks objektum szükséges.")
     model["procedures"] = procedure_signatures(metadata.get("procedures", {}))
     tables = metadata.get("tables", {})
+    if isinstance(tables, dict):
+        # The reviewed table structures: the Domain entities map every column (jpa_crud.plan).
+        model["schema_tables"] = {str(k).upper(): v for k, v in tables.items() if isinstance(v, dict)}
     if not isinstance(tables, dict) or not all(isinstance(v, dict) for v in tables.values()):
         raise MigrationError("schema.json: tables objektum szükséges (dictionary-import kimenete).")
     tables = {str(k).upper(): v for k, v in tables.items()}

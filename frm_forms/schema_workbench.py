@@ -447,4 +447,8 @@ def save_table(output: Path, table: str, columns: list, primary_key: list, revis
             if old is None: path.unlink(missing_ok=True)
             else: path.write_bytes(old)
         raise
-    return schema_sheet(output)
+    # AI mode: the saved structure becomes the table's Domain entity and an empty Repository (for the developer).
+    from .jpa_crud import write_schema_entity
+    entities = write_schema_entity(output, table, definition)
+    sheet = schema_sheet(output)
+    return {**sheet, "entity_files": entities} if entities else sheet

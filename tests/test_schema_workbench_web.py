@@ -51,18 +51,22 @@ class SchemaWebTests(unittest.TestCase):
         return {'table': 'APP.ACCOUNT', 'revision': sheet['revision'],
                 'columns': columns(), 'primary_key': ['ID']}
 
-    def test_missing_table_is_empty_and_stops_ai_before_any_request(self):
+    def test_missing_table_is_listed_and_never_holds_the_ai_back(self):
+        # The model runs the Forms SQL as written (data access "service"): the table's structure is for its entity,
+        # the task does not wait for it.
         self.assertEqual(self.client.get('/').status_code, 200)
         index = self.client.get(self.base).json()
         table = index['schema']['tables'][0]
         self.assertEqual(table['table'], 'APP.ACCOUNT')
         self.assertIsNone(table['definition'])
         self.assertEqual(table['referenced_columns'], ['ID', 'NAME'])
-        with patch('frm_forms.ollama.opener', side_effect=AssertionError('No schema, no model call')):
-            started = self.client.post(self.base, headers=HEADERS,
-                                       json={'task_id': index['tasks'][0]['id']})
-        self.assertEqual(started.status_code, 409)
-        self.assertIn('APP.ACCOUNT', started.json()['detail'])
+        task = index['tasks'][0]
+        self.assertIn('APP.ACCOUNT', task['tables'])
+        self.assertEqual(task['pending_tables'], [])
+        with patch('frm_forms.ollama.opener', side_effect=AssertionError('no model call')):
+            preview = self.client.post(self.base + '/prompt', headers=HEADERS, json={'task_id': task['id']})
+        self.assertEqual(preview.status_code, 200, preview.text)
+        self.assertIn("the service's `entityManager` field", preview.json()['user'])
 
     def test_save_export_index_and_retry_keep_the_same_structure(self):
         request = self.request()

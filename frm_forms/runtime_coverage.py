@@ -126,9 +126,12 @@ def coverage(model, backend=None, screen=None):
                 row['gaps'].append(trigger.get('reason') or 'Felismert frontendutasítás is lehet: az actionRequested jelzés önmagában nem végrehajtás.')
         for endpoint in linked:
             row['endpoints'].append({k: endpoint.get(k) for k in ('method', 'operation', 'implemented', 'ready_after_module_review', 'blockers')})
-        if linked and not any(e['implemented'] for e in linked):
+        # backend_trigger_mode=ai: an endpoint the Java assistant still writes is not blocked, only waiting.
+        if linked and not any(e['implemented'] or e.get('ai') for e in linked):
             row['status'] = 'blocked'
             row['gaps'].append('A kapcsolódó végpontok jelenleg tiltottak; lásd a műveleti blokkolókat.')
+        elif any(e.get('ai') and not e['implemented'] for e in linked):
+            row['gaps'].append('A kapcsolódó végpontok törzsét a Java asszisztens írja meg (AI-ra vár).')
         if trigger.get('passthrough', {}).get('unresolved'):
             row['gaps'].append('Adatbázisban/PLL-ben ellenőrizendő rutinok: ' + ', '.join(trigger['passthrough']['unresolved']))
         rows.append(row)

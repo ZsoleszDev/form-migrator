@@ -68,7 +68,7 @@ class Context:
     repositories: list = field(default_factory=list)
     module_class: str = ""                        # PascalCase module name (supplemental DTO prefix)
     namespace: str = "javax"                      # javax/jakarta persistence
-    mode: str = "jpa"                             # jpa | inline | jdbc
+    mode: str = "jpa"                             # service (the engine default: EntityManager in the service) | jpa | inline | jdbc
     allowed_imports: frozenset = frozenset()      # FQNs the developer already uses
     routines: frozenset = frozenset()             # the generated database routine methods (db_routines)
     generated: dict = field(default_factory=dict)  # repository -> the migrator's methods of the task's SQL (prompt lines)
@@ -574,6 +574,10 @@ def check_service_code(code: str, ctx: Context, reply: Reply, missing: bool) -> 
             reply.problem("A service SQL-, JDBC- vagy PL/SQL-hívást tartalmaz; JPA-módban a repository éri el az adatbázist.",
                           "Do not keep the PL/SQL or JDBC call (DbCalls, jdbc). Implement the logic in Java and use "
                           "repository methods for the database.")
+    if ctx.mode == "service" and (re.search(r"(?<![\w$.])(?:jdbc|DbCalls|jdbcTemplate)\s*\.", mask)
+                                  or re.search(r"\b[a-z]\w*Repository\s*\.", mask)):
+        reply.problem("A service JDBC-t vagy repositoryt hív; az SQL-t az entityManager futtatja.",
+                      "There is no jdbc field and no repository here: run the SQL with entityManager.createNativeQuery(...).")
     getters = sorted(set(re.findall(r"\brequest\s*\.\s*(get(?:Blocks|Parameters))\s*\(", mask)))
     if getters:
         reply.problem("A kérés DTO-n nincs " + ", ".join(g + "()" for g in getters) + " metódus; request.blocks() és "

@@ -3,6 +3,9 @@
 A button that reads screen values, checks them, asks once (SHOW_ALERT), runs its SQL through the generated repository
 methods and writes a value back needs no model: the migrator translates it with Oracle semantics and answers the
 screen's ActionResult contract. Whatever is outside the subset stays the Java assistant's task.
+
+The jpa data access of the Java assistant (`backend-assist --data-access jpa`); the default, "service", writes
+everything in the service through the EntityManager (test_ai_triggers).
 """
 import tempfile
 from pathlib import Path
@@ -119,7 +122,7 @@ class ReplicaTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.out = migrate(self.root)
-        self.options = engine.Options(num_ctx=16384)
+        self.options = engine.Options(data_access="jpa", num_ctx=16384)
 
     def tearDown(self):
         self.temp.cleanup()

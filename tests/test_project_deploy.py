@@ -218,9 +218,9 @@ class DeployTests(unittest.TestCase):
         dps = self.root / 'rendszer-dps/src/main/java/hu/company/features/rendeles/dps'
         self.assertFalse((dps / 'RendelesDomain.java').exists())
         self.assertEqual(own.read_text(encoding='utf-8'), 'package hu.ceg.domain;\npublic class RendelesDomain {}\n')
-        # the generated repository and service import the project's class
+        # the generated repository imports the project's class (the service runs its own SQL)
         self.assertIn('import hu.ceg.domain.RendelesDomain;', (dps / 'RendelesRepository.java').read_text(encoding='utf-8'))
-        self.assertIn('import hu.ceg.domain.RendelesDomain;', (dps / 'RendelesServiceImpl.java').read_text(encoding='utf-8'))
+        self.assertNotIn('RendelesDomain', (dps / 'RendelesServiceImpl.java').read_text(encoding='utf-8'))  # SQL, no entity
         self.assertNotIn('import hu.ceg.domain.RendelesDomain;', (dps / 'PartnerRepository.java').read_text(encoding='utf-8'))
 
     def test_redeploy_updates_the_generated_files_and_keeps_create_once(self):
@@ -290,7 +290,7 @@ class DeployTests(unittest.TestCase):
         service = (dps / 'RendelesServiceImpl.java').read_text(encoding='utf-8')
         self.assertTrue(service.startswith('package hu.ceg.rendszer.dps.rendeles;\n'))
         self.assertIn('import hu.ceg.rendszer.cl.modules.rendeles.RendelesConstants;', service)
-        self.assertIn('import hu.ceg.common.CommonMigrateTools.SqlValues;', service)  # the project's own copy
+        self.assertIn('import hu.ceg.common.CommonMigrateTools.RuleContext;', service)  # the project's own copy
         self.assertNotIn('hu.company.features', service)
         self.assertTrue((wbs / 'RendelesServiceImpl.java').read_text(encoding='utf-8').startswith('package hu.ceg.rendszer.wbs.rendeles;'))
         self.assertTrue((cl / 'RendelesConstants.java').is_file())
@@ -315,7 +315,7 @@ class DeployTests(unittest.TestCase):
         out = generate(Path(self.work.name) / 'elore', {'java_empty_package': True, 'project_layout': folders})
         service = (out / 'backend/DPS/RendelesServiceImpl.java').read_text(encoding='utf-8')
         self.assertIn('import hu.ceg.rendszer.cl.modules.rendeles.RendelesConstants;', service)
-        self.assertIn('import hu.ceg.common.CommonMigrateTools.SqlValues;', service)
+        self.assertIn('import hu.ceg.common.CommonMigrateTools.RuleContext;', service)
         self.assertIn('package hu.ceg.common;', (out / 'backend/CL/CommonMigrateTools.java').read_text(encoding='utf-8'))
         effective = json.loads((out / 'analysis/effective-config.json').read_text(encoding='utf-8'))['config']
         self.assertEqual((effective['cl_package'], effective['dps_package'], effective['wbs_package']),

@@ -120,8 +120,8 @@ const ORACLE_TYPES = ['VARCHAR2', 'NVARCHAR2', 'CHAR', 'NCHAR', 'NUMBER', 'FLOAT
   `,
   template: `
     <div class="flex min-w-0 w-full flex-col gap-5" data-testid="assistant-panel">
-      <p class="m-0 text-sm opacity-80">Válassz modult és triggert, töltsd ki a táblaszerkezetet, majd kattints a Trigger javásítása gombra.
-        A migrátor entityt és repositoryt készít, az AI pedig átírja a DPS ServiceImpl kiválasztott metódusát.</p>
+      <p class="m-0 text-sm opacity-80">Válassz modult és végpontot, majd kattints a Trigger javásítása gombra. Az AI a DPS ServiceImpl
+        kiválasztott metódusát írja meg a service-ben; a táblaszerkezetből a migrátor entityt és üres repositoryt készít.</p>
       @if (error()) { <p-message severity="error" [closable]="true" (onClose)="error.set('')">{{ error() }}</p-message> }
       @if (notice()) { <p-message severity="success">{{ notice() }}</p-message> }
       <div class="as-head">
@@ -240,9 +240,9 @@ ORDER BY column_id;</pre>
         <p-panel header="2. Trigger javásítása">
           <div class="as-two">
             <div class="flex min-w-0 flex-col gap-3">
-              <p-message severity="info">Az AI csak a kiválasztott DPS-metódust kapja (benne a kikommentezett Oracle-triggerrel), és a metódusban
-                ténylegesen használt táblák repositoryjának néhány soros leírását. Az adatbázis-műveletek az entitykre épülő repositoryba kerülnek,
-                a service meghívja őket. A meglévő Controller és végpont megmarad. Nem kell promptot írnod.</p-message>
+              <p-message severity="info">Az AI csak a kiválasztott DPS-metódust kapja, benne a kikommentezett Oracle-kóddal vagy a
+                migrátor tippjeivel (AI-feladat: SQL, mezők, sorrend). Az eredeti SQL-t az entityManager natív lekérdezéseként futtatja, a
+                service-ben; repositoryt nem ír. A meglévő Controller és végpont megmarad. Nem kell promptot írnod.</p-message>
               <details><summary class="cursor-pointer text-sm font-medium">Automatikus AI-feladat megtekintése</summary>
                 <pre class="overflow-auto whitespace-pre-wrap text-xs">{{ workspace.default_instructions }}</pre>
               </details>
@@ -651,7 +651,7 @@ export class MigratorAssistant implements OnChanges, OnDestroy {
 
   private options(): Record<string, string | number> {
     return {num_ctx: this.numCtx.value, num_predict: this.numPredict.value, timeout: this.timeout.value,
-      attempts: this.attempts.value, think: this.think.value, data_access: 'jpa'};
+      attempts: this.attempts.value, think: this.think.value, data_access: 'service'};
   }
   private loadPreferences(): void {
     try {
@@ -849,7 +849,7 @@ export class MigratorAssistant implements OnChanges, OnDestroy {
     try { localStorage.setItem('frm-assistant-options-v2:' + this.apiBase, JSON.stringify(this.options())); } catch { /* inference can run without storage */ }
     try {
       const run = await this.post<Run>('', {task_id: this.taskId(), url: this.ollamaUrl.value.trim(), model: this.ollamaModel.value.trim(),
-        project_context: this.projectContext.value, data_access: 'jpa',
+        project_context: this.projectContext.value, data_access: 'service',
         ...this.options()});
       if (!this.current(epoch)) return;
       this.pendingExchangeId = run.exchange_id ?? '';
@@ -1002,7 +1002,7 @@ export class MigratorAssistant implements OnChanges, OnDestroy {
     this.aiLogLoading.set(true); this.error.set('');
     try {
       const preview = await this.post<PromptPreview>('/prompt', {task_id: task.id, project_context: this.projectContext.value,
-        data_access: 'jpa', num_ctx: this.numCtx.value, num_predict: this.numPredict.value});
+        data_access: 'service', num_ctx: this.numCtx.value, num_predict: this.numPredict.value});
       if (this.destroyed || epoch !== this.exchangeEpoch) return;
       this.exchange.set(null); this.promptPreview.set(preview);
     } catch (error) { if (epoch === this.exchangeEpoch) this.failure(error); }

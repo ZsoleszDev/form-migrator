@@ -118,11 +118,11 @@ class BackendAssistantTests(unittest.TestCase):
         system, user = (m['content'] for m in client.requests[0]['messages'])
         self.assertEqual(system, assistant_context.SYSTEM)
         self.assertNotIn('format', client.requests[0])  # free Markdown answer, no JSON-escaped code
-        self.assertIn(assistant_context.rules(has_tables=False, plsql_values=True), user)
+        self.assertIn(assistant_context.rules("service", has_tables=False, plsql_values=True), user)
         self.assertIn('FROM DUAL needs no table', user)
         self.assertIn('// SERVICE', user)
         self.assertNotIn('Additional requirements', user)
-        self.assertIn(assistant_context.rules(), self.index['default_instructions'])
+        self.assertIn(assistant_context.rules("service"), self.index['default_instructions'])
 
     def test_optional_cli_requirements_extend_the_automatic_task(self):
         self.options.instructions = 'Használd a megadott céges API-t.'

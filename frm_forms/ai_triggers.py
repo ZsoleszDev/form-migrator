@@ -2,12 +2,13 @@
 
 Every trigger that runs on the server gets a method with the right signature (the "frame": DTOs,
 endpoint, transaction, log1x, call site in the CRUD flow) whose body is only the original Oracle
-Forms code as a comment (//region Eredeti Forms-kód ... //endregion) and a HTTP 501 placeholder.
+Forms code as a comment (//region Eredeti Forms-kód ... //endregion) and an empty body.
 The Java assistant (local AI) rewrites exactly that body; nothing half-translated confuses it.
 
-What stays deterministic: the frontend, the CRUD SQL of the blocks, LOVs, the COMMIT_FORM order,
-item properties (lengths, ranges, defaults), the routes and DTOs. Only the decision *which* contract a
-button gets (a query button returns the target block's rows) is made here, from the code's shape.
+Beside the code, the region's notes restate its SQL as native SQL with named parameters (ai_frames.sql_hints).
+The blocks' data endpoints and the LOVs are frames of the same kind (ai_frames). What stays deterministic: the
+frontend, the COMMIT_FORM order, the routes and DTOs, the entities. Only the decision *which* contract a button
+gets (a query button returns the target block's rows) is made here, from the code's shape.
 """
 from __future__ import annotations
 
@@ -124,9 +125,10 @@ def hook_name(trigger: dict, taken: set) -> str:
 
 def region(title: str, sections: list[tuple[str, str]], indent: str, notes: list[str] = ()) -> str:
     """The original code as a foldable comment; the Java assistant offers every method that has one."""
+    from .ai_frames import comment
     lines = [indent + "//region " + REGION_TITLE + ": " + title]
     for note in notes:
-        lines.append(indent + "// " + note)
+        lines += comment(note, indent)
     for heading, code in sections:
         lines.append(indent + "// --- " + heading)
         for line in decode_line_escapes(code or "").replace("\r\n", "\n").replace("\r", "\n").rstrip().split("\n"):
@@ -172,4 +174,9 @@ def hook_body(trigger: dict, model: dict, catalog: dict | None = None, indent: s
     notes = ["Bemenet/kimenet: a rekord (row.<mező>), üzenet: context.message(...), hiba: context.abort() vagy kivétel."]
     notes += framework_note(source, catalog, trigger.get("framework_calls"))
     sections = [(trigger["owner"] + " / " + trigger["event"], source)] + unit_sections(source, model)
+    if (model.get("options") or {}).get("backend_trigger_mode") == "ai":
+        # The trigger's SQL as native SQL with named parameters (ai_frames): what the hook runs through the EntityManager.
+        from .ai_frames import sql_hints
+        block = next((b for b in model["blocks"] if b["name"] == trigger.get("block")), None)
+        notes += sql_hints([code for _, code in sections], model, block)
     return region(title, sections, indent, notes) + placeholder(trigger["owner"] + " / " + trigger["event"], indent)

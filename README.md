@@ -1,18 +1,27 @@
-# Forms migrátor 4.35 — keret + eredeti Forms-kód, a triggereket a helyi AI írja
+# Forms migrátor 4.35 — keret + eredeti Forms-kód és tippek, minden metódust a helyi AI ír
 
 A szokásos FMB/XML → Angular + Java generálás után a szerveroldali Oracle-triggereket
 a helyi AI (Ollama, pl. qwen-coder) írja át Java-ra, a már elkészült DPS ServiceImpl metódusaiban.
 
 **Mit generál a migrátor?** A teljes frontendet és a backend keretét: végpontok, DTO-k,
-controller, `log1x`, tranzakció, CRUD. A triggerek kódját **nem fordítja le**: minden
-triggerhez elkészíti a metódust (gombhoz végpontot, a rekord triggereihez — POST-QUERY,
-PRE-INSERT, WHEN-VALIDATE-ITEM … — privát hookot a CRUD-folyamat megfelelő pontján), és
-a közepére kikommentezve beteszi az eredeti Forms-kódot. Ebből dolgozik az AI.
+controller, `log1x`, tranzakció. A DPS ServiceImpl **minden metódusát az AI írja**, a migrátor
+determinisztikus tippjei alapján:
+- a gombok és a rekordtriggerek (POST-QUERY, PRE-INSERT, WHEN-VALIDATE-ITEM … privát hookként)
+  metódusába kikommentezve az eredeti Forms-kód kerül, mellé az SQL-jük natív SQL-ként, nevesített
+  paraméterekkel;
+- a blokkok adatvégpontjaiba (lista, keresés, új rekord, módosítás, törlés) és a LOV-okba az
+  `AI-feladat` megjegyzés kerül: a Forms által futtatott SQL (lekérdezés, `FOR UPDATE NOWAIT`
+  zárolás, INSERT/UPDATE/DELETE), az oszlop → mező megfeleltetés, a triggerek Forms-sorrendje és a
+  visszatérési érték.
+
+Az AI mindent a service-ben ír meg, ugyanazzal az SQL-lel és mentéssel, mint a Forms: az
+`entityManager` natív lekérdezéseivel, repository és JDBC nélkül. A táblák JPA entityjét és
+**üres** repositoryját a migrátor készíti, ide a fejlesztő áthelyezheti a lekérdezéseket.
 (A régi, determinisztikus fordítás: `"backend_trigger_mode": "plsql"` vagy `"java"`.)
 
-**Mikor indul az AI?** Magától: a migrálás végén a backend sorba állítja azokat a triggereket,
-amelyek táblái ismertek; a többit a táblaszerkezet mentése után. Egyszerre egy kérés fut, hogy a
-laptop ne terhelődjön túl. A szintaktikailag ellenőrzött javaslat automatikusan bekerül a
+**Mikor indul az AI?** Magától: a migrálás végén a backend sorba állítja a modul összes
+metódusát. Táblaszerkezetre nem kell várni, mert az AI az eredeti SQL-t futtatja. Egyszerre egy kérés fut,
+hogy a laptop ne terhelődjön túl. A szintaktikailag ellenőrzött javaslat automatikusan bekerül a
 fájlokba (az eredeti és a diff megmarad); mindkét automatizmus kikapcsolható.
 
 **Mit látok közben?** Élő kártyát: mióta fut, épp a promptot olvassa, gondolkodik vagy ír,
@@ -28,10 +37,10 @@ Alapcím kell, például `http://192.168.1.50:11434`; az `/api/chat` útvonalat 
 1. Indítsd a migrátort: `python -m frm_forms.web --port 8000`.
    Nyisd meg a `http://localhost:8000` címet, a közös AI-beállításoknál add meg
    az Ollama laptopjának címét porttal és a modell pontos nevét, majd mentsd a kapcsolatot.
-2. Generálj modult. A végén az AI-munkasor magától elindul azokkal a triggerekkel,
-   amelyekhez nem kell táblaszerkezet; a fejléc AI-jelzője mutatja, mi fut.
-3. A **Java asszisztens** fülön a „táblára vár” triggerekhez importáld a táblák oszlopait
-   CSV-ből, jelöld a valódi PK-t, és mentsd: a hozzájuk tartozó triggerek automatikusan sorba állnak.
+2. Generálj modult. A végén az AI-munkasor magától elindul a modul összes metódusával;
+   a fejléc AI-jelzője mutatja, mi fut.
+3. Az **Adatbázistáblák** panelen add meg a táblák oszlopait (CSV-ből), jelöld a valódi PK-t, és
+   mentsd: ebből készül a tábla JPA entityje és üres repositoryja. Az AI-feladatokat ez nem tartja vissza.
 4. A kész triggerek automatikusan bekerülnek a fájlokba; ellenőrizd a diffet, majd töltsd le a
    **Friss modul ZIP** csomagot. (Kézi mód: kapcsold ki az automatikus beillesztést, és használd a
    **Trigger javásítása** → **Beillesztés a fájlokba** gombokat.)
@@ -42,42 +51,41 @@ bekötni. A képernyőértékek bekötése külön, összecsukott haladó eszkö
 
 ## Mit készít az AI-val együtt?
 
-- A migrátor az igazolt táblaszerkezetből JPA entityt készít.
-- Táblánként saját Spring repository készül. A trigger SQL-jéből a migrátor maga írja
-  meg a repository-metódusokat (Criteria API, persist, szekvencia; az eredeti SQL a
-  kommentjükben), ahol pontosan fordítható; az AI csak a lefedetlen SQL-hez ír metódust.
-- A DPS ServiceImpl kiválasztott metódusa a repositorykat hívja; az üzleti logikát az AI
-  írja, az egyszerű triggereket a migrátor AI nélkül: a rekordtriggereket (szekvenciás kulcs,
-  kódtábla-megnevezés, üzenettel megálló ellenőrzés, master-detail törlésellenőrzés, a trigger
-  INSERT/UPDATE/DELETE-je), az egyszerű gombokat (ellenőrzés, egy megerősítő kérdés, SQL,
-  mezőérték visszaírása, GO_BLOCK/EXECUTE_QUERY). A Spring-bekötéseket is a migrátor illeszti be.
-- A DPS-ben az AI-ra váró metódus üres: fölötte egy segítő sor, benne az eredeti Forms-kód kommentben.
-  A migrátor nem kezdi el (nincs helyőrző, nincs félig lefordított kód), és nincs `MODULE_REVIEWED`
-  kapcsoló: a fejlesztő dönti el, mikor kész a modul.
+- A DPS ServiceImpl minden AI-ra váró metódusa üres: fölötte egy segítő sor, benne a megjegyzés
+  (az eredeti Forms-kód és a tippek). A migrátor nem kezdi el a törzset (nincs helyőrző, nincs félig
+  lefordított kód), és nincs `MODULE_REVIEWED` kapcsoló: a fejlesztő dönti el, mikor kész a modul.
+- A tippek csak a lényeget tartalmazzák: az SQL-t (natív SQL, `:mező` paraméterekkel és azok
+  forrásával), a sor → DTO-mező megfeleltetést, a hívandó trigger-hookokat Forms-sorrendben, a
+  mezőellenőrzéseket (kötelező, hossz) és a visszatérési értéket.
+- Az AI a service `entityManager` mezőjén keresztül futtatja az SQL-t
+  (`createNativeQuery(...).setParameter(...)`). Az oszlopértékeket a `SqlValues.text/number/dateTime`,
+  az Oracle-hibákat a `FormsErrors.translate` alakítja át. Az adatbázis-rutinok
+  (`PKG.PROC`, `PKG.FUNC`) az Oracle-ben futnak tovább, a hívásuk módját az igazolt
+  szignatúrából a prompt adja meg.
+- A migrátor a táblák JPA entityjét (Domain) a blokkból, illetve az igazolt táblaszerkezetből
+  készíti. Mellé **üres** `JpaRepository` kerül. A service nem használja őket, a fejlesztő ide
+  helyezheti át a lekérdezéseket, például `@Query(value = "...", nativeQuery = true)` metódusként.
+- A `commitForm` (Forms COMMIT_FORM) determinisztikus marad: csak a blokkok végpontjait hívja
+  Forms-sorrendben, saját SQL-je nincs.
 - Opcionálisan a generált képernyő is elküldhető az AI-nak (standalone komponens, signalok, olvasható,
   kommentezett kód, ugyanazzal a működéssel). A teljes fájl csak akkor, ha belefér a kontextusba; ha nem,
   részenként (a fej a signalokkal, utána a metódusok). Sosem automatikus, beillesztés csak átnézés után.
-- Az AI-válasz szokásos apró hibáit (`request.getBlocks()`, `row.getX()`, a modul előtagja
-  nélküli repository, Spring Data `findById`/`save`) a migrátor helyben javítja, nem kér érte
-  újabb AI-hívást; ha az utolsó válaszban is marad hiba, az hibás vázlatként megtekinthető marad.
+- Az AI-válasz szokásos apró hibáit (`request.getBlocks()`, `row.getX()`) a migrátor helyben javítja,
+  nem kér érte újabb AI-hívást. Ha az utolsó válaszban is marad hiba, az hibás vázlatként megtekinthető marad.
 - Java csak adatbázismunkából lesz: az indítókód (PRE-FORM, WHEN-NEW-FORM-INSTANCE) és az
   adatbázismunka nélküli gombok a képernyő feladatai, nem kapnak Java-végpontot.
-- Szükség esetén kiegészítő DTO készül. A már létező Controller, végpont,
-  service-aláírás és request/result DTO-szerződés megmarad.
-- Ugyanazon tábla repositoryja a következő triggernél is használható. A már
-  meglévő metódusokat megőrzi, új metódusokat hozzáadhat.
+- A már létező Controller, végpont, service-aláírás és request/result DTO-szerződés megmarad.
 
-Az AI a kiválasztott Java-metódust kapja, benne az eredeti Oracle-forrással, és a
-metódusban hivatkozott táblák entityjeinek rövid leírását (nem a teljes Java-forrásukat).
-A kikommentezett eredeti kódot nem kell visszaküldenie: a migrátor a meglévő metódusból
-megtartja. Ha fontos külső rutin vagy céges API hiányzik, a `MISSING:` listában
-konkrétan kéri; a **Kiegészítő forrás** részben lehet megadni. A Java-formázás és az
-importok rendezése helyben fut, AI-hívás nélkül.
+Az AI a kiválasztott Java-metódust kapja a megjegyzéseivel együtt, plusz rövid szabályokat.
+A megjegyzést nem kell visszaküldenie, a migrátor a meglévő metódusból megtartja. Ha fontos
+külső rutin vagy céges API hiányzik, a `MISSING:` listában konkrétan kéri; a **Kiegészítő forrás**
+részben lehet megadni. A Java-formázás és az importok rendezése helyben fut, AI-hívás nélkül.
+(A korábbi, repositoryba író mód parancssorból még elérhető: `backend-assist --data-access jpa`.)
 
 ## Beillesztés a céges projektbe
 
-A JPA entityk és repositoryk a modul DPS-csomagjában, a kiegészítő DTO-k a CL-ben
-vannak. A célprojektben JPA/Hibernate és e csomagok felismerése szükséges.
+A JPA entityk és az üres repositoryk a modul DPS-csomagjában vannak. A service az
+`EntityManager`-t használja (`@PersistenceContext`), így a célprojektben JPA/Hibernate szükséges.
 A Java 11-es alapbeállítás `javax.persistence`; Jakarta projekt esetén a generálási
 configban `"jpa_namespace": "jakarta"` adható meg.
 

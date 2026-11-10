@@ -32,7 +32,7 @@ JAVA_NAME = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
 DB_NAME = re.compile(r"[A-Z][A-Z0-9_$#]{0,127}(?:\.[A-Z][A-Z0-9_$#]{0,127})?")
 MAX_RESPONSE_BYTES = 1_000_000
 # A method the assistant offers: it still carries the original Forms source as a comment.
-ORIGINAL_CODE = re.compile(r"^[ \t]*//[ \t]*region[ \t]+Eredeti Forms-k[óo]d", re.M | re.I)
+ORIGINAL_CODE = re.compile(r"^[ \t]*//[ \t]*region[ \t]+(?:Eredeti Forms-k[óo]d|AI-feladat\b)", re.M | re.I)
 # The original Forms source the generator put into the method as a comment; kept on rewrite.
 ORIGINAL_REGION =re.compile(r"^[ \t]*//[ \t]*region\b[^\n]*\n(?:[^\n]*\n)*?[ \t]*//[ \t]*endregion\b[^\n]*", re.M)
 
@@ -158,6 +158,12 @@ def hook_contract(hook: dict, ir: dict) -> dict:
             "row_class": hook["row_class"], "fields": fields}
 
 
+def frame_event(endpoint: dict) -> str:
+    """The task list's event column of a data endpoint or a LOV frame (a button or a hook has its Forms event)."""
+    return {"list": "LISTA", "search": "KERESÉS", "create": "ÚJ REKORD", "update": "MÓDOSÍTÁS", "delete": "TÖRLÉS",
+            "lov": "LOV " + str(endpoint.get("lov") or "")}.get(endpoint.get("operation"), "")
+
+
 def screen_items(ir: dict) -> dict:
     from .action_java import screen_items as items
     return items(ir)
@@ -212,9 +218,11 @@ def prepare_workspace(output: Path) -> dict:
             continue
         if not ORIGINAL_CODE.search(service[start:end + 1]): continue
         hook = endpoint.get("operation") == "hook"
-        manual = endpoint.get("operation") == "action" and endpoint.get("runs") in {"manual", "ai"}
+        # backend_trigger_mode=ai: a data endpoint or a LOV is a frame like a button (ai_frames): its hints, no code.
+        frame = endpoint.get("operation") in {"create", "update", "delete", "list", "search", "lov"} and endpoint.get("runs") == "ai"
+        manual = (endpoint.get("operation") == "action" and endpoint.get("runs") in {"manual", "ai"}) or frame
         rewrite = endpoint.get("operation") == "action" and not manual
-        blocked = endpoint.get("operation") in {"create", "update", "delete", "list", "search"}
+        blocked = endpoint.get("operation") in {"create", "update", "delete", "list", "search"} and not frame
         action = next((a for a in actions if a.get("method_name") == method), None)
         if hook:
             action = {"trigger_id": None, "reachable_code": hook_code(discovery, endpoint), "event_code_candidates": []}
@@ -222,6 +230,8 @@ def prepare_workspace(output: Path) -> dict:
             action = {"trigger_id": None, "reachable_code": [c["id"] for c in discovery["code"] if c["kind"] == "trigger"
                                                              and not c.get("block") and c.get("name") in INIT_EVENTS],
                       "event_code_candidates": []}
+        if frame:
+            action = {"trigger_id": None, "reachable_code": [], "event_code_candidates": [], "external_calls": []}
         reachable = list(dict.fromkeys((action or {}).get("reachable_code", [])))
         reachable += [cid for cid in (action or {}).get("event_code_candidates", []) if cid not in reachable]
         if action and action.get("trigger_id") and action.get("trigger_id") not in reachable:
@@ -297,9 +307,13 @@ def prepare_workspace(output: Path) -> dict:
                   "external_calls": external,
                   "db_routines": routines, "unavailable_routines": unavailable,
                   # an AI button: the types of the screen's values (action_java translates a simple one itself)
-                  "screen_items": screen_items(ir) if manual and ai_mode else {},
+                  "screen_items": screen_items(ir) if manual and ai_mode and not frame else {},
                   "module_gate": plan.get("module_gate", {}),
-                  "table_requirements": sheet["tables"], "pending_tables": sheet["pending"], "schema_warnings": sheet["warnings"],
+                  # backend_trigger_mode=ai: the model runs the Forms SQL as written (no entity needed), so a table
+                  # structure never holds a task back; it is for the Domain entity of the table (jpa_crud).
+                  "table_requirements": sheet["tables"], "pending_tables": [] if ai_mode else sheet["pending"],
+                  "schema_pending": sheet["pending"],  # what the jpa data access (entities for the model) still needs
+                  "schema_warnings": sheet["warnings"],
                   "notice": "A tiltás oka és a forrás megmarad; az AI-javaslat nem működésigazolás."}
         packet["support_file_sha256"] = {f.relative_to(output).as_posix(): digest(f.read_bytes())
             for f in sorted((output / "backend/DPS").glob("*.java")) if f != service_path}
@@ -307,8 +321,9 @@ def prepare_workspace(output: Path) -> dict:
         write_json(safe_file(output, AREA + "/tasks/" + task_id + ".json"), packet)
         tasks.append({k: packet[k] for k in ("id", "method", "target", "kind", "fingerprint")}
                      | {"owner": endpoint.get("owner", endpoint.get("block")), "blockers": endpoint.get("blockers", []),
-                        "event": endpoint.get("event") or (action or {}).get("event") or "", "block": endpoint.get("block"),
-                        "tables": [t["table"] for t in sheet["tables"]], "pending_tables": sheet["pending"]})
+                        "event": endpoint.get("event") or (action or {}).get("event") or frame_event(endpoint),
+                        "block": endpoint.get("block"),
+                        "tables": [t["table"] for t in sheet["tables"]], "pending_tables": packet["pending_tables"]})
     full_sheet = schema_sheet(output, bundle=schema_bundle)
     # The table of a block without a primary key is offered with every task: its key is what gives the block its
     # data endpoints (rules.NO_KEY), whichever trigger is selected. It never holds a task back (not pending).
@@ -319,29 +334,25 @@ def prepare_workspace(output: Path) -> dict:
     from .assistant_context import SYSTEM as system_prompt, rules
     index = {"version": VERSION, "module": effective["module"], "tasks": tasks,
              "schema": full_sheet, "input_bindings": input_contract,
-             "default_instructions": system_prompt + "\n\n" + rules(),
+             "default_instructions": system_prompt + "\n\n" + rules("service"),
              "notice": "A javaslatok külön készülnek; a generált végpontokat csak ellenőrzött átvétel módosítja."}
     write_json(safe_file(output, AREA + "/index.json"), index)
     guide = ("# Trigger javásítása\n\n"
-             "1. A Java asszisztens fülön válassz modult és végpontot. A felismert táblák oszlopait "
-             "importáld CSV-ből, jelöld az adatbázis valódi PK-ját, majd mentsd.\n"
-             "2. Kattints a **Trigger javásítása** gombra. Az AI csak a kiválasztott DPS ServiceImpl metódust kapja "
-             "(benne a kikommentezett Oracle-forrással), és a metódusban ténylegesen használt táblák "
-             "repositoryjának néhány soros leírását. A küldött promptot és az AI nyers válaszát az "
+             "1. A Java asszisztens fülön válassz modult és végpontot. Minden DPS-metódus feladat: a gombok, a "
+             "rekordtriggerek, a blokkok adatvégpontjai (lista, új rekord, módosítás, törlés) és a LOV-ok is.\n"
+             "2. Kattints a **Trigger javásítása** gombra. Az AI csak a kiválasztott DPS ServiceImpl metódust kapja, "
+             "benne a kikommentezett Forms-kóddal vagy a migrátor tippjeivel (//region AI-feladat: az SQL, a mezők, "
+             "a triggerek sorrendje, a visszatérési érték). A küldött promptot és az AI nyers válaszát az "
              "**AI-kommunikáció** rész és a /ai-log oldal mutatja.\n"
-             "3. Nézd át a kódot, majd **Beillesztés a fájlokba**. A DPS ServiceImpl metódusa, a JPA entityk, "
-             "a saját repositoryk és a szükséges kiegészítő DTO-k együtt frissülnek. A meglévő Controller és "
-             "végponti szerződés megmarad. A friss modul ZIP-je letölthető.\n\n"
-             "Az adatbázis-műveletek a táblák repositoryjaiban futnak (interface ... extends JpaRepository); a service "
-             "üzleti logikát és repositoryhívásokat tartalmaz. A trigger SQL-jéhez a migrátor maga írja a "
-             "repository-metódusokat (@Query JPQL, az eredeti SQL a kommentjükben), ahol pontosan fordítható: az AI ezeket hívja, és csak "
-             "a service logikáját írja. Az egyszerű rekordtriggerekhez (szekvenciás kulcs, kódtábla-megnevezés, "
-             "üzenettel megálló ellenőrzés, master-detail törlésellenőrzés) AI-hívás sem kell. Nem kell promptot "
-             "írni. Hiányzó külső rutint vagy céges API-t csak akkor kell pótolni a kiegészítő forrásban, ha a "
-             "működéshez szükséges.\n\n"
+             "3. Nézd át a kódot, majd **Beillesztés a fájlokba**. Csak a DPS ServiceImpl metódusa változik; a "
+             "Controller és a végponti szerződés megmarad. A friss modul ZIP-je letölthető.\n\n"
+             "Az AI mindent a service-ben ír meg: az eredeti Oracle SQL-t natív lekérdezésként futtatja az "
+             "`entityManager` mezőn keresztül, ugyanazzal a működéssel, mint a Forms. Repositoryt nem ír. A táblák "
+             "JPA entityjét (Domain) és üres Repositoryját a migrátor készíti az igazolt táblaszerkezetből "
+             "(Adatbázistáblák panel); ide a fejlesztő áthelyezheti a lekérdezéseket, ha szeretné. A táblaszerkezet "
+             "nem tartja vissza a feladatokat. Nem kell promptot írni.\n\n"
              "A képernyőértékek külön bekötése opcionális haladó eszköz; nem feltétele a Java-átírásnak. "
-             "A meglévő log1x és tranzakciós keret megmarad. A céges projektben JPA/Hibernate és a megfelelő "
-             "entity/repository csomagok felismerése szükséges. Java 11 mellett az alap névtér javax.persistence; "
+             "A meglévő log1x és tranzakciós keret megmarad. Java 11 mellett az alap JPA-névtér javax.persistence; "
              "jakarta.persistence projekthez a generálási configban jpa_namespace=jakarta adható meg.\n\n"
              "A generált kódot a céges projektben le kell fordítani és az eredeti működéssel tesztelni.\n")
     safe_file(output, "JAVA_ASSISTANT.md").write_text(guide, encoding="utf-8")
@@ -359,7 +370,7 @@ class Options:
     timeout: int = 900
     attempts: int = 2
     think: str = "default"
-    data_access: str = "jpa"
+    data_access: str = "service"
     instructions: str = ""
     project_context: str = ""
     cached_only: bool = False
@@ -374,8 +385,8 @@ class Options:
                 raise MigrationError(f"{key}: {lo}..{hi} közötti egész szükséges.")
         if self.think not in {"default", "disabled", "low", "medium", "high"}:
             raise MigrationError("Hibás gondolkodási mód.")
-        if self.data_access not in {"jpa", "inline", "jdbc"}:
-            raise MigrationError("data_access: jpa, inline vagy jdbc szükséges.")
+        if self.data_access not in {"service", "jpa", "inline", "jdbc"}:
+            raise MigrationError("data_access: service, jpa, inline vagy jdbc szükséges.")
         if len(self.instructions) > 8000 or len(self.project_context) > 24000:
             raise MigrationError("Túl hosszú feladat vagy projektminta.")
 
@@ -587,8 +598,16 @@ def finish_candidate(result: str, service: str, packet: dict, response: dict) ->
         last = java_mask(result).rfind("}")
         helpers = "\n".join("    " + line if line else "" for line in response["private_methods"].strip().splitlines())
         result = result[:last] + "\n    // Java asszisztens: " + packet["id"] + "\n" + helpers + "\n" + result[last:]
-    result = add_routines(result, packet, response, helper_names)
+    if packet.get("data_access") != "service":
+        result = add_routines(result, packet, response, helper_names)  # the jpa mode's <Module>DbRoutines class
     mapping = dict(java_tidy_known())
+    if packet.get("data_access") == "service":
+        # The EntityManager API of the service's native SQL, from the project's JPA (jpa_namespace).
+        from .jpa_assistant import persistence_imports
+        namespace = (packet.get("config") or {}).get("jpa_namespace") or "javax"
+        mapping.update(persistence_imports(namespace))
+        mapping.update({simple: namespace + ".persistence." + simple
+                        for simple in ("Query", "StoredProcedureQuery", "ParameterMode", "EntityManager")})
     mapping.update(packet.get("formatting_imports") or {})
     # SqlValues.concat / nvl (the prompt's Oracle semantics), DbCalls of the database routine methods ...
     mapping.update(packet.get("common_tool_imports") or {})
@@ -791,12 +810,14 @@ def prepare(output: Path, task_id: str, options: Options) -> dict:
     if not any(t["id"] == task_id for t in index["tasks"]):
         raise MigrationError("A végpont már nem szerepel az asszisztens feladatai között.")
     packet = read_json(safe_file(output, AREA + "/tasks/" + task_id + ".json"))
-    if packet.get("pending_tables"):
-        raise MigrationError("Előbb add meg a hiányzó táblaszerkezetet az Adatbázistáblák panelen: " + ", ".join(packet["pending_tables"]))
+    pending = packet.get("pending_tables") or (packet.get("schema_pending") if options.data_access == "jpa" else [])
+    if pending:
+        raise MigrationError("Előbb add meg a hiányzó táblaszerkezetet az Adatbázistáblák panelen: " + ", ".join(pending))
     service = safe_file(output, packet["target"]).read_text(encoding="utf-8")
     packet["service_package_source"] = service[:service.find("public class") if "public class" in service else 1000]
     packet["common_tool_imports"] = common_tool_imports(output)
     packet["plsql_values_import"] = packet["common_tool_imports"].get("PlsqlValues")
+    packet["data_access"] = options.data_access
     from . import assistant_context
     persistence, generated = persistence_plan(packet, output) if options.data_access == "jpa" else ([], None)
     generated = generated or {"methods": [], "refused": []}
@@ -1123,7 +1144,7 @@ def _propose(prepared, options, cache, request, log, assistant_reply, jpa_assist
         if response.get("repositories") or response.get("dtos"):
             raise MigrationError("Repository/DTO-javaslathoz JPA mód szükséges.")
         return {packet["target"]: render_candidate(service, packet, response), **helpers,
-                **routine_files(output, packet, response)}
+                **(routine_files(output, packet, response) if options.data_access != "service" else {})}
 
     def parse_files(files):
         statuses = [java_parse(source, Path(path).name) for path, source in files.items()]
@@ -1179,7 +1200,7 @@ def _propose(prepared, options, cache, request, log, assistant_reply, jpa_assist
         truncated = outer.get("done") is not True or outer.get("done_reason") == "length"
         reply = assistant_reply.extract(raw, ctx, truncated=truncated)
         if not reply.problems and reply.response["status"] == "proposal":
-            if options.data_access != "jpa" and unresolved and not options.project_context.strip():
+            if options.data_access in {"inline", "jdbc"} and unresolved and not options.project_context.strip():
                 reply.problem("A hívott üzleti rutinokhoz nincs teljes forrás vagy igazolt szignatúra: " + ", ".join(unresolved) + ".",
                               "These called routines have no source: " + ", ".join(unresolved) + ". List them under MISSING:.")
             else:
@@ -1247,7 +1268,7 @@ def _propose(prepared, options, cache, request, log, assistant_reply, jpa_assist
     manifest = []
     for relative, text in sorted(files.items()):
         target = safe_file(output, relative)
-        if options.data_access != "jpa" and relative != packet["target"] and target.exists():
+        if options.data_access in {"inline", "jdbc"} and relative != packet["target"] and target.exists():
             raise MigrationError("A JDBC segéd már létezik; nem írjuk felül: " + relative)
         draft_rel = "files/" + relative + ".txt"
         draft = safe_file(folder, draft_rel)
@@ -1326,6 +1347,7 @@ def apply_proposal(output: Path, proposal_id: str, reviewed: bool = False) -> di
     packet["service_package_source"] = source[:source.find("public class") if "public class" in source else 1000]
     packet["common_tool_imports"] = common_tool_imports(output)
     packet["plsql_values_import"] = packet["common_tool_imports"].get("PlsqlValues")
+    packet["data_access"] = record.get("data_access") or "jpa"
     # Reconstruct rather than trusting paths or editable files from a model ZIP.
     expected_files = {packet["target"]: render_candidate(source, packet, response)}
     if record.get("data_access") == "jpa":
