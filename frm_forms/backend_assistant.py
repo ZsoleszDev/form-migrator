@@ -97,10 +97,16 @@ HOOK = re.compile(r"\bprivate\s+void\s+([A-Za-z_$][\w$]*)\s*\(([^{};]*)\)\s*\{")
 REGION_TITLE = re.compile(r"^[ \t]*//[ \t]*region[ \t]+Eredeti Forms-k[óo]d:[ \t]*([^\n]*)$", re.M)
 
 
-def ai_hooks(service: str, ir: dict, endpoint_methods: set) -> list[dict]:
-    """The private methods that still carry the commented Forms code: CRUD and commit trigger hooks (ai mode)."""
+def ai_hooks(service: str, ir: dict, endpoint_methods: set, dto_types: dict | None = None) -> list[dict]:
+    """The private methods that still carry the commented Forms code: CRUD and commit trigger hooks (ai mode).
+
+    dto_types: the company DTO names (analysis/cl-contract.json): the record of a hook is then RtRendelesDto, not
+    RendelesRow."""
     mask = java_mask(service)
     classes = {b["class"] + "Row": b for b in ir.get("blocks", [])}
+    for generic, actual in (dto_types or {}).items():
+        if generic in classes:
+            classes[actual] = classes[generic]
     result = []
     for match in HOOK.finditer(mask):
         method = match.group(1)
@@ -114,7 +120,7 @@ def ai_hooks(service: str, ir: dict, endpoint_methods: set) -> list[dict]:
         label = title.group(1).strip()
         owner, _, event = label.partition(" / ")
         event = event.split(" (")[0].strip()
-        row = re.match(r"(\w+Row)\s+row\s*,\s*RuleContext\s+context$", params)
+        row = re.match(r"([A-Za-z_$][\w$]*)\s+row\s*,\s*RuleContext\s+context$", params)
         if row and row.group(1) in classes:
             block = classes[row.group(1)]
             result.append({"method": method, "operation": "hook", "hook_kind": "record", "owner": owner.strip(),
@@ -204,7 +210,10 @@ def prepare_workspace(output: Path) -> dict:
     # backend_trigger_mode=ai: the record/item triggers of the CRUD flow and the commit triggers are private
     # hooks of the ServiceImpl (triggerOnInsertRendeles ...); each is a task of its own, like an endpoint.
     applied_hooks = {h["method"] for h in plan.get("ai_hooks_applied", [])}
-    endpoints += [h for h in ai_hooks(service, ir, {e["method"] for e in endpoints}) if h["method"] not in applied_hooks]
+    cl_contract = safe_file(output, "analysis/cl-contract.json")
+    dto_types = (read_json(cl_contract).get("dto_types") or {}) if cl_contract.is_file() else {}
+    endpoints += [h for h in ai_hooks(service, ir, {e["method"] for e in endpoints}, dto_types)
+                  if h["method"] not in applied_hooks]
     ai_mode = (ir.get("options") or {}).get("backend_trigger_mode") == "ai"
     for endpoint in endpoints:
         if endpoint.get("assistant", {}).get("applied"):
@@ -309,6 +318,8 @@ def prepare_workspace(output: Path) -> dict:
                   # an AI button: the types of the screen's values (action_java translates a simple one itself)
                   "screen_items": screen_items(ir) if manual and ai_mode and not frame else {},
                   "module_gate": plan.get("module_gate", {}),
+                  # the company DTO names (OrdersRow -> OrdersOrdersDto), for the prompt and the answer's repairs
+                  "dto_types": dto_types,
                   # backend_trigger_mode=ai: the model runs the Forms SQL as written (no entity needed), so a table
                   # structure never holds a task back; it is for the Domain entity of the table (jpa_crud).
                   "table_requirements": sheet["tables"], "pending_tables": [] if ai_mode else sheet["pending"],
@@ -1074,6 +1085,8 @@ def reply_context(prepared: dict, options: Options):
         returns, call = method.signature.split(" ", 1)
         generated.setdefault(method.repository, []).append(method.variable + "." + call + " returns " + returns)
     hook = packet.get("hook") or {}
+    from . import dto_dialect
+    dialect = dto_dialect.of_packet(packet)
     return assistant_reply.Context(
         method=packet["method"], service=service, module_class=name(packet["module"], "pascal"),
         repositories=[assistant_reply.Repository(p["repository"], p["variable"], p["entity"], p["existing_repository"],
@@ -1081,7 +1094,10 @@ def reply_context(prepared: dict, options: Options):
         namespace=(packet.get("config") or {}).get("jpa_namespace") or "javax", mode=options.data_access,
         allowed_imports=frozenset(allowed), routines=frozenset(r["method"] for r in packet.get("db_routines") or []),
         generated=generated, contract=(packet.get("endpoint") or {}).get("contract") or {},
-        row_fields=frozenset(f["field"] for f in hook.get("fields", []) if f.get("field")) if hook.get("kind") == "record" else frozenset())
+        row_fields=frozenset(f["field"] for f in hook.get("fields", []) if f.get("field")) if hook.get("kind") == "record" else frozenset(),
+        beans=bool(dialect["beans"]), dto_types=dict(dialect["types"]),
+        dto_classes=dict(dialect["classes"]) if dialect["beans"] else {},
+        parameters=dto_dialect.signature(packet.get("signature") or packet.get("existing_method") or "")[2])
 
 
 def id_type(descriptor: dict) -> str:
@@ -1158,6 +1174,9 @@ def _propose(prepared, options, cache, request, log, assistant_reply, jpa_assist
     if options.data_access == "jpa" and packet.get("kind") in {"hook", "implement"}:
         response, reason = deterministic_response(prepared)
         if response is not None:
+            # The generated code speaks the default DTO dialect; the company's beans get getters and their names.
+            from .reply_repair import response_dialect
+            response = response_dialect(response, ctx)
             try:
                 validate_response(response)
                 parse_files(render_files(response))

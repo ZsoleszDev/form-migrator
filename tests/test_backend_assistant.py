@@ -455,7 +455,11 @@ class BackendAssistantTests(unittest.TestCase):
         with patch('frm_forms.ollama.opener', side_effect=AssertionError('preview must not call the model')):
             shown = assistant.preview(self.output, self.task['id'], self.options)
         self.assertEqual(shown['warnings'], [])
-        self.assertLess(shown['bytes'], 6000)
+        # The per-task part stays small. The system prompt (with the Java 11 / PMD lines) is the same for every task:
+        # Ollama reads it once per model load (the common prefix of the requests is cached).
+        self.assertLess(len(shown['user'].encode('utf-8')), 5600)
+        self.assertEqual(shown['system'], assistant_context.SYSTEM)
+        self.assertLess(shown['bytes'], 7000)
         self.assertGreater(shown['original_bytes'], shown['bytes'])
         _, client = self.propose()
         self.assertEqual([m['content'] for m in client.requests[0]['messages']], [shown['system'], shown['user']])

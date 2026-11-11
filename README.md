@@ -76,6 +76,10 @@ bekötni. A képernyőértékek bekötése külön, összecsukott haladó eszkö
   (`SqlValues.bind`), mert a típus nélküli null az Oracle-nél NUMBER és DATE oszlopon hibát adna.
 - Az AI-válasz szokásos apró hibáit (`request.getBlocks()`, `row.getX()`) a migrátor helyben javítja,
   nem kér érte újabb AI-hívást. Ha az utolsó válaszban is marad hiba, az hibás vázlatként megtekinthető marad.
+- Céges (AWU) modulban a prompt a modul saját DTO-it nevezi meg (`new RtActionResultDto(...)`,
+  `request.getBlocks()`, `row.getVevo()`), és a modell általános nevét (`new ActionResult(...)`) a migrátor helyben
+  a modul osztályára javítja. A system prompt Java 11- és PMD-szabályokat ad; az egyértelmű eltéréseket
+  (`Stream.toList()`, `x.equals("A")`, `size() == 0` …) a migrátor helyben javítja, a Java 12+ elemeket visszaküldi.
 - Java csak adatbázismunkából lesz: az indítókód (PRE-FORM, WHEN-NEW-FORM-INSTANCE) és az
   adatbázismunka nélküli gombok a képernyő feladatai, nem kapnak Java-végpontot.
 - A már létező Controller, végpont, service-aláírás és request/result DTO-szerződés megmarad.

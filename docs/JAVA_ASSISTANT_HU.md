@@ -159,9 +159,47 @@ Egyetlen kérést, két üzenettel. Rekord-hooknál a kérés tartalmazza a reko
 `row.mező`, típus, oszlop, PK), az esemény szabályát, és a kódban ténylegesen előforduló Forms-beépítettek
 egysoros Java-mintáját:
 
-- **system:** négy mondat a szerepről és arról, hogy a Forms-forrás adat, nem utasítás;
+- **system:** négy mondat a szerepről és arról, hogy a Forms-forrás adat, nem utasítás, utána a **Java 11 és PMD**
+  rövid szabálylistája (lásd lent);
 - **user:** hat rövid szabály, a **kiválasztott metódus szó szerint** egy ```java blokkban (benne a
   megjegyzéssel), és a válasz formája.
+
+A system prompt minden feladatnál betűre azonos, és ez áll a kérés elején. Az Ollama a kérések közös elejét
+(prefixét) a gyorsítótárban tartja, amíg a modell be van töltve (`keep_alive`). Így a Java 11/PMD sorokat a laptop
+CPU-ja modellbetöltésenként egyszer dolgozza fel, nem metódusonként. Ezért kerültek ide, nem a feladatonként változó
+részbe.
+
+**Java 11 és PMD a promptban:** nincs `record`, szövegblokk, switch-kifejezés (`case X ->`), `instanceof`-minta,
+`Stream.toList()`, `String.formatted()`, `List.getFirst()`; minden `if`/`else`/`for` kapcsos zárójellel; soronként egy
+változó; nincs nem használt lokális változó vagy privát metódus; `"SZÖVEG".equals(érték)`, Stringnél soha `==`;
+BigDecimal-nál `compareTo(...) == 0` (az Oracle `1 = 1.0` igaz, a `BigDecimal.equals` nem); `isEmpty()` a
+`size() == 0` helyett; `toUpperCase(Locale.ROOT)`; konkrét kivétel elkapása, üres catch nélkül, az ok megtartásával;
+nincs `System.out` és `printStackTrace`. Amit ebből a migrátor egyértelműen javítani tud, azt a válaszban helyben
+javítja (lásd a táblázatot).
+
+### Céges (AWU) DTO-k: a modul saját osztálynevei és getter/setterek
+
+Az `AWU_AZON`-nal generált modul DTO-i külön Lombok-osztályok (`<Modul>ActionResultDto`, `<Modul>PageResultDto<T>`,
+`<Modul><Blokk>Dto`), privát mezőkkel. A szabályok szövege viszont az általános szerződést nevezte meg
+(`Return new ActionResult(...)`, `request.blocks()`, `row.mező`), és a kis modell ezt szó szerint átvette:
+`return new ActionResult(...)` egy `RtActionResultDto`-t visszaadó metódusban.
+
+Most a prompt a modul nyelvén szól (`frm_forms/dto_dialect.py`). A típusneveket a CL DTO-k forrásából és a
+metódus saját szignatúrájából veszi; ez utóbbi a döntő, így egy kézzel átnevezett `MyModulActionResultDto` is
+helyesen jelenik meg:
+
+- `5. Return new RtActionResultDto(blocks, messages, commands, globals)`, és a gombváz is így zárul;
+- `request.getBlocks()`, `request.getParameters()`, `request.getOffset()`, `request.getLimit()`;
+- hooknál a rekord mezői: `:RENDELES.VEVO -> row.getVevo() / row.setVevo(..)`, és a szabály a Lombok-beant írja le;
+- a metódus `//region` megjegyzésében a migrátor tippjei is (`:vevo = row.getVevo()`, `eredmény -> row.setVevoNev(..)`,
+  `request.getCriteria().getRendelesId()`). Az eredeti Forms-kód a `// ---` sor után változatlan marad, és a fájl
+  megjegyzése sem változik: a promptban jelenik meg így. A már legenerált (CREATE_ONCE) ServiceImpl-ek is ezt a
+  promptot kapják, újragenerálás nélkül.
+
+A céges modul rekordtrigger-hookjai (`triggerPreInsertTetel(RtTetelDto row, …)`) eddig nem kerültek az AI-sorba,
+mert a felismerő `…Row` típust várt. Most ezek is feladatok.
+
+Az alapformátum (`AWU_AZON` nélkül) promptja változatlan: `ActionResult`, `request.blocks()`, `row.mező`.
 
 A szabályok: a log1x-keret megtartása; az adatbázis-elérés a service `entityManager` mezőjén át, az eredeti
 Oracle SQL natív lekérdezésként, nevesített paraméterekkel (`createNativeQuery(sql).setParameter(...)`, majd
@@ -214,6 +252,14 @@ A feldolgozó ennél engedékenyebb, mert a kis modellek nem mindig követik bet
 | régi JSON-válasz | ugyanígy ellenőrzi |
 | `request.getBlocks()`, `request.getParameters()` | helyben javítja: `request.blocks()`, `request.parameters()` (a DTO record-stílusú) |
 | `row.getVevo()`, `row.setId(x);` egy hookban | helyben javítja: `row.vevo`, `row.id = x;` (a Row DTO-nak nyilvános mezői vannak) |
+| céges modulban `new ActionResult(...)`, `new PageResult<>(...)`, `OrdersRow` | helyben javítja a modul osztályára: `new RtActionResultDto(...)`, `new RtPageResultDto<>(...)`, `OrdersOrdersDto` |
+| céges modulban `request.blocks()`, `row.vevo`, `row.vevo = x;`, `request.criteria().kod` | helyben javítja: `request.getBlocks()`, `row.getVevo()`, `row.setVevo(x);`, `request.getCriteria().getKod()` (a DTO Lombok-bean; a változó típusát a paraméterekből és a deklarációkból ismeri). Ami így sem javítható (pl. `row.osszeg += 1`), arra pontos javítási kérés megy |
+| `stream.toList()`, `list.getFirst()` (Java 16/21) | helyben javítja: `.collect(Collectors.toList())`, `.get(0)` |
+| `x.equals("A")`, `x == "A"`, `x != "A"` | helyben javítja: `"A".equals(x)`, `!"A".equals(x)` (PMD; NULL esetén nem NPE, hanem nincs egyezés, mint az Oracle-ben) |
+| `list.size() == 0`, `> 0`, `!= 0` | helyben javítja: `list.isEmpty()`, `!list.isEmpty()` (csak ha a kifejezés határa egyértelmű) |
+| `s.toUpperCase()`, `new BigDecimal(0)`, `new BigDecimal(0.1)` | helyben javítja: `toUpperCase(Locale.ROOT)`, `BigDecimal.ZERO`, `new BigDecimal("0.1")` |
+| `record`, szövegblokk, `case X ->`, `instanceof String s`, `.formatted(...)` | Java 11-ben nincs: pontos javítási kérés megy, akkor is, ha a gépen nincs JDK a szintaxis-ellenőrzéshez |
+| üres `catch`, `printStackTrace()`, `System.out`, `catch (Exception e)` | PMD-figyelmeztetés a javaslatnál; nem kér újabb AI-hívást |
 | `PersistenceException`, `Query`, `StoredProcedureQuery`, `ParameterMode` import nélkül | beteszi az importot a `jpa_namespace` szerint (javax vagy jakarta) |
 | `.setParameter("név", érték)` egy natív lekérdezésen | helyben javítja: `SqlValues.bind(érték)`. A típus nélküli null-t a Hibernate 5 bináris értékként küldi, amit az Oracle NUMBER és DATE oszlopnál elutasít (ORA-00932); a `bind` üres szöveget küld, amit az Oracle NULL-nak olvas. A biztosan nem null értéket (szám, `offset`, `limit`) és a tárolt eljárás típusos paramétereit nem bántja |
 | címke nélküli második blokk csak privát metódusokkal | a service segédmetódusai |
