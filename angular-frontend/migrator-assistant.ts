@@ -48,7 +48,7 @@ interface ExtractionReport {
   notes: string[]; warnings: string[]; problems: string[]; missing: string[];
 }
 interface Proposal extends ProposalSummary {
-  apply_allowed: boolean; helper_notes: string[]; exchange_id?: string; extraction?: Partial<ExtractionReport>;
+  apply_allowed: boolean; cached?: boolean; helper_notes: string[]; exchange_id?: string; extraction?: Partial<ExtractionReport>;
   response: {summary: string; missing_context: string[]; assumptions: string[]; test_cases: string[]};
   files: {target: string; candidate: string}[];
   validation: {java_parse: string; deterministic_format?: Record<string, {status: string; reason?: string}>};
@@ -285,6 +285,10 @@ ORDER BY column_id;</pre>
               @if (proposal(); as result) {
                 <p class="m-0">{{ result.response.summary }}</p>
                 <p-tag [value]="result.applied ? 'Átvéve' : result.status === 'needs_context' ? 'További adat szükséges' : result.status === 'draft' ? 'Hibás vázlat (nem illeszthető be)' : 'Átnézendő javaslat'" />
+                @if (result.cached) {
+                  <p-message severity="info">Gyorsítótárból: ugyanerre a kérésre korábban kapott AI-válasz, a mostani ellenőrzésekkel
+                    és javításokkal újra feldolgozva. Nem volt új AI-hívás, ezért lett azonnal kész.</p-message>
+                }
                 @if (result.response.missing_context.length) {
                   <p-message severity="warn">Az AI szerint ez hiányzik: {{ result.response.missing_context.join(' · ') }}
                     @if (result.status === 'needs_context') { A vázlat megtekinthető, de nem illeszthető be: add meg a hiányzó forrást a Kiegészítő forrás részben, és futtasd újra. }

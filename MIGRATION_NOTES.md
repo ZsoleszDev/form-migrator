@@ -1,5 +1,12 @@
 # Következő változat (a 4.35 után) — minden metódust az AI ír a service-ben, tippekkel; entity és üres repository; valódi mentés, Forms-sorrend
 
+- **A gyorsítótárból jövő válasz is a mai ellenőrzéseken megy át, és a felület jelzi.** Ugyanarra a kérésre (azonos
+  prompt, modell, beállítás) a migrátor nem hív AI-t, hanem a korábbi választ adja: a futás azonnal „kész” lett, és
+  ezt semmi nem jelezte. A gyorsítótár ráadásul a korábban *feldolgozott* választ adta vissza, így egy frissítés után
+  az új ellenőrzések és javítások le sem futottak rajta. Most a modell nyers válasza fut újra az aktuális logikán; ha
+  így nem fogadható el, új AI-hívás történik. A befejezett futások listája („gyorsítótárból, nem volt AI-hívás”) és
+  a javaslat panelje is kiírja.
+
 - **Az SQL-konstans nem ismétli az SQL-t.** A konstans fölé nem kerül a migrátor saját kommentje, és beillesztés után
   a megtartott `//region AI-feladat` tippekben az SQL helyén a konstans neve áll (a hosszú sor újratördelve). Így a
   metódus SQL-je egyszer szerepel a fájlban. A region kommentek egyébként változatlanok maradnak.
