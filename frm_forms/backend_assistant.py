@@ -611,6 +611,10 @@ def finish_candidate(result: str, service: str, packet: dict, response: dict) ->
         result = result[:last] + "\n    // Java asszisztens: " + packet["id"] + "\n" + helpers + "\n" + result[last:]
     if packet.get("data_access") != "service":
         result = add_routines(result, packet, response, helper_names)  # the jpa mode's <Module>DbRoutines class
+    else:
+        # The SQL constants the method runs (frame_sql): declared in the class with the comment's exact SQL.
+        from . import frame_sql
+        result = frame_sql.declare(result, frame_sql.statements(packet))
     mapping = dict(java_tidy_known())
     if packet.get("data_access") == "service":
         # The EntityManager API of the service's native SQL, from the project's JPA (jpa_namespace).
@@ -1085,7 +1089,7 @@ def reply_context(prepared: dict, options: Options):
         returns, call = method.signature.split(" ", 1)
         generated.setdefault(method.repository, []).append(method.variable + "." + call + " returns " + returns)
     hook = packet.get("hook") or {}
-    from . import dto_dialect
+    from . import dto_dialect, frame_sql
     dialect = dto_dialect.of_packet(packet)
     return assistant_reply.Context(
         method=packet["method"], service=service, module_class=name(packet["module"], "pascal"),
@@ -1097,7 +1101,8 @@ def reply_context(prepared: dict, options: Options):
         row_fields=frozenset(f["field"] for f in hook.get("fields", []) if f.get("field")) if hook.get("kind") == "record" else frozenset(),
         beans=bool(dialect["beans"]), dto_types=dict(dialect["types"]),
         dto_classes=dict(dialect["classes"]) if dialect["beans"] else {},
-        parameters=dto_dialect.signature(packet.get("signature") or packet.get("existing_method") or "")[2])
+        parameters=dto_dialect.signature(packet.get("signature") or packet.get("existing_method") or "")[2],
+        sql_constants=frame_sql.statements(packet) if options.data_access == "service" else [])
 
 
 def id_type(descriptor: dict) -> str:
