@@ -74,6 +74,12 @@ class Context:
     generated: dict = field(default_factory=dict)  # repository -> the migrator's methods of the task's SQL (prompt lines)
     row_fields: frozenset = frozenset()           # a hook: the public fields of its record (row.field)
     contract: dict = field(default_factory=dict)  # a data endpoint or LOV: the SQL and the hooks its hints name
+    # The module's DTO dialect (dto_dialect): the company's Lombok beans (row.getX(), RtActionResultDto) or the
+    # default public fields (row.x, ActionResult).
+    beans: bool = False
+    dto_types: dict = field(default_factory=dict)    # generic contract name -> the module's DTO class
+    dto_classes: dict = field(default_factory=dict)  # bean DTO class -> {"generic": [T], "fields": {field: type}}
+    parameters: dict = field(default_factory=dict)   # the method's parameters: name -> type
 
 
 @dataclass
@@ -372,7 +378,8 @@ def service_parts(block: Block, ctx: Context, reply: Reply, info: dict, existing
         body = code if body is None else body
     else:
         if target is None:
-            candidates = [m for m in methods if re.search(r"\bActionResult\b", m.header) and " private " not in " " + m.header + " "]
+            # ActionResult, or the company's RtActionResultDto
+            candidates = [m for m in methods if re.search(r"ActionResult", m.header) and " private " not in " " + m.header + " "]
             if len(candidates) == 1 and not loose:
                 target = candidates[0]
                 reply.warn(f"Az AI a metódust más néven adta vissza ({target.name}); a(z) {ctx.method} törzseként használtuk.")
@@ -584,7 +591,18 @@ def check_service_code(code: str, ctx: Context, reply: Reply, missing: bool) -> 
                                   or re.search(r"\b[a-z]\w*Repository\s*\.", mask)):
         reply.problem("A service JDBC-t vagy repositoryt hív; az SQL-t az entityManager futtatja.",
                       "There is no jdbc field and no repository here: run the SQL with entityManager.createNativeQuery(...).")
-    getters = sorted(set(re.findall(r"\brequest\s*\.\s*(get(?:Blocks|Parameters))\s*\(", mask)))
+    # Java 12+ syntax or API: it does not compile with the company's Java 11 (java_lint; also without a local JDK).
+    from . import java_lint
+    for hu, en in java_lint.problems(code):
+        reply.problem(hu, en)
+    if ctx.beans:
+        from .reply_repair import bean_fields_left
+        left = bean_fields_left(code, ctx)
+        if left:
+            reply.problem("A DTO-k Lombok beanek (privát mezők); a kód még közvetlenül éri el: " + ", ".join(left) + ".",
+                          "The DTOs are Lombok beans with private fields: use the getters and setters "
+                          "(row.getCode(), row.setCode(value)), never " + ", ".join(left) + ".")
+    getters = [] if ctx.beans else sorted(set(re.findall(r"\brequest\s*\.\s*(get(?:Blocks|Parameters))\s*\(", mask)))
     if getters:
         reply.problem("A kérés DTO-n nincs " + ", ".join(g + "()" for g in getters) + " metódus; request.blocks() és "
                       "request.parameters() a helyes.",
@@ -862,6 +880,9 @@ def finish(ctx: Context, reply: Reply, service, helpers, service_imports, repo_p
         else: reply.problem(problem.hu, problem.en)
     service_imports = keep_imports(service_imports, ctx, provided_service(ctx), package_of(ctx.service), service_code,
                                    reply, "SERVICE")
+    from . import java_lint
+    for text in java_lint.warnings(service_code):
+        reply.warn(text)
     if re.search(r"\b(?:TODO|FIXME)\b", service_code + "\n".join(r["methods"] for r in repositories)):
         reply.warn("A kódban TODO/FIXME megjegyzés maradt; átvétel előtt ellenőrizd.")
     notes = reply.assumptions[:10]

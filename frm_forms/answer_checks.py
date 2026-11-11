@@ -29,7 +29,7 @@ TERMINAL = re.compile(r"\.\s*(?:getResultList|getSingleResult|executeUpdate|getR
 NEVER_NULL = re.compile("|".join((
     r"-?\d[\w.]*", "true", "false", "offset", "limit",                    # a number, a flag, the paging arguments
     r"[\w.()\s]+[+\-*]\s*\d+",                                          # limit + 1
-    r"[\w.]+\s*\.\s*(?:offset|limit)\s*\(\s*\)",                         # request.limit()
+    r"[\w.]+\s*\.\s*(?:offset|limit|getOffset|getLimit)\s*\(\s*\)",       # request.limit(), the company's getLimit()
     r"LovQuery\s*\.\s*limit\s*\(.*\)", r"SqlValues\s*\.\s*bind\s*\(.*\)")), re.S)
 
 
