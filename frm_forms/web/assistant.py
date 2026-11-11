@@ -284,6 +284,8 @@ class AssistantManager:
             return {"queued": 0, "reason": "Nincs mentett AI-kapcsolat (Ollama-cím és modell)."}
         try:
             options = self.options_from_settings(settings)
+            # The developer's retry (force) asks the model again: a stored answer would come back at once, unchanged.
+            options.use_cache = not force
         except MigrationError as exc:
             raise JobError(str(exc), 422) from exc
         output = self.output(job_id)

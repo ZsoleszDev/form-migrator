@@ -194,7 +194,7 @@ const HELP = {
   retry: 'Új feladat ugyanazokkal a fájlokkal és beállításokkal.',
   delete: 'Törli a feladatot és az összes hozzá tartozó helyi fájlt.',
   connect: 'A migrátor teljes API URL-je az /api útvonallal. Az első kapcsolódásig nincs API-kérés; a cím ebben a böngészőben marad. Indítás: python -m frm_forms.web --port 8000',
-  cache: 'Törli a helyben tárolt AI-javaslatokat. A generált csomagokat nem érinti; csak üres feladatsor mellett.',
+  cache: 'Törli a helyben tárolt AI-válaszokat (a generálásét és a Java asszisztensét): utána minden kérés új AI-hívás. A generált csomagokat nem érinti; csak üres feladatsor mellett.',
   files: 'A generált fájlok előnézete: az első 1 MB látszik, a ZIP-ben a teljes fájl van.',
   logs: 'A folyamat naplójának utolsó 32 KB-ja. Hibánál a vége a hiba helyét és okát mutatja.',
   review: 'A nem támogatott vagy még nem engedélyezett műveleteket a generált kód blokkolja; a következő lépések a riportban vannak.',

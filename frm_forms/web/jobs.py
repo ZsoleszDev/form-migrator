@@ -387,9 +387,12 @@ class JobManager:
         with self.lock:
             if any(j["status"] not in IDLE for j in self.jobs.values()):
                 raise JobError("A cache csak üres feladatsor mellett törölhető.", 409)
-            cache = self.settings.data_dir / "cache"
-            count = len(list(cache.glob("*.json"))) if cache.exists() else 0
-            shutil.rmtree(cache, ignore_errors=True)
+            # The generation's AI advice and the Java assistant's stored answers: after this, every request asks the
+            # model again (before, the assistant kept answering from its own cache, so nothing was generated anew).
+            count = 0
+            for cache in (self.settings.data_dir / "cache", self.settings.data_dir / "assistant-cache"):
+                count += len(list(cache.glob("*.json"))) if cache.exists() else 0
+                shutil.rmtree(cache, ignore_errors=True)
             return {"deleted_entries": count}
 
     def files(self, job_id: str) -> list[dict]:

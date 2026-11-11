@@ -832,6 +832,18 @@ class QueueTests(unittest.TestCase):
         self.assertFalse(any(r["applied"] for r in state["finished"]))
         self.assertEqual((self.root / "job1/module" / SERVICE).read_bytes(), before)
 
+    def test_the_developers_retry_asks_the_model_again(self):
+        # "Újrapróbálás": not the stored answer (it would come back at once, unchanged); the automatic runs use it.
+        self.manager.save_settings({"auto_run": False})
+        with patch.object(self.manager, "wake"):
+            automatic = self.manager.auto_start("job1", reason="schema")
+            self.assertEqual(automatic["queued"], 0)  # switched off
+            retry = self.manager.auto_start("job1", force=True)
+        records = [r for r in self.manager.runs.values() if r["job_id"] == "job1"]  # queued or already picked up
+        self.assertEqual(len(records), retry["queued"])
+        self.assertTrue(records and all(not r["_options"].use_cache for r in records))
+        self.manager.stop("job1", __import__("frm_forms.web.assistant", fromlist=["CancelRequest"]).CancelRequest(clear_queue=True))
+
     def test_a_failed_automatic_run_is_not_repeated_for_the_same_input(self):
         with patch("frm_forms.ollama.opener", return_value=MethodClient({}, "Nem tudom.")):
             self.manager.auto_start("job1", reason="migration")

@@ -1,5 +1,11 @@
 # Következő változat (a 4.35 után) — minden metódust az AI ír a service-ben, tippekkel; entity és üres repository; valódi mentés, Forms-sorrend
 
+- **A gyorsítótár törlése a Java asszisztens válaszait is törli, az Újrapróbálás új AI-hívás.** Az „AI-gyorsítótár
+  törlése” gomb eddig csak a generálás gyorsítótárát (`<adatmappa>/cache`) ürítette, a Java asszisztens tárolt
+  válaszait (`<adatmappa>/assistant-cache`) nem, így a végpontok továbbra is a régi válaszokból készültek. Most mindkettőt
+  törli. Az AI-munkasor „Újrapróbálás (sikertelenek is)” gombja nem a tárolt választ veszi elő, hanem újra kérdezi a
+  modellt; az automatikus futások továbbra is használják a gyorsítótárat.
+
 - **A gyorsítótárból jövő válasz is a mai ellenőrzéseken megy át, és a felület jelzi.** Ugyanarra a kérésre (azonos
   prompt, modell, beállítás) a migrátor nem hív AI-t, hanem a korábbi választ adja: a futás azonnal „kész” lett, és
   ezt semmi nem jelezte. A gyorsítótár ráadásul a korábban *feldolgozott* választ adta vissza, így egy frissítés után

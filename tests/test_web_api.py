@@ -149,6 +149,15 @@ class WebTests(unittest.TestCase):
         self.client.__enter__()
         self.addCleanup(self.client.__exit__, None, None, None)
 
+    def test_the_cache_button_clears_the_java_assistants_answers_too(self):
+        stored = self.root / 'data' / 'assistant-cache'
+        stored.mkdir(parents=True, exist_ok=True)
+        (stored / 'answer.json').write_text('{}', encoding='utf-8')
+        response = self.client.delete('/api/cache', headers=HEADERS)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertGreaterEqual(response.json()['deleted_entries'], 1)
+        self.assertFalse(stored.exists())
+
     def test_live_state_is_never_cached_and_the_ui_page_is_revalidated(self):
         # The AI queue and the task list are live: a browser must not show a stored answer. index.html is revalidated,
         # so a rebuilt UI (new script hashes) is loaded instead of a cached old page.
