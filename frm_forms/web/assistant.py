@@ -572,6 +572,8 @@ class AssistantManager:
                 if record.get("result"):
                     item["proposal_id"] = record["result"].get("id")
                     item["proposal_status"] = record["result"].get("status")
+                    # answered from the cache: no model call (the UI says so; it finished at once)
+                    item["cached"] = bool(record["result"].get("cached"))
                 return item
             active = self.runs.get(self.active) if self.active else None
             queued = [view(self.runs[r]) for r in self.queue if job_id is None or self.runs[r]["job_id"] == job_id]

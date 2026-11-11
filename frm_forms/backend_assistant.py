@@ -1199,13 +1199,17 @@ def _propose(prepared, options, cache, request, log, assistant_reply, jpa_assist
     if response is None and prepared["required_tokens"] > options.num_ctx:
         raise MigrationError(budget_message(prepared["required_tokens"], options.num_ctx))
     if response is None and cache_file.is_file():
+        # The model's raw answer to the very same request, read again with today's checks and repairs (the stored,
+        # processed answer of an older migrator would skip them). An answer they reject means a new model call.
         try:
             entry = read_json(cache_file)
-            if entry.get("key") == key:
-                response = validate_response(entry["response"])
-                extraction = entry.get("extraction")
-                cached = True
-                log.cached(entry)
+            if entry.get("key") == key and isinstance(entry.get("raw"), str) and entry["raw"].strip():
+                again = assistant_reply.extract(entry["raw"], ctx)
+                if not again.problems and again.response and again.response["status"] == "proposal":
+                    validate_response(again.response)
+                    render_files(again.response)
+                    response, extraction, cached = again.response, again.report(), True
+                    log.cached({**entry, "extraction": extraction})
         except (MigrationError, KeyError, TypeError, ValueError): pass
     if response is None and options.cached_only:
         raise MigrationError("Ehhez a pontos forráshoz/beállításhoz nincs érvényes cache; hálózati hívás nem történt.")

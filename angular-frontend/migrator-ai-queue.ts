@@ -20,7 +20,7 @@ export interface AiRun {
   id: string; job_id: string; status: string; task_id: string; method: string; owner: string | null; event: string;
   kind: string | null; auto: boolean; queued: string; started: string | null; finished: string | null;
   exchange_id: string | null; progress: AiProgress | null; applied: boolean; apply_error?: string | null; error?: string | null;
-  proposal_id?: string; proposal_status?: string; options?: {model: string; num_ctx: number; num_predict: number; timeout: number};
+  proposal_id?: string; proposal_status?: string; cached?: boolean; options?: {model: string; num_ctx: number; num_predict: number; timeout: number};
 }
 export interface AiQueue {
   active: AiRun | null; busy_with_other_job: boolean; queued: AiRun[]; finished: AiRun[]; server_time: number;
@@ -208,7 +208,7 @@ const PHASES: Record<string, string> = {
               @for (run of finishedHere(); track run.id) {
                 <li class="aq-item">
                   <span class="aq-item-main">
-                    <span>{{ run.method }} <span class="aq-muted">· {{ duration(run) }}</span></span>
+                    <span>{{ run.method }} <span class="aq-muted">· {{ run.cached ? 'gyorsítótárból, nem volt AI-hívás' : duration(run) }}</span></span>
                     @if (run.error || run.apply_error) { <span class="aq-muted">{{ (run.error || run.apply_error || '').slice(0, 220) }}</span> }
                   </span>
                   <span class="aq-item-side">

@@ -239,6 +239,27 @@ class FrameConstantTests(unittest.TestCase):
         self.assertIn('LOV_LOV_STATUSZ_SQL = "SELECT 1 FROM DUAL";', changed)  # kept up to date with the comment
         self.assertEqual(changed.count("String LOV_LOV_STATUSZ_SQL"), 1)
 
+    def test_a_cached_answer_is_read_again_with_todays_checks(self):
+        # The cache keeps the model's raw answer: a run answered from it (no model call, done at once) goes through
+        # the current checks and repairs, not through the processed answer an older migrator stored.
+        output = self.copy()
+        first, client = self.propose(output, lov_answer(literal(WRAPPER, newline=False)))
+        self.assertEqual(len(client.requests), 1)
+        cache = next((output.parent / ".frm-assistant-cache").glob("*.json"))
+        entry = json.loads(cache.read_text(encoding="utf-8"))
+        entry["response"]["body"] = "return null;"  # what an older migrator may have stored
+        cache.write_text(json.dumps(entry), encoding="utf-8")
+        again, client = self.propose(output, "Nem tudom.")
+        self.assertEqual(client.requests, [])
+        self.assertTrue(again["cached"])
+        self.assertEqual(again["response"]["body"], first["response"]["body"])
+        self.assertIn("createNativeQuery(LOV_LOV_STATUSZ_SQL)", again["response"]["body"])
+        entry["raw"] = "Nem tudom."  # an answer today's checks reject: the model is asked again
+        cache.write_text(json.dumps(entry), encoding="utf-8")
+        fresh, client = self.propose(output, lov_answer("LOV_LOV_STATUSZ_SQL"))
+        self.assertEqual(len(client.requests), 1)
+        self.assertFalse(fresh["cached"])
+
     def test_a_different_statement_goes_back_to_the_model(self):
         # Another condition (a new parameter): not the comment's statement, so no replacement; the model is told to run
         # the constant.
