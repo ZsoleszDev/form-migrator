@@ -162,9 +162,6 @@ def java_literal(sql: str, indent: str = "    ") -> str:
     return ("\n" + indent + "        + ").join(pieces)
 
 
-MARKER = "// AI-feladat SQL"
-
-
 def declare(source: str, constants: list[dict]) -> str:
     """Declare (or bring up to date) the constants the class uses: private static final String NAME = "...";
     right at the start of the class body, the migrator's comment above each."""
@@ -190,10 +187,46 @@ def declare(source: str, constants: list[dict]) -> str:
             end = mask.find(";", previous.end())
             if end > at:
                 at = end + 1
-        line = ("\n    " + MARKER + " (" + name + "): a megjegyzés SQL-je; a migrátor tartja karban.\n"
-                "    private static final String " + name + " = " + value + ";\n")
+        line = "\n    private static final String " + name + " = " + value + ";\n"
         source = source[:at] + line + source[at:]
     return source
+
+
+def cite(region: str, constants: list[dict], code: str) -> str:
+    """The kept //region of a written method: the SQL of a constant the code runs is named, not repeated (the
+    constant holds it). Its words are found across the comment's line breaks; an SQL the comment shows otherwise
+    (a [backslash]) stays as it is."""
+    mask = java_mask(code)
+    for constant in constants:
+        if not re.search(r"(?<![\w$.])" + re.escape(constant["name"]) + r"(?![\w$])", mask):
+            continue
+        words = constant["sql"].split()
+        if not words:
+            continue
+        pattern = r"(?<![\w$#])" + r"(?:\s|//)+".join(re.escape(word) for word in words) + r"(?![\w$#])"
+        cited = re.sub(pattern, lambda _m: constant["name"], region, count=1)
+        if cited != region:
+            region = rewrap(cited, constant["name"])
+    return region
+
+
+def rewrap(region: str, name: str) -> str:
+    """The hint that now names the constant, wrapped again like the migrator wrote it (ai_frames.comment): its
+    continuation lines ("//    ...") are joined first."""
+    from .ai_frames import comment
+    lines = region.split("\n")
+    for i, line in enumerate(lines):
+        if name not in line or not line.lstrip().startswith("//"):
+            continue
+        indent = line[:len(line) - len(line.lstrip())]
+        j = i + 1
+        while j < len(lines) and re.match(re.escape(indent) + r"//    \S", lines[j]):
+            j += 1
+        if j > i + 1:
+            text = " ".join(part.strip()[2:].strip() for part in lines[i:j])
+            lines[i:j] = comment(text, indent)
+        break
+    return "\n".join(lines)
 
 
 def use_constants(code: str, constants: list[dict], notes: list, warnings: list, used: set | None = None) -> str:

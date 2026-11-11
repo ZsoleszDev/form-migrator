@@ -206,6 +206,13 @@ class FrameConstantTests(unittest.TestCase):
         self.assertIn("createNativeQuery(LOV_LOV_STATUSZ_SQL)", ai.code_lines(service))
         self.assertNotIn("-- a megnevezés FROM", service)
         self.assertLess(service.index("LOV_LOV_STATUSZ_SQL ="), service.index("private EntityManager entityManager"))
+        # The kept hints name the constant instead of repeating its SQL; no comment of the migrator's own.
+        method = ai.method_text(service, "lovLovStatusz")
+        self.assertIn("//region AI-feladat: LOV_STATUSZ", method)
+        self.assertRegex(method, r"// SQL \(a rekordcsoport lekérdezése, a beírt szövegre szűrve\):\n\s*// LOV_LOV_STATUSZ_SQL\n")
+        self.assertIn("// Paraméterek: :term = LovQuery.term(", method)
+        self.assertEqual(service.count("WHERE S.TIPUS = :p0"), 1)
+        self.assertNotIn("a migrátor tartja karban", service)
         if shutil.which("java"):
             compile_dps(self, output, Path(tempfile.mkdtemp(dir=self.root)), cls="Rt")
 
@@ -273,6 +280,8 @@ class CrudFrameTests(unittest.TestCase):
             joined = re.sub(r'"\s*\+\s*"', "", service)  # the formatter splits a long literal into "..." + "..."
             self.assertIn('UPDATE_ORDERS_LOCK_SQL = "SELECT ID, CODE, NAME FROM APP_ORDERS WHERE ID = :id FOR UPDATE NOWAIT";', joined)
             self.assertNotIn("UPDATE_ORDERS_SQL =", service)  # not used: not declared
+            self.assertIn("// 2. Zárolás: UPDATE_ORDERS_LOCK_SQL (:mező = original.mező).", update)  # named, not repeated
+            self.assertIn("UPDATE APP_ORDERS SET CODE = :code", update.split("//endregion")[0])  # inline SQL: kept
 
 
 if __name__ == "__main__":

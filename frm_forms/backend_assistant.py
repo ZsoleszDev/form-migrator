@@ -570,6 +570,10 @@ def render_candidate(service: str, packet: dict, response: dict) -> str:
     # The commented original Forms source stays in the method: the model need not repeat it.
     original = ORIGINAL_REGION.search(existing, lambda_open + 1, lambda_end)
     region = written(original.group(0).rstrip() + "\n") if original else ""
+    if region and packet.get("data_access") == "service":
+        # The SQL the method runs through its constant (frame_sql) is named in the kept hints, not repeated.
+        from . import frame_sql
+        region = frame_sql.cite(region, frame_sql.statements(packet), response["body"] + "\n" + response["private_methods"])
     body = "\n".join("            " + line if line else "" for line in response["body"].strip().splitlines())
     # The gate is generator-owned, never delegated to the model.
     guard = ('            if (!MODULE_REVIEWED) {\n'
