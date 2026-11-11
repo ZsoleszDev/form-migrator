@@ -1,5 +1,9 @@
 # Következő változat (a 4.35 után) — minden metódust az AI ír a service-ben, tippekkel; entity és üres repository; valódi mentés, Forms-sorrend
 
+- **Az SQL-konstans nem ismétli az SQL-t.** A konstans fölé nem kerül a migrátor saját kommentje, és beillesztés után
+  a megtartott `//region AI-feladat` tippekben az SQL helyén a konstans neve áll (a hosszú sor újratördelve). Így a
+  metódus SQL-je egyszer szerepel a fájlban. A region kommentek egyébként változatlanok maradnak.
+
 - **Az adatvégpontok és a LOV-ok SQL-je: konstansok, Oracle szerinti összehasonlítás, helyi javítás.**
   - *A hiba:* egy hosszabb LOV-lekérdezés két hívás után is hibás vázlat maradt („A feladat SQL-utasítása hiányzik vagy
     megváltozott”). Az ellenőrzés betűre várta vissza a megjegyzés SQL-jét (csak a szóközt és a kis- és nagybetűt

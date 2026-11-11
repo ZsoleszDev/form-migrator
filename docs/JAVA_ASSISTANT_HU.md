@@ -321,7 +321,9 @@ Most (`frm_forms/frame_sql.py`):
   `UPDATE_X_SQL`, `CREATE_X_SQL`, `DELETE_X_LOCK_SQL`, `DELETE_X_SQL`. A prompt felsorolja őket a paramétereikkel, a
   modell név szerint futtatja őket (`entityManager.createNativeQuery(LOV_INPTIP_SQL)`). Így nincs mit elgépelni, és
   CPU-n a hosszú SQL kimeneti tokenjei is megspórolódnak. A metódus által használt konstanst a migrátor deklarálja az
-  osztály elején, soronként, a megjegyzések megtartásával (`"...\n" + "..."`). A már legenerált modulok is így
+  osztály elején, soronként, a megjegyzések megtartásával (`"...\n" + "..."`), külön kommentár nélkül. A megtartott
+  `//region AI-feladat` tippekben az ilyen SQL helyén ezután a konstans neve áll (`// 2. Zárolás: UPDATE_X_LOCK_SQL
+  (:mező = original.mező) …`), így az SQL nem szerepel kétszer a fájlban. A már legenerált modulok is így
   működnek, újragenerálás nélkül.
 - **Összehasonlítás Oracle szerint.** Tokenenként történik, a megjegyzéseket úgy hagyja el, ahogy az Oracle, és nem
   számít a kis- és nagybetű, a sortörés vagy az alias előtti `AS`. Ami Oracle szerint ugyanaz az utasítás, az
