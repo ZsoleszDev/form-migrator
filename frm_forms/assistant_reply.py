@@ -73,6 +73,7 @@ class Context:
     routines: frozenset = frozenset()             # the generated database routine methods (db_routines)
     generated: dict = field(default_factory=dict)  # repository -> the migrator's methods of the task's SQL (prompt lines)
     row_fields: frozenset = frozenset()           # a hook: the public fields of its record (row.field)
+    contract: dict = field(default_factory=dict)  # a data endpoint or LOV: the SQL and the hooks its hints name
 
 
 @dataclass
@@ -574,6 +575,11 @@ def check_service_code(code: str, ctx: Context, reply: Reply, missing: bool) -> 
             reply.problem("A service SQL-, JDBC- vagy PL/SQL-hívást tartalmaz; JPA-módban a repository éri el az adatbázist.",
                           "Do not keep the PL/SQL or JDBC call (DbCalls, jdbc). Implement the logic in Java and use "
                           "repository methods for the database.")
+    if ctx.mode == "service" and not missing:
+        # What compiles but fails or differs at run time: unset SQL parameters, a left-out statement or hook.
+        from . import answer_checks
+        for hu, en in answer_checks.problems(code, ctx.contract):
+            reply.problem(hu, en)
     if ctx.mode == "service" and (re.search(r"(?<![\w$.])(?:jdbc|DbCalls|jdbcTemplate)\s*\.", mask)
                                   or re.search(r"\b[a-z]\w*Repository\s*\.", mask)):
         reply.problem("A service JDBC-t vagy repositoryt hív; az SQL-t az entityManager futtatja.",
@@ -746,6 +752,11 @@ def finish(ctx: Context, reply: Reply, service, helpers, service_imports, repo_p
     fixes = []
     body = reply_repair.service(body, ctx, fixes)
     helpers = [reply_repair.service(h, ctx, fixes) for h in helpers]
+    if ctx.mode == "service":
+        # A null bound to a native query: sent as '' (SqlValues.bind), which Oracle reads as a typed NULL.
+        from . import answer_checks
+        body = answer_checks.bind(body, fixes)
+        helpers = [answer_checks.bind(h, fixes) for h in helpers]
     for text in dict.fromkeys(fixes):
         reply.note(text)
     # Repository methods: reuse identical existing ones, rename colliding ones (and the service calls).

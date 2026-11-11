@@ -616,10 +616,45 @@ class HookAssistantTests(unittest.TestCase):
         create = method_text(service, "createOrders")
         self.assertIn("//region AI-feladat: ORDERS / új rekord", create)  # the hints stay above the written body
         self.assertIn('"INSERT INTO APP_ORDERS (ID, CODE, NAME) VALUES (:id, :code, :name)"', create)
+        self.assertIn('.setParameter("code", SqlValues.bind(row.code))', create)  # null-safe, repaired locally
         self.assertIn("import javax.persistence.PersistenceException;", service)
         self.assertNotIn("Repository", code_lines(service))
         if shutil.which("java"):
             compile_module(self, self.output, Path(tempfile.mkdtemp(dir=self.root)))
+
+    def test_an_answer_that_would_fail_at_run_time_goes_back_with_the_exact_fault(self):
+        # It compiles, but a parameter of the INSERT is never set and PRE-INSERT is not called: the migrator names
+        # both faults to the model instead of applying the method.
+        task = self.tasks["createOrders"]
+        bad = ANSWERS["createOrders"].replace("        triggerPreInsertOrders(row, context);\n", "").replace(
+            '.setParameter("name", row.name)', "")
+        self.assertNotEqual(bad, ANSWERS["createOrders"])
+        client = Client(bad, ANSWERS["createOrders"])
+        with patch("frm_forms.ollama.opener", return_value=client):
+            result = engine.propose(self.output, task["id"], self.options)
+        self.assertEqual((result["status"], result["calls"]), ("proposal", 2), result)
+        correction = client.requests[1]["messages"][-1]["content"]
+        self.assertIn('has no setParameter for "name"', correction)
+        self.assertIn("Call triggerPreInsertOrders(...) as the comment says", correction)
+        # A null bound to a native query: sent through SqlValues.bind, repaired here (no model call for it).
+        candidate = (self.output / engine.AREA / "proposals" / result["id"] / result["files"][0]["candidate"]).read_text(encoding="utf-8")
+        self.assertIn('.setParameter("name", SqlValues.bind(row.name))', candidate)
+        self.assertTrue(any("SqlValues.bind" in note for note in result["extraction"]["notes"]), result["extraction"])
+
+    def test_the_sql_of_the_hints_is_the_contract_and_goes_to_verify_db(self):
+        plan = read_json(self.output / "analysis/backend-plan.json")
+        endpoints = {e["method"]: e for e in plan["endpoints"]}
+        self.assertEqual(endpoints["createOrders"]["contract"],
+                         {"sql": ["INSERT INTO APP_ORDERS (ID, CODE, NAME) VALUES (:id, :code, :name)"],
+                          "calls": ["triggerWhenValidateItemCodeOrders", "triggerPreInsertOrders"]})
+        self.assertEqual(endpoints["listOrders"]["contract"],
+                         {"sql": ["SELECT ID, CODE, NAME FROM APP_ORDERS ORDER BY ID"], "calls": ["triggerPostQueryOrders"]})
+        self.assertEqual(len(endpoints["updateOrders"]["contract"]["sql"]), 2)  # the lock and the UPDATE
+        statements = [(s["source"], s["sql"]) for s in read_json(self.output / "analysis/db-statements.json")["statements"]]
+        self.assertIn(("ORDERS új rekord", "INSERT INTO APP_ORDERS (ID, CODE, NAME) VALUES (:id, :code, :name)"), statements)
+        self.assertIn(("ORDERS törlés", "SELECT ID, CODE, NAME FROM APP_ORDERS WHERE ID = :id FOR UPDATE NOWAIT"), statements)
+        self.assertIn(("ORDERS lista", "SELECT ID, CODE, NAME FROM APP_ORDERS ORDER BY ID OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY"),
+                      statements)
 
     def test_answer_without_the_hook_is_rejected_and_nothing_changes(self):
         task = self.tasks["triggerWhenValidateItemCodeOrders"]

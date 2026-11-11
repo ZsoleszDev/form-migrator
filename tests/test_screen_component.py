@@ -214,7 +214,7 @@ class ScreenComponentTests(unittest.TestCase):
             for absent in ('private text(', 'private data<', 'private blocks(', 'private parameters(', 'showResult', 'showBlocks',
                            'setItemState', 'stateValue', 'private value(', 'private readonly items', 'originals', 'newRecord',
                            'deleteRecord', 'interface Page', 'ActionResult', 'this.toast', 'DestroyRef', 'takeUntilDestroyed', 'suggest(',
-                           'completeMethod', 'Validators'):
+                           'Validators'):
                 self.assertFalse(absent in screen, out.name + ': ' + absent)
         simple = component(self.simple)
         self.assertNotIn('HttpClient', simple)  # nothing to call

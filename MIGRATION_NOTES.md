@@ -1,5 +1,31 @@
 # Következő változat (a 4.35 után) — minden metódust az AI ír a service-ben, tippekkel; entity és üres repository; valódi mentés, Forms-sorrend
 
+- **A LOV-os mező meghívja a saját LOV-végpontját.** Az autocomplete mező eddig üres `suggestions` listát kapott, a
+  kész `lov<Név>` metódust semmi nem hívta. Most a mező `completeMethod`-ja (`on<Mező>Complete`) gépeléskor vagy a
+  lista lenyitásakor elküldi a beírt szöveget és a rekordcsoport Forms-paramétereit, a sorokból pedig a mező
+  javaslatai lesznek (érték: a mezőbe visszaadott oszlop, felirat: a sor oszlopai). A további ReturnItem mezők
+  kitöltése továbbra is fejlesztői feladat.
+
+- **Az AI által írt kód megbízhatóbb: futásidejű hibák kiszűrése, generált kód hozzáadása nélkül.** A metódusokat
+  továbbra is az AI írja a service-ben. A migrátor azt ellenőrzi és javítja, amit a fordító nem lát.
+  - *Null érték natív lekérdezésben:* a típus nélküli null-t a Hibernate 5 bináris értékként küldi, az Oracle ezt
+    NUMBER és DATE oszlopnál elutasítja (ORA-00932). Így egy üresen hagyott szám- vagy dátummező mentése hibára futna.
+    A `setParameter` értékei ezért `SqlValues.bind(...)`-on át kötődnek (null helyett üres szöveg, amit az Oracle
+    NULL-nak olvas). A prompt ezt kéri, és ha a modell kihagyja, a migrátor helyben pótolja, új AI-hívás nélkül.
+    Ez a Hibernate ismert viselkedésén alapul; a migrátor tesztjei valódi Oracle-lel nem futtatják.
+  - *Paraméterek:* ha az SQL egy `:név` paramétere nem kap értéket, vagy a `setParameter` olyan nevet állít be, amely
+    nincs az SQL-ben, a válasz pontos javítási kéréssel megy vissza (`frm_forms/answer_checks.py`).
+  - *Adatvégpontok és LOV-ok:* a megjegyzés SQL-jének változatlanul benne kell lennie a kódban, és a megnevezett
+    triggereket a megadott sorrendben meg kell hívnia. Az elvárás a `backend-plan.json` `contract` mezője.
+  - *Tippek javítása:* egyoszlopos lekérdezésnél a sor maga az érték (nem `Object[]`), ezt a tipp kimondja. A
+    CaseRestriction mezők nagy-/kisbetűsítése visszakerült a mentés lépései közé (a 4.35-ös átállásnál kimaradt). Az
+    „alapérték, ha üres” lépés kikerült: az alapértéket a képernyő adja, a mentés ne írja felül a szándékosan
+    kiürített mezőt.
+  - *Közös segédek (`CommonMigrateTools` VERSION 9):* `SqlValues.bind`; a `SqlValues.text` a CLOB oszlopot is
+    szövegként adja; a `LovQuery.rows` az egyoszlopos LOV sorait is kezeli (eddig futáskor `ClassCastException`).
+  - *`verify-db`:* a megjegyzések SQL-je bekerül az `analysis/db-statements.json`-ba, így az Oracle még az AI futása
+    előtt lefordítja (futtatás nélkül).
+
 - **Minden metódust az AI ír, a service-ben; a migrátor tippeket ad, entityt és üres repositoryt készít.**
   A visszajelzés: ne terheljük a kis helyi AI-t a repositoryval, a Java service-ben csináljon meg mindent úgy, ahogy a
   Forms (ugyanaz az SQL, ugyanaz a mentés), a repositoryba a fejlesztő teszi át, ha akarja. Minden végpontban legyen

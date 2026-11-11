@@ -3,6 +3,7 @@ package hu.company.features.cl;
 import java.math.BigDecimal;
 import java.math.MathContext;
 import java.sql.CallableStatement;
+import java.sql.Clob;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.sql.Types;
@@ -38,7 +39,7 @@ import org.springframework.web.server.ResponseStatusException;
  */
 public final class CommonMigrateTools {
     /** A változat, amelyet a generált modulok várnak. */
-    public static final String VERSION = "8";
+    public static final String VERSION = "9";
 
     private CommonMigrateTools() {
         // Csak statikus segédek.
@@ -197,9 +198,28 @@ public final class CommonMigrateTools {
                     : BigDecimal.valueOf(value.codePointCount(0, value.length()));
         }
 
-        /** Egy natív lekérdezés oszlopa szövegként (VARCHAR2, CHAR(1)); az üres és a null null. */
+        /** Egy natív lekérdezés oszlopa szövegként (VARCHAR2, CHAR, CLOB); az üres is null. */
         public static String text(Object value) {
+            if (value instanceof Clob) {
+                try {
+                    Clob clob = (Clob) value;
+                    return normalize(clob.getSubString(1, (int) clob.length()));
+                } catch (SQLException e) {
+                    throw new IllegalStateException(e);
+                }
+            }
             return value == null ? null : normalize(value.toString());
+        }
+
+        /**
+         * Egy natív lekérdezés paramétere: a null helyett üres szöveg, amelyet az Oracle NULL-nak
+         * olvas.
+         *
+         * <p>A típus nélküli null-t a Hibernate 5 bináris értékként küldi, amit az Oracle NUMBER és
+         * DATE oszlopnál elutasít (ORA-00932).
+         */
+        public static Object bind(Object value) {
+            return value == null ? "" : value;
         }
 
         /** Egy natív lekérdezés NUMBER oszlopa (BigDecimal, Long, Integer ...) BigDecimal-ként. */
@@ -772,15 +792,18 @@ public final class CommonMigrateTools {
         }
 
         /**
-         * A repository sorai oszlopnév szerint, a képernyő szerződése szerint.
+         * Egy natív lekérdezés sorai oszlopnév szerint, a képernyő szerződése szerint.
          *
-         * @param rows   a natív lekérdezés sorai
+         * @param rows   a lekérdezés sorai (Object[]; egyoszlopos lekérdezésnél maga az érték)
          * @param labels a select-lista oszlopnevei, sorrendben
          * @return a sorok, oszlopnév szerint
          */
-        public static List<Map<String, Object>> rows(List<Object[]> rows, String... labels) {
+        public static List<Map<String, Object>> rows(List<?> rows, String... labels) {
             List<Map<String, Object>> result = new ArrayList<>();
-            for (Object[] row : rows) {
+            for (Object record : rows) {
+                Object[] row = record instanceof Object[]
+                        ? (Object[]) record
+                        : new Object[] {record};
                 Map<String, Object> copy = new LinkedHashMap<>();
                 for (int i = 0; i < labels.length && i < row.length; i++) {
                     Object v = row[i];

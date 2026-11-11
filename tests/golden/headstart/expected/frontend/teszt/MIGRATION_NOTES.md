@@ -115,7 +115,7 @@ A gomb metódusa (`on<Gomb>Click()`) a felismert lépések kérését küldi (ex
 
 ## LOV bekötés
 
-A LOV-os mező autocomplete (`dropdown`, üres `suggestions`), a LOV-végpontnak saját metódusa van (`lov<Név>`). A javaslatok betöltése (`completeMethod`) és a ReturnItem mezők kitöltése fejlesztői feladat. Az alábbi SQL és paraméterek dokumentáció; nem böngészőből végrehajtandó kód.
+A LOV-os mező autocomplete (`dropdown`, üres `suggestions`), a LOV-végpontnak saját metódusa van (`lov<Név>`), amelyet a mező `completeMethod`-ja hív meg a beírt szöveggel és a rekordcsoport Forms-paramétereivel; a sorok a mező javaslatai. A LOV további ReturnItem mezőinek kitöltése fejlesztői feladat. Az alábbi SQL és paraméterek dokumentáció; nem böngészőből végrehajtandó kód.
 
 ### INPTIP — V_ELEK_ADLAP.UBI_INPTIP_KOD
 

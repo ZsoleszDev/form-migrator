@@ -115,7 +115,12 @@ def block_sql(model: dict, b: dict) -> dict:
 
 
 def mapping_line(b: dict) -> str:
-    """Column -> Row field (type) in select-list order: the Object[] of a native query row."""
+    """Column -> Row field (type) in select-list order: the Object[] of a native query row. A query of one column
+    returns the values themselves (List<Object>): there is no array to index."""
+    if len(b["db_items"]) == 1:
+        item = b["db_items"][0]
+        return (f"a lekérdezés egy oszlopa maga a sor (Object, nem Object[]): {item['column']} -> {item['field']} "
+                f"({JAVA_TYPES[item['type']]})")
     return ", ".join(f"[{n}] {i['column'] if not i.get('rowid') else 'ROWID'} -> {i['field']} ({JAVA_TYPES[i['type']]})"
                      for n, i in enumerate(b["db_items"]))
 
@@ -169,13 +174,13 @@ def write_lines(model: dict, b: dict, op: str, calls: dict) -> list[str]:
     else:
         record = "row"
     if op in {"create", "update"}:
+        # Forms converts the text of a CaseRestriction item as it is typed; the screen does not, so the save does.
+        cases = [f"{record}.{i['field']} = SqlValues.{i['case_restriction']}({record}.{i['field']})"
+                 for i in b["items"] if i["kind"] != "button" and i.get("case_restriction")]
+        if cases:
+            add("Kis-/nagybetűs mezők (Forms CaseRestriction): " + "; ".join(cases) + ".")
         add(check_line(b))
     if op == "create":
-        defaults = [i["name"] + " = " + (str(i["initial"]) if i["type"] == "number" else quote(i["initial"]))
-                    for i in b["items"] if i["kind"] != "button" and i.get("initial") is not None and i["insert_allowed"]
-                    and not (b.get("sequence") and i["primary_key"])]
-        if defaults:
-            add("Alapérték, ha üres: " + ", ".join(defaults) + ".")
         if b.get("sequence"):
             add(f"Kulcs a szekvenciából: SELECT {b['sequence']}.NEXTVAL FROM DUAL -> row.{b['pk'][0]['field']}"
                 " (a képernyő nem adja meg).")
@@ -198,6 +203,39 @@ def write_lines(model: dict, b: dict, op: str, calls: dict) -> list[str]:
                   "update": "Vissza: new RowResult<>(value, context.messages()).",
                   "delete": "Vissza: context.messages()."}[op])
     return lines
+
+
+def contract(o: dict, model: dict, calls: dict) -> dict:
+    """What the written method must contain, checked on the model's answer (answer_checks): the statements of the
+    hints as written, and the hooks in their order. The paging of a list may be written either way (OFFSET/FETCH in
+    the SQL or setFirstResult/setMaxResults), so only the block query itself is required."""
+    if o["op"] == "lov":
+        plan = o["lov"]
+        inner = plan["sql"].split("SELECT * FROM (\n", 1)[-1].split("\n) lov", 1)[0]
+        return {"sql": [inner], "calls": []} if not plan["blockers"] else {}
+    b, op = o["block"], o["op"]
+    sql = block_sql(model, b)
+    if op in {"list", "search"}:
+        return {"sql": [sql["query"]], "calls": list(calls.get("FETCH", []))}
+    events = [e for e in VALIDATION_EVENTS] if op in {"create", "update"} else []
+    events += {"create": ["PRE-INSERT", "ON-INSERT", "POST-INSERT"], "update": ["PRE-UPDATE", "ON-UPDATE", "POST-UPDATE"],
+               "delete": ["ON-CHECK-DELETE-MASTER", "PRE-DELETE", "ON-DELETE", "POST-DELETE"]}[op]
+    replacing = {"create": "ON-INSERT", "update": "ON-UPDATE", "delete": "ON-DELETE"}[op]
+    statement = {"create": sql["insert"], "update": sql["update"], "delete": sql["delete"]}[op]
+    statements = ([sql["lock"]] if op in {"update", "delete"} else []) + ([statement] if statement and not calls.get(replacing) else [])
+    return {"sql": statements, "calls": [method for event in events for method in calls.get(event, [])]}
+
+
+def statements(o: dict, model: dict, calls: dict) -> list[tuple[str, str]]:
+    """(label, SQL) of a data endpoint for verify-db: what the hints tell the model to run, compiled in the database
+    before anybody writes the method."""
+    if o["op"] == "lov":
+        return []  # the LOV statement is listed by its plan (compact_backend.db_statements)
+    b, op = o["block"], o["op"]
+    found = contract(o, model, calls)["sql"]
+    if op in {"list", "search"}:
+        found = [found[0] + " OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY"]
+    return [(b["name"] + " " + OPERATION_TITLES[op], statement) for statement in found]
 
 
 def crud_frame(o: dict, model: dict, calls: dict, log1x, user_type: str, transaction: str, info: str) -> str:
@@ -230,11 +268,8 @@ def lov_frame(o: dict, log1x, user_type: str) -> str:
                 + '            throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED, "Ez a LOV ebben a modulban még nem érhető el.");\n'
                 + "        });\n    }")
     labels = lov_labels(plan)
-    # A text parameter is never null: Oracle reads '' as NULL, and the bind keeps its VARCHAR type.
-    params = [':term = request.term() (null helyett "")', ":limit = LovQuery.limit(request.limit())"]
-    params += [f":{b['parameter']} = " + (f"LovQuery.text(request.parameters(), {quote(b['source'])}, \"\")" if b["type"] == "text"
-                                         else f"LovQuery.{b['type']}(request.parameters(), {quote(b['source'])})")
-               for b in plan["binds"]]
+    params = [":term = LovQuery.term(request.term())", ":limit = LovQuery.limit(request.limit())"]
+    params += [f":{b['parameter']} = LovQuery.{b['type']}(request.parameters(), {quote(b['source'])})" for b in plan["binds"]]
     lines = ["SQL (a rekordcsoport lekérdezése, a beírt szövegre szűrve):", *plan["sql"].split("\n"),
              "Paraméterek: " + "; ".join(params) + ".",
              ("Vissza: new LovResult(LovQuery.rows(rows, " + ", ".join(quote(label) for label in labels) + "))"

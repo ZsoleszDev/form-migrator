@@ -1080,7 +1080,7 @@ def reply_context(prepared: dict, options: Options):
                                                  id_type(p)) for p in used],
         namespace=(packet.get("config") or {}).get("jpa_namespace") or "javax", mode=options.data_access,
         allowed_imports=frozenset(allowed), routines=frozenset(r["method"] for r in packet.get("db_routines") or []),
-        generated=generated,
+        generated=generated, contract=(packet.get("endpoint") or {}).get("contract") or {},
         row_fields=frozenset(f["field"] for f in hook.get("fields", []) if f.get("field")) if hook.get("kind") == "record" else frozenset())
 
 

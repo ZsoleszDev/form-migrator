@@ -271,6 +271,8 @@ def db_statements(model, ops, vals, cls, code=''):
             add('plsql', o['action']['owner'] + ' / ' + o['action']['event'], o['passthrough']['sql'])
         elif o['op'] == 'lov' and not o['lov']['blockers']:
             add('sql', 'LOV ' + o['lov']['name'], o['lov']['sql'])
+        for label, sql in o.get('statements', []):  # the SQL the hints of an AI frame tell the model to run
+            add('sql', label, sql)
     for event, plan in sorted(model.get('commit_plan', {}).items()):
         if plan.get('plan'):
             add('plsql', event + ' (commitForm)', plan['plan']['sql'])
@@ -976,6 +978,7 @@ public class {cls}ControllerImpl extends {controller_base} implements {cls}Contr
         if o['op'] == 'lov' and ai:
             # The record group's query and its typed-text filter, for the Java assistant (ai_frames).
             dps_methods.append(ai_frames.lov_frame(o, log1x, user_type))
+            o['contract'] = ai_frames.contract(o, model, {})
             evidence.append((o['method'], '\n'.join(lov_evidence(o['lov'], gated))))
         elif o['op'] in {'list', 'search', 'create', 'update', 'delete'} and ai:
             b = o['block']
@@ -985,6 +988,8 @@ public class {cls}ControllerImpl extends {controller_base} implements {cls}Contr
                    else '@Transactional(rollbackFor = Exception.class)')
             info = f"{b['name']} blokk ({b['table']}): {ai_frames.OPERATION_TITLES[o['op']]}."
             dps_methods.append(ai_frames.crud_frame(o, model, calls, log1x, user_type, txn, info))
+            o['contract'] = ai_frames.contract(o, model, calls)
+            o['statements'] = ai_frames.statements(o, model, calls)
             evidence.append((o['method'], ai_frames.evidence(o, model)))
         elif o['op'] == 'lov':
             dps_methods.append(lov_method(o['lov'], gated, comment_lines, log1x(o, '() -> {'), user_type, o['method']))
@@ -1214,7 +1219,7 @@ import org.springframework.boot.web.client.RestTemplateBuilder;
                 entry['equivalence'] = o['query_action']['java'].get('equivalence')
         elif o['op'] == 'lov' and ai and not o['lov']['blockers']:
             entry.update(block=o['lov']['block'], operation='lov', lov=o['lov']['name'], implemented=False,
-                         ready_after_module_review=False, runs='ai', ai=True,
+                         ready_after_module_review=False, runs='ai', ai=True, contract=o['contract'],
                          blockers=['AI-ra vár: a Java asszisztens írja meg a rekordcsoport lekérdezéséből.'])
         elif o['op'] == 'lov':
             ready = not o['lov']['blockers']
@@ -1228,7 +1233,7 @@ import org.springframework.boot.web.client.RestTemplateBuilder;
         elif o['op'] != 'action' and ai:
             # The frame is final; the body waits for the Java assistant (ai_frames).
             entry.update(block=o['block']['name'], operation=o['op'], implemented=False, ready_after_module_review=False,
-                         runs='ai', ai=True, blockers=['AI-ra vár: a Java asszisztens írja meg a kikommentezett SQL-ből.']
+                         runs='ai', ai=True, contract=o['contract'], blockers=['AI-ra vár: a Java asszisztens írja meg a kikommentezett SQL-ből.']
                          + capability(o['block'], o['op'])[2])
         elif o['op'] != 'action':
             enabled, ready, blockers = capability(o['block'], o['op'])

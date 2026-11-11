@@ -117,12 +117,43 @@ class ScreenCode:
                                                'text_expression': 'this.migrationInputText(' + expression + ')',
                                                'representation': item.get('representation', 'unknown')})
         self.queries = dict(self.w.get('queries', {}))
+        self.complete = {}  # autocomplete item -> the method that loads its LOV (lov_methods)
         self.click = {}
         buttons = [i['owner'] for s in forms + tables for i in s['items'] if i['widget'] == 'button']
         short = [o.split('.', 1)[1] for o in buttons]
         for owner in buttons:
             item = owner.split('.', 1)[1]
             self.click[owner] = self.unique('on' + pascal(item if short.count(item) == 1 else owner) + 'Click')
+
+    def lov_methods(self) -> None:
+        """The LOV of an autocomplete item: its completeMethod calls the LOV endpoint with the typed text and the
+        Forms binds of the record group, and the rows become the item's suggestions (value: the column the LOV
+        returns into the item, label: the row's columns)."""
+        lovs = self.w.get('lovs', {})
+        for owner, (region, key, item) in self.controls.items():
+            name = str(item.get('lov') or '').upper()
+            if item['widget'] != 'autocomplete' or name not in lovs:
+                continue
+            lov = lovs[name]
+            method = self.unique('on' + pascal(owner.split('.', 1)[1]) + 'Complete')
+            binds = [(b['source'], self.input_value(lov['call'], name, b['source'], 'parameters.' + b['source'])[0]) for b in lov['binds']]
+            parameters = '{ ' + ', '.join(sq(source) + ': ' + value for source, value in binds) + ' }' if binds else '{}'
+            column = next((c['column'] for c in lov['columns'] if c['returnItem'].upper() == owner.upper()),
+                          lov['columns'][0]['column'] if lov['columns'] else '')
+            value = 'row[' + sq(column.upper()) + ']' if column else 'Object.values(row)[0]'
+            self.complete[owner] = method
+            self.methods.append(
+                f'  // {owner} értéklistája ({name}): a beírt szövegre szűrt sorok a mező javaslatai.\n'
+                f'  protected {method}(event: {{ query?: string }}): void {{\n'
+                f'    this.{lov["call"]}({{ term: event?.query ?? \'\', parameters: {parameters} }}).subscribe(res => {{\n'
+                f'      const item = this.structures[{sq(region)}]?.find(s => s[\'ownId\'] === {sq(owner)});\n'
+                '      if (item) {\n'
+                '        item[\'suggestions\'] = ((res?.rows ?? []) as Record<string, unknown>[]).map(row => ({\n'
+                f"          label: Object.values(row).filter(v => v != null && v !== '').join(' – '), value: {value},\n"
+                '        }));\n'
+                '      }\n'
+                '    });\n'
+                '  }')
 
     def result_methods(self) -> list[str]:
         """applyActionResult (and migrationQuery): what a backend action's answer changes on the screen."""
@@ -576,6 +607,7 @@ class ScreenCode:
         for owner in self.click:
             self.button(owner)
         self.save()
+        self.lov_methods()
         self.startup_lines = self.startup_query_lines()
         self.input_inventory()
         row_actions = [o for s in self.tables for o in (i['owner'] for i in s['items'] if i['widget'] == 'button')]

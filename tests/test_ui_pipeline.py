@@ -90,7 +90,7 @@ class UiPipelineTests(unittest.TestCase):
         # B.S, run through the service's EntityManager (no repository, no JDBC); the query stays in the analysis too.
         service=(out/'backend/DPS/TesztServiceImpl.java').read_text()
         self.assertIn('//region AI-feladat: LOOK',service);self.assertIn('// SELECT CODE FROM T WHERE X=:p0',service)
-        self.assertIn('LovQuery.text(request.parameters(), "B.S", "")',service)
+        self.assertIn('LovQuery.text(request.parameters(), "B.S")',service)
         self.assertNotIn('NOT_IMPLEMENTED',service);self.assertNotIn('jdbc',service)
     def test_7_lov_backend_endpoints_can_be_switched_off(self):
         out,_=self.good('<Item Name="S" ItemType="Text Item" LOVName="LOOK"/>',extra='<LOV Name="LOOK" RecordGroupName="RG"><LOVColumnMapping Name="M" ColumnName="CODE" ReturnItem="B.S" Title="Kód"/></LOV><RecordGroup Name="RG" RecordGroupQuery="SELECT CODE FROM T WHERE X=:B.S"/>',config={'backend_lov_endpoints':False})

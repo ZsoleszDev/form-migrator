@@ -156,8 +156,10 @@ def structure(item, config, code=None):
         if code is not None and item['owner'] in code.click:
             definition['onClick'] = Code('() => this.' + code.click[item['owner']] + '()')
     if item['lov']:
-        # The LOV endpoint has its method (lov<Name>); filling the suggestions is the developer's.
         definition.update(dropdown=True, optionLabel='label', optionValue='value', suggestions=[])
+        if code is not None and item['owner'] in code.complete:
+            # Typing or opening the list loads it from the LOV endpoint (screen_code.lov_methods).
+            definition['completeMethod'] = Code('(event: { query?: string }) => this.' + code.complete[item['owner']] + '(event)')
     return definition
 
 
@@ -740,7 +742,8 @@ def notes(plan, discovery, config):
                                                       own if not a.get('steps') else '—'])) + ' |')
     if plan['lookups']:
         lines += ['', '## LOV bekötés', '', 'A LOV-os mező autocomplete (`dropdown`, üres `suggestions`), a LOV-végpontnak saját metódusa van '
-                  '(`lov<Név>`). A javaslatok betöltése (`completeMethod`) és a ReturnItem mezők kitöltése fejlesztői feladat. '
+                  '(`lov<Név>`), amelyet a mező `completeMethod`-ja hív meg a beírt szöveggel és a rekordcsoport Forms-paramétereivel; '
+                  'a sorok a mező javaslatai. A LOV további ReturnItem mezőinek kitöltése fejlesztői feladat. '
                   'Az alábbi SQL és paraméterek dokumentáció; nem böngészőből végrehajtandó kód.', '']
         for l in plan['lookups']:
             lines += ['### ' + l['name'] + ' — ' + l['owner'], '', 'Rekordcsoport: `' + l.get('record_group', '') + '`. Paraméterek: ' + ', '.join('`' + p + '`' for p in l['parameters']), '',
