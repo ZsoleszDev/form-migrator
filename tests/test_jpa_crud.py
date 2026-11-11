@@ -112,6 +112,17 @@ class JpaCrudTests(unittest.TestCase):
         self.assertIn('new LovResult(LovQuery.rows(rows, "KOD", "NEV"))', lov)
         self.assertNotIn('lov', self.read('RendelesRepository.java').split('{', 1)[1])
 
+    def test_the_screen_loads_the_lov_of_its_autocomplete(self):
+        # The LOV endpoint is called by the item itself: typing or opening the list loads the suggestions.
+        screen = (self.out / 'frontend/felmeres/felmeres.component.ts').read_text(encoding='utf-8')
+        self.assertIn("ownId: 'RENDELES.STATUSZ'", screen)
+        self.assertIn('suggestions: [], completeMethod: (event: { query?: string }) => this.onStatuszComplete(event) }', screen)
+        method = screen[screen.index('protected onStatuszComplete('):]
+        method = method[:method.index('\n  }\n')]
+        self.assertIn("this.lovLovstatusz({ term: event?.query ?? '', parameters: {} }).subscribe(res => {", method)
+        self.assertIn("this.structures['rendeles']?.find(s => s['ownId'] === 'RENDELES.STATUSZ')", method)
+        self.assertIn("value: row['KOD'],", method)  # the column the LOV returns into the item
+
     def test_the_select_list_names_the_lov_columns(self):
         self.assertEqual(select_labels('SELECT DISTINCT kod, t.nev AS megnevezes, nvl(a, b) x FROM t WHERE a = (SELECT 1 FROM dual)'),
                          ['KOD', 'MEGNEVEZES', 'X'])

@@ -556,9 +556,11 @@ A gomb a struktúrában `onClick: () => this.on<Gomb>Click()`. A metódus a gomb
    lekérdező gombnál a sorok a táblázatba kerülnek;
 4. különben TODO az eredeti Forms-kóddal.
 
-A LOV a struktúrában lenyitó autocomplete (`dropdown`, `optionLabel`/`optionValue`, üres `suggestions`). A LOV
-végpontjának saját metódusa van (`lov<Név>`); a javaslatok betöltése (`completeMethod`) és a ReturnItem
-mezők kitöltése fejlesztői feladat (4.27).
+A LOV a struktúrában lenyitó autocomplete (`dropdown`, `optionLabel`/`optionValue`, `suggestions`). A LOV
+végpontjának saját metódusa van (`lov<Név>`), és a mező `completeMethod`-ja hívja meg (`on<Mező>Complete`): gépeléskor
+vagy a lista lenyitásakor elküldi a beírt szöveget és a rekordcsoport Forms-paramétereit (a képernyő mezőiből), a
+visszakapott sorok pedig a mező javaslatai lesznek. Az érték az az oszlop, amelyet a LOV a mezőbe ad vissza, a felirat
+a sor oszlopai. A LOV további ReturnItem mezőinek kitöltése fejlesztői feladat.
 
 Az SQL, a paraméterek, a ReturnItem mapping és a master-detail kapcsolatok a
 migrációs jegyzetben találhatók. Kliensből nem futtatunk SQL-t vagy PL/SQL-t.

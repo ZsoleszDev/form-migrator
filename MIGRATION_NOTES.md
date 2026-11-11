@@ -1,5 +1,11 @@
 # Következő változat (a 4.35 után) — minden metódust az AI ír a service-ben, tippekkel; entity és üres repository; valódi mentés, Forms-sorrend
 
+- **A LOV-os mező meghívja a saját LOV-végpontját.** Az autocomplete mező eddig üres `suggestions` listát kapott, a
+  kész `lov<Név>` metódust semmi nem hívta. Most a mező `completeMethod`-ja (`on<Mező>Complete`) gépeléskor vagy a
+  lista lenyitásakor elküldi a beírt szöveget és a rekordcsoport Forms-paramétereit, a sorokból pedig a mező
+  javaslatai lesznek (érték: a mezőbe visszaadott oszlop, felirat: a sor oszlopai). A további ReturnItem mezők
+  kitöltése továbbra is fejlesztői feladat.
+
 - **Az AI által írt kód megbízhatóbb: futásidejű hibák kiszűrése, generált kód hozzáadása nélkül.** A metódusokat
   továbbra is az AI írja a service-ben. A migrátor azt ellenőrzi és javítja, amit a fordító nem lát.
   - *Null érték natív lekérdezésben:* a típus nélküli null-t a Hibernate 5 bináris értékként küldi, az Oracle ezt

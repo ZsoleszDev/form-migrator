@@ -28,7 +28,7 @@ export class TesztComponent extends ServiceBase {
 
   protected readonly structures: Record<string, FormBlock.Structure[]> = {
     vElekAdlap: [
-      { type: 'autocomplete', ownId: 'V_ELEK_ADLAP.UBI_INPTIP_KOD', formControlName: 'ubiInptipKod', labelText: 'Adatlap típus', col: '3', maxLenght: 10, dropdown: true, optionLabel: 'label', optionValue: 'value', suggestions: [] },
+      { type: 'autocomplete', ownId: 'V_ELEK_ADLAP.UBI_INPTIP_KOD', formControlName: 'ubiInptipKod', labelText: 'Adatlap típus', col: '3', maxLenght: 10, dropdown: true, optionLabel: 'label', optionValue: 'value', suggestions: [], completeMethod: (event: { query?: string }) => this.onUbiInptipKodComplete(event) },
       { type: 'text', ownId: 'V_ELEK_ADLAP.UBI_INPTIP_KOD_NEV', formControlName: 'ubiInptipKodNev', labelText: 'Megnevezés', col: '9', readonly: true, maxLenght: 80 },
       { type: 'label', ownId: 'V_ELEK_ADLAP.L_URES_1', labelText: '', col: '12' },
       { type: 'calendar', ownId: 'V_ELEK_ADLAP.DATUM_TOL', formControlName: 'datumTol', labelText: 'Dátum', col: '5', dateFormat: 'yy.mm.dd', showIcon: true, showTime: true },
@@ -110,6 +110,18 @@ export class TesztComponent extends ServiceBase {
     }).subscribe(res => {
       this.aitRows = res.rows ?? [];
       this.migrationMoreRows('AIT', res);
+    });
+  }
+
+  // V_ELEK_ADLAP.UBI_INPTIP_KOD értéklistája (INPTIP): a beírt szövegre szűrt sorok a mező javaslatai.
+  protected onUbiInptipKodComplete(event: { query?: string }): void {
+    this.lovInptip({ term: event?.query ?? '', parameters: {} }).subscribe(res => {
+      const item = this.structures['vElekAdlap']?.find(s => s['ownId'] === 'V_ELEK_ADLAP.UBI_INPTIP_KOD');
+      if (item) {
+        item['suggestions'] = ((res?.rows ?? []) as Record<string, unknown>[]).map(row => ({
+          label: Object.values(row).filter(v => v != null && v !== '').join(' – '), value: row['KOD'],
+        }));
+      }
     });
   }
 
