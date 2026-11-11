@@ -19,6 +19,7 @@ from .java_scan import java_mask
 from .reply_repair import closing_paren
 
 LITERAL = re.compile(r'"((?:\\.|[^"\\\n])*)"')
+CODE_TOKEN = re.compile(r'//[^\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\\n])*"|\'(?:\\.|[^\'\\\n])*\'')
 CREATE = re.compile(r"\bcreateNativeQuery\s*\(")
 SET = re.compile(r"\.\s*setParameter\s*\(")
 ASSIGNED = re.compile(r"([A-Za-z_$][\w$]*)\s*=\s*(?:\(\s*[\w.<>\[\], ]+\)\s*)?(?:this\s*\.\s*)?[A-Za-z_$][\w$]*\s*\.\s*$")
@@ -45,6 +46,10 @@ class NativeQuery:
     sql: str | None                 # the statement when it is written as string literals only; None: built at run time
     parameters: list = field(default_factory=list)
     complete: bool = True           # False: the query object leaves the statement (returned, passed on): not judged
+    span: tuple | None = None       # the createNativeQuery argument in the code
+    constant: str | None = None     # the argument is one of the task's SQL constants (frame_sql)
+    variable: str | None = None     # the argument is a local String holding string literals: String sql = "...";
+    literal: bool = False           # the statement is written in the code (string literals), not taken from elsewhere
 
 
 def text_of(literal: str) -> str:
@@ -90,8 +95,15 @@ def set_calls(code: str, mask: str, start: int, end: int) -> list[Parameter]:
     return found
 
 
-def native_queries(code: str) -> list[NativeQuery]:
-    """The createNativeQuery calls of the code with their SQL and the parameters set on them."""
+def literal_text(code: str, mask: str, start: int, end: int) -> str | None:
+    """The value of an expression made of string literals only ("..." + "..."), else None."""
+    pieces = [text_of(m.group(1)) for m in LITERAL.finditer(code, start, end)]
+    return "".join(pieces) if pieces and not mask[start:end].replace("+", "").strip() else None
+
+
+def native_queries(code: str, constants: dict | None = None) -> list[NativeQuery]:
+    """The createNativeQuery calls of the code with their SQL and the parameters set on them. constants: the task's
+    SQL constants by name (frame_sql), whose statement the argument may name; a local String sql = "..."; counts too."""
     mask = java_mask(code)
     calls = [(m, ASSIGNED.search(mask[:m.start()])) for m in CREATE.finditer(mask)]
     queries = []
@@ -100,11 +112,25 @@ def native_queries(code: str) -> list[NativeQuery]:
         closing = closing_paren(mask, opening)
         if closing < 0:
             continue
-        pieces = [text_of(m.group(1)) for m in LITERAL.finditer(code, opening + 1, closing)]
         # string literals only (the mask blanks them): the statement is known here; anything else is built at run time
-        sql = "".join(pieces) if pieces and not mask[opening + 1:closing].replace("+", "").strip() else None
+        sql = literal_text(code, mask, opening + 1, closing)
+        argument = mask[opening + 1:closing].strip()
+        constant = local = None
+        if sql is None and re.fullmatch(r"(?:this\s*\.\s*)?[A-Za-z_$][\w$]*", argument):
+            name = argument.split(".")[-1].strip()
+            if constants and name in constants:
+                sql, constant = constants[name], name
+            else:
+                declared = list(re.finditer(r"(?<![\w$.])(?:final\s+)?(?:String|var)\s+" + re.escape(name) + r"\s*=", mask[:match.start()]))
+                # assigned again (sql += " AND ..."): the declaration is not the statement that runs
+                changed = len(re.findall(r"(?<![\w$.])" + re.escape(name) + r"\s*(?:\+=|=(?!=))", mask)) > 1
+                if declared and not changed:
+                    value_end = statement_end(mask, declared[-1].end())
+                    sql = literal_text(code, mask, declared[-1].end(), value_end)
+                    local = name if sql is not None else None
         end = statement_end(mask, closing + 1)
-        query = NativeQuery(sql, set_calls(code, mask, closing + 1, end))
+        query = NativeQuery(sql, set_calls(code, mask, closing + 1, end), span=(opening + 1, closing),
+                            constant=constant, variable=local, literal=sql is not None and constant is None)
         if not TERMINAL.search(mask, closing + 1, end):
             if variable:
                 # Query q = entityManager.createNativeQuery(...); q.setParameter(...); ... q.getResultList();
@@ -120,7 +146,9 @@ def native_queries(code: str) -> list[NativeQuery]:
 
 
 def sql_parameters(sql: str) -> list[str]:
-    return list(dict.fromkeys(SQL_PARAMETER.findall(SQL_STRING.sub("''", sql))))
+    """The :names Oracle sees: not in string literals, not in comments."""
+    from .frame_sql import strip_comments
+    return list(dict.fromkeys(SQL_PARAMETER.findall(SQL_STRING.sub("''", strip_comments(sql)))))
 
 
 def bind(code: str, notes: list) -> str:
@@ -141,17 +169,41 @@ def bind(code: str, notes: list) -> str:
     return code
 
 
-def squeeze(sql: str) -> str:
-    """SQL as compared: without whitespace and letter case (the names of the parameters stay)."""
-    return re.sub(r"\s+", "", sql).upper()
+def literal_runs(code: str, mask: str) -> list[str]:
+    """Every expression of string literals joined by + ("SELECT ..." + "FROM ..."), and all of them in order: a
+    statement assembled in parts (StringBuilder.append) is found too."""
+    runs, current, last = [], [], None
+    for match in CODE_TOKEN.finditer(code):
+        if not match.group().startswith('"'):
+            continue  # a comment or a char literal
+        if last is not None and mask[last:match.start()].replace("+", "").strip():
+            runs.append("".join(current)); current = []
+        current.append(text_of(match.group()[1:-1]))
+        last = match.end()
+    if current:
+        runs.append("".join(current))
+    return runs + (["".join(runs)] if len(runs) > 1 else [])
 
 
-def problems(code: str, contract: dict | None = None) -> list[tuple[str, str]]:
-    """(Hungarian for the developer, English for the model) of everything that would fail or differ at run time."""
+def problems(code: str, contract: dict | None = None, constants: list | None = None) -> list[tuple[str, str]]:
+    """(Hungarian for the developer, English for the model) of everything that would fail or differ at run time.
+
+    constants: the task's SQL constants (frame_sql.statements): a statement of the contract is there when the code
+    runs its constant, or when Oracle reads the code's SQL as that statement (token by token, comments removed)."""
+    from . import frame_sql
     found = []
-    queries = native_queries(code)
+    constants = constants or []
+    queries = native_queries(code, {c["name"]: c["sql"] for c in constants})
     for query in queries:
-        if query.sql is None or not query.complete:
+        if query.sql is None:
+            continue
+        lost = frame_sql.swallowed(query.sql) if query.literal else None
+        if lost:
+            found.append(("Az SQL egysoros szövegében a -- megjegyzés az utána következő SQL-t is kikommentezi: "
+                          + lost[:90],
+                          "The SQL string has a -- comment with SQL after it on the same line (" + lost[:90] + "): Oracle "
+                          "ignores everything after --. Remove the comment, or end it with \\n."))
+        if not query.complete:
             continue
         expected, given = sql_parameters(query.sql), [p.name for p in query.parameters]
         short = " ".join(query.sql.split())[:90]
@@ -167,11 +219,25 @@ def problems(code: str, contract: dict | None = None) -> list[tuple[str, str]]:
                           + ", but setParameter is called for it. Use the parameter names of the SQL."))
     if not contract:
         return found
-    literals = squeeze("".join(text_of(m.group(1)) for m in LITERAL.finditer(code)))
     mask = java_mask(code)
+    runs = literal_runs(code, mask)
+    by_required = {c["required"]: c for c in constants}
     for statement in contract.get("sql", []):
-        if squeeze(statement) not in literals:
-            found.append(("A feladat SQL-utasítása hiányzik vagy megváltozott: " + " ".join(statement.split())[:160],
+        constant = by_required.get(statement)
+        if constant and re.search(r"(?<![\w$.])" + re.escape(constant["name"]) + r"(?![\w$])", mask):
+            continue
+        wanted = frame_sql.tokens(statement)
+        executed = [frame_sql.tokens(q.sql) for q in queries if q.sql is not None] + [frame_sql.tokens(run) for run in runs]
+        if any(frame_sql.contains(have, wanted) for have in executed):
+            continue
+        short = " ".join(statement.split())[:160]
+        if constant:
+            found.append(("A feladat SQL-utasítása hiányzik vagy megváltozott (a " + constant["name"] + " konstanst kell "
+                          "futtatni): " + short,
+                          "Run the SQL of the comment through its constant, do not write that SQL yourself: "
+                          "entityManager.createNativeQuery(" + constant["name"] + ")."))
+        else:
+            found.append(("A feladat SQL-utasítása hiányzik vagy megváltozott: " + short,
                           "Run this SQL of the comment exactly as written (same columns, conditions and parameter "
                           "names): " + " ".join(statement.split())))
     position = -1

@@ -95,12 +95,16 @@ def rewrite(query: str, items: dict, display: str) -> tuple[str, list[dict]]:
         last = token.pos + len(token.value)
     parts.append(source[last:])
     inner = ''.join(parts).strip()
-    # The inner query keeps its own lines, so a trailing "--" comment cannot swallow the wrapper.
+    return wrap(inner, display), list(binds.values())
+
+
+def wrap(inner: str, display: str | None) -> str:
+    """The record group's query wrapped for the typed-text filter and the limit (the LOV endpoint's statement).
+    The inner query keeps its own lines, so a trailing "--" comment cannot swallow the wrapper."""
     sql = 'SELECT * FROM (\n' + inner + '\n) lov'
     if display:
         sql += "\n WHERE (:term IS NULL OR UPPER(lov." + display + ") LIKE UPPER(:term) || '%')"
-    sql += '\n FETCH FIRST :limit ROWS ONLY'
-    return sql, list(binds.values())
+    return sql + '\n FETCH FIRST :limit ROWS ONLY'
 
 
 def enabled_flag(plan: dict, gated: bool) -> str:

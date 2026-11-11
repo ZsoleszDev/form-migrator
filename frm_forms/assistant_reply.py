@@ -80,6 +80,8 @@ class Context:
     dto_types: dict = field(default_factory=dict)    # generic contract name -> the module's DTO class
     dto_classes: dict = field(default_factory=dict)  # bean DTO class -> {"generic": [T], "fields": {field: type}}
     parameters: dict = field(default_factory=dict)   # the method's parameters: name -> type
+    # A data endpoint or LOV: its SQL as constants of the service (frame_sql): {"name", "sql", "required", "what"}.
+    sql_constants: list = field(default_factory=list)
 
 
 @dataclass
@@ -585,7 +587,7 @@ def check_service_code(code: str, ctx: Context, reply: Reply, missing: bool) -> 
     if ctx.mode == "service" and not missing:
         # What compiles but fails or differs at run time: unset SQL parameters, a left-out statement or hook.
         from . import answer_checks
-        for hu, en in answer_checks.problems(code, ctx.contract):
+        for hu, en in answer_checks.problems(code, ctx.contract, ctx.sql_constants):
             reply.problem(hu, en)
     if ctx.mode == "service" and (re.search(r"(?<![\w$.])(?:jdbc|DbCalls|jdbcTemplate)\s*\.", mask)
                                   or re.search(r"\b[a-z]\w*Repository\s*\.", mask)):
@@ -775,6 +777,12 @@ def finish(ctx: Context, reply: Reply, service, helpers, service_imports, repo_p
         from . import answer_checks
         body = answer_checks.bind(body, fixes)
         helpers = [answer_checks.bind(h, fixes) for h in helpers]
+        if ctx.sql_constants:
+            # The endpoint's SQL retyped by the model: its constant runs instead (the comment's SQL exactly).
+            from . import frame_sql
+            used = set()
+            body = frame_sql.use_constants(body, ctx.sql_constants, fixes, reply.warnings, used)
+            helpers = [frame_sql.use_constants(h, ctx.sql_constants, fixes, reply.warnings, used) for h in helpers]
     for text in dict.fromkeys(fixes):
         reply.note(text)
     # Repository methods: reuse identical existing ones, rename colliding ones (and the service calls).

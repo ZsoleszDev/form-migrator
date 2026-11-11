@@ -71,7 +71,7 @@ def delombok(source: str) -> str:
     return source
 
 
-def compile_dps(test: unittest.TestCase, output: Path, work: Path) -> None:
+def compile_dps(test: unittest.TestCase, output: Path, work: Path, cls: str = "Orders") -> None:
     """The company module's DPS service with its CL DTOs and helpers, as Java 11 (the WBS/REST layers need more host)."""
     sources = []
     for path in sorted((output / "backend/CL").glob("*.java")):
@@ -81,7 +81,12 @@ def compile_dps(test: unittest.TestCase, output: Path, work: Path) -> None:
         copy.parent.mkdir(parents=True, exist_ok=True)
         copy.write_text(delombok(path.read_text(encoding="utf-8")), encoding="utf-8")
         sources.append(copy)
-    sources += [output / "backend/DPS" / name for name in ("OrdersServiceImpl.java", "OrdersServiceBase.java", "OrdersService.java")]
+    from java_support import written_frames
+    for name in ("ServiceImpl.java", "ServiceBase.java", "Service.java"):
+        # the frames the assistant has not written yet are empty (they compile once written): `return null;`
+        copy = work / "src" / (cls + name)
+        copy.write_text(written_frames((output / "backend/DPS" / (cls + name)).read_text(encoding="utf-8")), encoding="utf-8")
+        sources.append(copy)
     sources += write_stubs(work / "stubs")
     for fullname, body in COMPANY_STUBS.items():
         package, _ = fullname.rsplit(".", 1)

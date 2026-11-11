@@ -501,6 +501,16 @@ def build(packet: dict, persistence: list[dict], helpers: dict, options, *, plsq
                  FRAME_RULES.replace("{data_rule}", SERVICE_RULE if service else
                                      jpa_rule(bool(used), generated) if data_access == "jpa" else JDBC_RULE.replace("{jdbc_helpers}", ""))]
         hint_kind = "frame"
+        from . import frame_sql
+        constants = frame_sql.statements(packet) if service else []
+        if constants:
+            # The SQL is the migrator's: run it by name, never retype it (a long statement rarely comes back exactly).
+            first = constants[0]["name"]
+            parts[1] = (parts[1].replace("Run the Oracle SQL of\n   the comments as written, as native SQL",
+                                         "Run the SQL constants listed below\n   (the exact SQL of the comment), as native SQL")
+                        .replace("createNativeQuery(sql)", "createNativeQuery(" + first + ")"))
+            parts.append("SQL constants of the service (the migrator declares them with the comment's SQL; use them, "
+                         "never write that SQL yourself):\n" + "\n".join(frame_sql.prompt_lines(constants)))
     else:
         parts = ["Rewrite this Java method so that it implements the original Oracle Forms code in plain Java.",
                  rules(data_access, bool(used), plsql_values, bool(helpers), action_api, bool(packet.get("db_routines")),

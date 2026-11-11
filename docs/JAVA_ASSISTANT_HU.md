@@ -298,10 +298,41 @@ A fordító nem látja a natív lekérdezések hibáit, ezért ezeket a migráto
 - **Paraméterek:** az SQL minden `:név` paramétere kap értéket, és a `setParameter` nem állít be olyan nevet, amely
   nincs az SQL-ben. Csak a szövegliterálként írt SQL-t ítéli meg; a futáskor összerakottat és a továbbadott
   lekérdezést nem.
-- **Adatvégpont és LOV:** a megjegyzés SQL-je változatlanul benne van a kódban (a kis- és nagybetű, a sortörés nem
-  számít), és a megjegyzésben megnevezett triggereket a metódus meghívja, a megadott sorrendben. A lista lapozása
-  kétféleképp is írható (`OFFSET … FETCH` az SQL-ben, vagy `setFirstResult`/`setMaxResults`), ezért ott csak a blokk
-  lekérdezése kötelező. Az elvárt SQL és a hívások a `backend-plan.json` végpontjának `contract` mezőjében vannak.
+- **Adatvégpont és LOV:** a kód a megjegyzés SQL-jét futtatja, és a megjegyzésben megnevezett triggereket a
+  megadott sorrendben hívja. A lista lapozása kétféleképp is írható (`OFFSET … FETCH` az SQL-ben, vagy
+  `setFirstResult`/`setMaxResults`), ezért ott csak a blokk lekérdezése kötelező. Az elvárt SQL és a hívások a
+  `backend-plan.json` végpontjának `contract` mezőjében vannak.
+
+### Az adatvégpontok és a LOV-ok SQL-je: konstansok, Oracle szerinti összehasonlítás
+
+Ezeknek a metódusoknak az SQL-je a migrátoré (a blokk lekérdezése, a `FOR UPDATE NOWAIT` zárolás, az
+`INSERT`/`UPDATE`/`DELETE`, a LOV rekordcsoport-lekérdezése a szűréssel és a limittel). Korábban a modellnek a
+megjegyzésből kellett betűre újragépelnie. Egy hosszú lekérdezés ritkán jött vissza pontosan, és az ellenőrzés két
+irányban is tévedett:
+
+- elutasította a **helyes** másolatot, ha a modell elhagyta a rekordcsoport `--` megjegyzését, `AS`-t írt az alias
+  elé, vagy soronként darabolta a szöveget (két hívás után hibás vázlat lett belőle);
+- elfogadta a **hibásat**: egysoros Java-szövegben a `-- megjegyzés` az utána következő teljes SQL-t kikommentezi, de
+  mivel az összehasonlítás eldobta a szóközöket és a sortöréseket, ez nem látszott.
+
+Most (`frm_forms/frame_sql.py`):
+
+- **Konstansok.** Az utasítások a service konstansai: `LOV_INPTIP_SQL`, `LIST_X_SQL`, `UPDATE_X_LOCK_SQL`,
+  `UPDATE_X_SQL`, `CREATE_X_SQL`, `DELETE_X_LOCK_SQL`, `DELETE_X_SQL`. A prompt felsorolja őket a paramétereikkel, a
+  modell név szerint futtatja őket (`entityManager.createNativeQuery(LOV_INPTIP_SQL)`). Így nincs mit elgépelni, és
+  CPU-n a hosszú SQL kimeneti tokenjei is megspórolódnak. A metódus által használt konstanst a migrátor deklarálja az
+  osztály elején, soronként, a megjegyzések megtartásával (`"...\n" + "..."`). A már legenerált modulok is így
+  működnek, újragenerálás nélkül.
+- **Összehasonlítás Oracle szerint.** Tokenenként történik, a megjegyzéseket úgy hagyja el, ahogy az Oracle, és nem
+  számít a kis- és nagybetű, a sortörés vagy az alias előtti `AS`. Ami Oracle szerint ugyanaz az utasítás, az
+  átmegy, és a modell kódjában úgy marad, ahogy írta.
+- **Helyi javítás.** Ha a modell újragépelt SQL-je eltér, de egyértelműen ugyanaz a szándék (ugyanazok a paraméterek,
+  majdnem ugyanazok a tokenek, például egy sorba írt `--` megjegyzés vagy két összeragadt szó), a lekérdezés a konstanst
+  futtatja helyette. Ehhez nem kell újabb AI-hívás; a javaslatnál figyelmeztetés jelzi. Ha az eltérés érdemi (más
+  feltétel, más paraméter), a javítási kérés arra kéri a modellt, hogy a konstanst futtassa.
+- **Minden natív lekérdezésnél:** ha egy egysoros SQL-szövegben a `--` megjegyzés után még SQL következik, az hiba,
+  és pontos javítási kérés megy vissza. A `String sql = "..."` változóban tartott SQL is ellenőrzött, kivéve, ha a
+  változót később módosítják.
 
 A megjegyzések SQL-je az `analysis/db-statements.json`-ba is bekerül, így a `verify-db` még az AI futása előtt
 lefordítja az Oracle-ben (futtatás nélkül): a hibás oszlopnév vagy hiányzó jogosultság ott derül ki.

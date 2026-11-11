@@ -1,5 +1,20 @@
 # Következő változat (a 4.35 után) — minden metódust az AI ír a service-ben, tippekkel; entity és üres repository; valódi mentés, Forms-sorrend
 
+- **Az adatvégpontok és a LOV-ok SQL-je: konstansok, Oracle szerinti összehasonlítás, helyi javítás.**
+  - *A hiba:* egy hosszabb LOV-lekérdezés két hívás után is hibás vázlat maradt („A feladat SQL-utasítása hiányzik vagy
+    megváltozott”). Az ellenőrzés betűre várta vissza a megjegyzés SQL-jét (csak a szóközt és a kis- és nagybetűt
+    hagyta figyelmen kívül). Elutasította a helyes másolatot (elhagyott `--` megjegyzés, `AS` az alias előtt, soronként
+    darabolt szöveg), és elfogadta a hibásat: egysoros szövegben a `--` az utána következő SQL-t kikommentezi.
+  - *Most:* a végpontok SQL-je a service konstansa (`LOV_INPTIP_SQL`, `UPDATE_X_LOCK_SQL` …). A prompt felsorolja
+    őket, a modell név szerint futtatja őket, a migrátor deklarálja a használtakat, a már generált modulokban is. Az
+    összehasonlítás tokenenként történik, a megjegyzéseket úgy hagyja el, ahogy az Oracle. Az eltérő, de egyértelműen
+    ugyanazt szándékozó újragépelt SQL helyett a konstans fut, AI-hívás nélkül, figyelmeztetéssel. Minden natív
+    lekérdezésnél hibának számít, ha egysoros szövegben a `--` megjegyzés után még SQL következik.
+  - *Ellenőrzés:* `tests/test_frame_sql.py`. Egy hosszú, megjegyzéses, al-lekérdezéses, bindos rekordcsoport-lekérdezés
+    a céges formátumban: a hibás egysoros másolatból egy hívással javaslat lesz, beilleszthető, és a DPS ServiceImpl
+    Java 11-ként lefordul. A helyes másolat változatlanul marad; az érdemben eltérő SQL javítási kérést kap. Ugyanez
+    egy írási végpont zárolására is igazolt.
+
 - **A Java asszisztens oldal követi az AI-t, és nem ragad a korábbi állapotban.**
   - *A hiba:* az oldal az előzőleg kiválasztott modult mutatta. Amikor a migrálás után az AI rögtön dolgozni kezdett
     az új modulon, a munkasor élő kártyája rejtve maradt (a modulhoz kötött nézet csak a saját futását mutatta),
