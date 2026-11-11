@@ -48,6 +48,32 @@ class DiagnosedCORSMiddleware(CORSMiddleware):
         return response
 
 
+class FreshResponses:
+    """No stale page: the API answers are live state (the AI queue, its progress, the task list) and are never taken
+    from a browser or proxy cache; the UI's HTML is revalidated on every load, so after a rebuild (npm run build:ui)
+    the browser loads the new application, not a cached index.html of the old one. Hashed scripts stay cacheable."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        api = scope.get("path", "").startswith("/api/")
+
+        async def sending(message):
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers", []))
+                names = {key.lower() for key, _ in headers}
+                html = any(key.lower() == b"content-type" and value.startswith(b"text/html") for key, value in headers)
+                if b"cache-control" not in names and (api or html):
+                    headers.append((b"cache-control", b"no-store" if api else b"no-cache"))
+                    message = {**message, "headers": headers}
+            await send(message)
+        await self.app(scope, receive, sending)
+
+
 class LocalRequestGuard:
     """Bound request bodies and require an explicit header for local mutations.
 
@@ -549,6 +575,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         def no_ui():
             return {"message": "A backend fut. A frontend: http://localhost:4200. Buildhez a web-ui mappában npm run build.", "health": "/api/health"}
 
+    app.add_middleware(FreshResponses)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1", "[::1]"])
     app.add_middleware(LocalRequestGuard, origins=settings.cors_origins,
                        max_body=settings.max_upload_bytes + 3 * settings.max_json_bytes + 65536)

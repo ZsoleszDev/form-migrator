@@ -1,6 +1,6 @@
 import {
   Component, EventEmitter, HostListener, Input, OnChanges, OnDestroy, Output,
-  SimpleChanges, computed, effect, inject, signal,
+  SimpleChanges, computed, effect, inject, signal, untracked,
 } from '@angular/core';
 import { FormsModule, FormControl, ReactiveFormsModule } from '@angular/forms';
 import { HttpBackend, HttpClient, HttpErrorResponse, HttpHeaders } from '@angular/common/http';
@@ -133,13 +133,20 @@ const ORACLE_TYPES = ['VARCHAR2', 'NVARCHAR2', 'CHAR', 'NCHAR', 'NUMBER', 'FLOAT
         <p-button label="Modul frissítése" severity="secondary" variant="outlined" class="self-end"
           [disabled]="locked() || dirty() || !jobId()" (onClick)="reload()" />
       </div>
+      <label class="flex items-center gap-2 text-sm">
+        <p-checkbox [binary]="true" [ngModel]="follow()" (ngModelChange)="setFollow($event)" ariaLabel="A futó AI-feladat követése"
+          inputId="assistant-follow" />
+        <span>A futó AI-feladat követése: a panel arra a modulra és triggerre vált, amelyiken az AI dolgozik, és a végén
+          megmutatja az eredményt.</span>
+      </label>
       @if (loading()) { <p-progressbar mode="indeterminate" [style]="{height:'4px'}" /> }
       @if (!completedJobs().length) {
         <p-message severity="info">A Generálás fülön készíts modult. A kész modul itt és a Feladatok fülön is kiválasztható.</p-message>
       }
       @if (index(); as workspace) {
-              <app-migrator-ai-queue [apiBase]="apiBase" [jobId]="jobId()" [summary]="workspace.auto ?? null"
-                [tasks]="overviewTasks()" [selectedTaskId]="taskId()" (finished)="queueFinished($event)" (pick)="selectTask($event)" />
+              <app-migrator-ai-queue [apiBase]="apiBase" [jobId]="jobId()" [summary]="workspace.auto ?? null" [jobNames]="jobNames()"
+                [tasks]="overviewTasks()" [selectedTaskId]="taskId()" (finished)="queueFinished($event)" (pick)="selectTask($event)"
+                (activeRun)="queueActive($event)" (switchJob)="openFollowedJob($event)" />
               <label class="flex flex-col gap-2"><span class="font-medium">Végpont (egyenként)</span>
                 <p-select appendTo="body" [ngModel]="taskId()" (ngModelChange)="selectTask($event)" [options]="taskOptions()" optionValue="value" optionLabel="label"
                   placeholder="Nincs befejezendő végpont" ariaLabel="Asszisztens végpont" [disabled]="locked() || dirty()" class="w-full" />
@@ -527,6 +534,17 @@ export class MigratorAssistant implements OnChanges, OnDestroy {
   readonly promptPreview = signal<PromptPreview | null>(null);
   private pendingExchangeId = '';
   private readonly autoOpened = new Set<string>();
+  /** Follow the AI queue: the module and the trigger the model works on now, and its result when it is done. */
+  readonly follow = signal(true);
+  /** The run the model works on now (any module), from the AI queue. */
+  private readonly aiActive = signal<AiRun | null>(null);
+  /** Finished runs of this module not shown yet: kept while the panel is busy (loading, a draft), never lost. */
+  private readonly pendingFinished = signal<AiRun[]>([]);
+  private followedRun = '';
+  private followedModuleRun = '';
+  private draining = false;
+  /** The manual run this panel follows: a reload (a saved table, the queue) never stops following it. */
+  private runToken = 0;
   private exchangeEpoch = 0;
   private exchangeTimer?: ReturnType<typeof setTimeout>;
   readonly exchangeOptions = computed(() => this.exchanges().map(item => ({value: item.id,
@@ -539,6 +557,7 @@ export class MigratorAssistant implements OnChanges, OnDestroy {
     || Boolean(this.index()?.input_bindings.file_changed || this.index()?.input_bindings.contract_changed));
   private readonly jobChoices = signal<{id: string; label: string}[]>([]);
   readonly completedJobs = this.jobChoices.asReadonly();
+  readonly jobNames = computed(() => Object.fromEntries(this.jobChoices().map(job => [job.id, job.label])));
   readonly selectedTask = computed(() => this.index()?.tasks.find(t => t.id === this.taskId()));
   readonly overviewTasks = computed(() => [...(this.index()?.tasks ?? []), ...(this.index()?.done_tasks ?? [])]);
   readonly selectedTable = computed(() => this.index()?.schema.tables.find(t => t.table === this.tableName()));
@@ -596,11 +615,19 @@ export class MigratorAssistant implements OnChanges, OnDestroy {
     });
     effect(() => this.busyChange.emit(this.locked()));
     effect(() => this.dirtyChange.emit(this.dirty()));
+    // The queue's news (a run started, a run finished) is applied as soon as the panel is free: an event that came
+    // while it was loading or had a draft waits here instead of being dropped (the page then showed an old state).
+    effect(() => {
+      const busy = this.locked() || this.dirty();
+      this.aiActive(); this.pendingFinished(); this.follow();
+      if (!busy) untracked(() => void this.drainQueue());
+    });
   }
 
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['apiBase']) {
-      ++this.epoch; clearTimeout(this.pollTimer);
+      ++this.epoch; ++this.runToken; clearTimeout(this.pollTimer);
+      this.aiActive.set(null); this.pendingFinished.set([]); this.followedRun = ''; this.followedModuleRun = '';
       this.index.set(null); this.jobId.set(''); this.running.set(false); this.runState.set(''); this.loading.set(false); this.mutating.set(false);
       this.schemaDirty.set(false); this.bindingsDirty.set(false); this.proposal.set(null);
       this.resetAiLog();
@@ -663,15 +690,32 @@ export class MigratorAssistant implements OnChanges, OnDestroy {
         const value = saved[key]; if (typeof value === 'number' && Number.isInteger(value) && value >= low && value <= high) control.setValue(value);
       }
       if (typeof saved['think'] === 'string' && this.thinkOptions.some(option => option.value === saved['think'])) this.think.setValue(saved['think']);
+      this.follow.set(localStorage.getItem('frm-assistant-follow') !== 'off');
     } catch { /* optional browser preferences */ }
   }
 
-  async selectJob(id: string): Promise<void> {
+  setFollow(value: boolean): void {
+    this.follow.set(value);
+    // Turned on: follow what runs now, not only the next run.
+    if (value) { this.followedRun = ''; this.followedModuleRun = ''; }
+    try { localStorage.setItem('frm-assistant-follow', value ? 'on' : 'off'); } catch { /* optional */ }
+  }
+
+  /** automatic: the panel follows the AI queue (no user choice, so following stays on). */
+  async selectJob(id: string, automatic = false): Promise<void> {
     if (this.locked() || this.dirty()) {
       this.jobControl.setValue(this.jobId(), {emitEvent: false});
       this.error.set('Előbb mentsd vagy vesd el a vázlatot, illetve várd meg a futó feladatot.'); return;
     }
     if (!this.completedJobs().some(j => j.id === id)) return;
+    // The developer chose another module than the one the AI works on: the panel stays there.
+    const ai = this.aiActive();
+    if (!automatic && ai && ai.job_id !== id && this.follow()) this.setFollow(false);
+    if (id !== this.jobId()) {
+      // A manual run of the previous module is no longer this panel's (the AI queue still shows it live).
+      ++this.runToken; clearTimeout(this.pollTimer); this.running.set(false); this.runState.set('');
+      this.pendingFinished.set([]); this.followedRun = '';
+    }
     this.jobId.set(id); this.jobControl.setValue(id, {emitEvent: false}); this.moduleSelected.emit(id);
     this.proposal.set(null); this.previewText.set(''); this.notice.set(''); this.error.set('');
     this.resetAiLog();
@@ -835,41 +879,96 @@ export class MigratorAssistant implements OnChanges, OnDestroy {
       && !this.missingKeys().length;
   }
   /** A run of the queue finished for this module: the task list, the proposals and the files changed. */
-  async queueFinished(run: AiRun): Promise<void> {
-    if (run.job_id !== this.jobId() || this.dirty() || this.locked()) return;
-    if (run.status === 'completed' && run.applied) this.moduleUpdated.emit(this.jobId());
-    if (!this.running()) await this.reload();
+  queueFinished(run: AiRun): void {
+    if (run.job_id === this.jobId()) this.pendingFinished.update(runs => [...runs, run]);
+  }
+  /** The model started another run (or the queue is idle: null). */
+  queueActive(run: AiRun | null): void { this.aiActive.set(run); }
+  /** "Átváltás erre a modulra" on the live card of another module's run. */
+  async openFollowedJob(id: string): Promise<void> {
+    if (!this.follow()) this.setFollow(true);
+    this.followedModuleRun = this.aiActive()?.id ?? '';
+    await this.selectJob(id, true);
+  }
+  private async drainQueue(): Promise<void> {
+    if (this.draining || this.locked() || this.dirty() || !this.jobId()) return;
+    this.draining = true;
+    const seen = this.aiActive();
+    try {
+      const finished = this.pendingFinished().filter(run => run.job_id === this.jobId());
+      if (this.pendingFinished().length) this.pendingFinished.set([]);
+      if (finished.length) {
+        if (finished.some(run => run.status === 'completed' && run.applied)) this.moduleUpdated.emit(this.jobId());
+        if (!this.running()) {
+          // The task list, the proposals and the files changed: read them, then show the result of the last run.
+          await this.reload();
+          const last = [...finished].reverse().find(run => run.proposal_id);
+          if (last?.proposal_id && (this.follow() || last.task_id === this.taskId()) && this.proposal()?.id !== last.proposal_id
+              && !this.locked() && !this.dirty()) await this.showProposal(last.proposal_id);
+        }
+      }
+      const run = this.aiActive();
+      if (!run || !this.follow() || this.locked() || this.dirty()) return;
+      if (run.job_id !== this.jobId()) {
+        // The AI works on another module: open it (not while this panel follows its own manual run).
+        if (run.id !== this.followedModuleRun && !this.running() && this.completedJobs().some(job => job.id === run.job_id)) {
+          this.followedModuleRun = run.id;
+          await this.selectJob(run.job_id, true);
+        }
+      }
+      if (run.job_id === this.jobId() && run.id !== this.followedRun && this.index()) {
+        this.followedRun = run.id;
+        this.followTask(run);
+      }
+    } finally {
+      this.draining = false;
+      // What arrived meanwhile (the effect skipped it while this ran) is applied right after.
+      if (this.pendingFinished().length || this.aiActive() !== seen) setTimeout(() => void this.drainQueue(), 0);
+    }
+  }
+  /** The trigger the model works on becomes the selected one; the last result stays until this run's replaces it. */
+  private followTask(run: AiRun): void {
+    if (!this.index()?.tasks.some(task => task.id === run.task_id)) return;
+    if (this.taskId() !== run.task_id) {
+      this.taskId.set(run.task_id); this.chooseTaskTable(); this.loadColumnDraft();
+    }
+    if (this.aiLogOpen() && run.exchange_id) {
+      // The open AI log shows this run's request and its answer as it is written.
+      this.resetAiLog(true); this.pendingExchangeId = run.exchange_id; void this.loadAiLog();
+    }
   }
   async generate(): Promise<void> {
     if (!this.canGenerate()) return;
     if (!this.ollamaUrl.value.trim() || this.ollamaUrl.invalid || !this.ollamaModel.value.trim() || this.ollamaModel.invalid) {
       this.error.set('A közös AI-beállításoknál add meg a laptop Ollama alapcímét és a pontos modellnevet.'); return;
     }
-    this.error.set(''); this.notice.set(''); this.running.set(true); const epoch = this.epoch;
+    this.error.set(''); this.notice.set(''); this.running.set(true); const token = ++this.runToken;
     try { localStorage.setItem('frm-assistant-options-v2:' + this.apiBase, JSON.stringify(this.options())); } catch { /* inference can run without storage */ }
     try {
       const run = await this.post<Run>('', {task_id: this.taskId(), url: this.ollamaUrl.value.trim(), model: this.ollamaModel.value.trim(),
         project_context: this.projectContext.value, data_access: 'service',
         ...this.options()});
-      if (!this.current(epoch)) return;
+      if (!this.followsRun(token)) return;
       this.pendingExchangeId = run.exchange_id ?? '';
       this.runState.set(run.status === 'queued' ? 'queued' : 'running');
       this.promptPreview.set(null);
-      this.schedulePoll(run.id, epoch, 0);
-    } catch (error) { if (this.current(epoch)) { this.running.set(false); this.failure(error); } }
+      this.schedulePoll(run.id, token, 0);
+    } catch (error) { if (this.followsRun(token)) { this.running.set(false); this.failure(error); } }
   }
-  private schedulePoll(id: string, epoch: number, delay = 1800): void {
-    clearTimeout(this.pollTimer); this.pollTimer = setTimeout(() => void this.poll(id, epoch), delay);
+  /** Still this panel's run: the same module (a reload or a saved table in between does not matter). */
+  private followsRun(token: number): boolean { return !this.destroyed && token === this.runToken; }
+  private schedulePoll(id: string, token: number, delay = 1800): void {
+    clearTimeout(this.pollTimer); this.pollTimer = setTimeout(() => void this.poll(id, token), delay);
   }
-  private async poll(id: string, epoch: number): Promise<void> {
+  private async poll(id: string, token: number): Promise<void> {
     try {
-      const run = await this.get<Run>('/runs/' + id); if (!this.current(epoch)) return;
+      const run = await this.get<Run>('/runs/' + id); if (!this.followsRun(token)) return;
       if (run.exchange_id) this.pendingExchangeId = run.exchange_id;
       if (run.status === 'running' || run.status === 'queued') {
         this.runState.set(run.status);
         // While the model works, the open AI log already shows the request that was sent.
         if (this.aiLogOpen() && run.exchange_id && this.exchange()?.id !== run.exchange_id) void this.showExchange(run.exchange_id, true);
-        this.schedulePoll(id, epoch); return;
+        this.schedulePoll(id, token); return;
       }
       this.running.set(false); this.runState.set('');
       if (run.status === 'cancelled') { this.notice.set('A futás leállítva.'); return; }
@@ -878,10 +977,13 @@ export class MigratorAssistant implements OnChanges, OnDestroy {
         this.openFailedExchange(run.exchange_id);
         return;
       }
-      await this.reload();
+      // A draft or a busy panel (loading) must not swallow the result: wait until it is free.
+      for (let i = 0; i < 100 && this.followsRun(token) && (this.locked() || this.dirty()); i++) await new Promise(r => setTimeout(r, 300));
+      if (!this.followsRun(token)) return;
+      if (!this.dirty()) await this.reload();
       if (this.proposal()?.id !== run.result.id) await this.showProposal(run.result.id);
       if (run.applied) this.notice.set('A javaslat automatikusan beillesztve (az eredeti fájl mentve, a diff a javaslatban). A letölthető ZIP frissült.');
-    } catch (error) { if (this.current(epoch)) { this.running.set(false); this.failure(error); } }
+    } catch (error) { if (this.followsRun(token)) { this.running.set(false); this.failure(error); } }
   }
   async showProposal(id: string): Promise<void> {
     if (!id || this.locked()) return;

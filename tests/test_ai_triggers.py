@@ -861,6 +861,14 @@ class QueueTests(unittest.TestCase):
                 time.sleep(0.02)
             self.assertEqual(state["active"]["id"], first["id"])
             self.assertIn(state["active"]["progress"]["phase"], {"connecting", "prompt"})
+            # Another module's view: nothing of its own runs, but it sees this run live (the panel shows it and can
+            # switch to that module) instead of only "the AI works on another module".
+            other = self.manager.queue_state("job2")
+            self.assertIsNone(other["active"])
+            self.assertTrue(other["busy_with_other_job"])
+            self.assertEqual((other["other_active"]["id"], other["other_active"]["job_id"]), (first["id"], "job1"))
+            self.assertIn(other["other_active"]["progress"]["phase"], {"connecting", "prompt"})
+            self.assertIsNone(state["other_active"])
             stopped = self.manager.stop("job1", CancelRequest(clear_queue=True))
             self.assertEqual(stopped["cancelled"], first["id"])
             state = self.idle()

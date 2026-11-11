@@ -135,6 +135,25 @@ Az Ollama-hívás streamelt. A fejléc AI-jelzője, a Java asszisztens munkasora
 A leállítás bontja a kapcsolatot, így az Ollama is abbahagyja; az időkorlát a néma prompt-feldolgozás alatt is
 érvényes. A megszakadt válasz eddigi része az AI-naplóba kerül.
 
+### A panel követi az AI-t
+
+A Java asszisztens panelje alapból **követi a futó AI-feladatot** (a modulválasztó alatti jelölőnégyzet):
+
+- ha az AI egy másik modulon dolgozik, a panel arra a modulra vált; ha a követést kikapcsolod, a panel marad, az
+  élő kártya pedig megmutatja, melyik modulon fut a kérés, és az **Átváltás erre a modulra** gombbal odaléphetsz;
+- a modulon belül a futó trigger lesz a kiválasztott végpont, a nyitott AI-kommunikáció a futó kérést mutatja;
+- amikor a futás véget ér, megjelenik az eredménye (a javaslat és a diff), a következő futás élő állapota pedig
+  fent látszik;
+- az ebben az ablakban indított (nem tömeges) generálás végén az asszisztens az új modult nyitja meg;
+- ha a modulválasztóban kézzel másik modult választasz, mint amin az AI dolgozik, a követés kikapcsol.
+
+A sor eseményei (futás indult, véget ért) nem vesznek el akkor sem, ha a panel épp tölt vagy táblavázlat van
+nyitva: a vázlat mentése vagy elvetése után érvényesülnek. A kézi **Trigger javásítása** futás követése a
+**Modul frissítése** gombtól vagy egy táblamentéstől sem szakad meg.
+
+Az API válaszai `Cache-Control: no-store`, az `index.html` `no-cache` fejlécet kap: a böngésző nem mutat régi
+sorállapotot, és a felület újrafordítása után nem a gyorsítótárban maradt régi oldal töltődik be.
+
 ## Laptopbarát beállítások
 
 | Beállítás | Alap | Megjegyzés |

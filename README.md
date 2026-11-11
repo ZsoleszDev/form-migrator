@@ -100,13 +100,11 @@ configban `"jpa_namespace": "jakarta"` adható meg.
 A meglévő naplózási és tranzakciós keret megmarad. A generált kódot a céges
 projektben fordítani és az eredeti működéssel tesztelni kell.
 
-A kész webfelület benne van a csomagban; normál használathoz nem kell npm.
-**4.35:** a csomagban lévő kész felület (`web-dist`) még a 4.33.3-as Angular-forrásból
-készült. Az új AI-munkasorhoz, a reszponzív nézetekhez és a frontend AI-átírás paneljéhez fordítsd újra: `npm ci`,
-majd `npm run build:ui` (Node.js 22.22.3+ vagy 24.15+ kell az Angular CLI-hez).
-Addig a `http://localhost:8000/ai-log` oldal mutatja és vezérli az AI-sort (indítás, leállítás,
-automatizmusok), ezt a Python backend szolgálja ki. Az automatikus futás és beillesztés a backendben
-történik, tehát a régi felülettel is működik.
+A kész webfelület benne van a csomagban; normál használathoz nem kell npm. A csomagban lévő `web-dist` a
+jelenlegi Angular-forrásból készült: benne van az AI-munkasor élő nézete, és a Java asszisztens követi a futó
+AI-feladatot (modul, trigger, a végén az eredmény). Ha az `angular-frontend` forrást módosítod, fordítsd újra:
+`npm ci`, majd `npm run build:ui` (Node.js 22.22.3+ vagy 24.15+ kell az Angular CLI-hez). Az AI-sort a
+`http://localhost:8000/ai-log` oldal is mutatja és vezérli; ezt a Python backend szolgálja ki.
 Saját Angular-projektben az `angular-frontend/migrator-app.ts` és
 `angular-frontend/migrator-assistant.ts` és `angular-frontend/migrator-ai-queue.ts` fájlok használhatók együtt.
 

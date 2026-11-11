@@ -578,8 +578,12 @@ class AssistantManager:
             finished = [view(r) for r in reversed(list(self.runs.values()))
                         if r["status"] in FINISHED and (job_id is None or r["job_id"] == job_id)][:30]
             settings = self.settings()
+            other = bool(active and job_id and active["job_id"] != job_id)
             return {"active": view(active) if active and (job_id is None or active["job_id"] == job_id) else None,
-                    "busy_with_other_job": bool(active and job_id and active["job_id"] != job_id),
+                    "busy_with_other_job": other,
+                    # The run of another module, live: the panel shows what the AI does right now (and can switch
+                    # to that module) instead of only "the AI works on another module".
+                    "other_active": view(active) if other else None,
                     "queued": queued, "finished": finished,
                     "settings": {k: settings[k] for k in ("url", "model", "auto_run", "auto_apply", "num_ctx", "num_predict",
                                                           "timeout", "frontend_ai")},

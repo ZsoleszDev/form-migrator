@@ -1,5 +1,21 @@
 # Következő változat (a 4.35 után) — minden metódust az AI ír a service-ben, tippekkel; entity és üres repository; valódi mentés, Forms-sorrend
 
+- **A Java asszisztens oldal követi az AI-t, és nem ragad a korábbi állapotban.**
+  - *A hiba:* az oldal az előzőleg kiválasztott modult mutatta. Amikor a migrálás után az AI rögtön dolgozni kezdett
+    az új modulon, a munkasor élő kártyája rejtve maradt (a modulhoz kötött nézet csak a saját futását mutatta),
+    és a befejezett futás eredménye sem jelent meg: a frissítés csak akkor töltött javaslatot, ha még egy sem volt
+    a képernyőn, a panel elfoglaltsága alatt érkezett „futás kész” jelzés pedig elveszett. A kézi futás követése a
+    **Modul frissítése** gombra vagy egy táblamentésre megszakadt, a gomb „fut” állapotban maradt.
+  - *Most:* a panel alapból követi a futó AI-feladatot (kikapcsolható): a másik modulra vált, a futó triggert
+    választja ki, a végén megmutatja az eredményt. A sor `other_active` mezőben a másik modul futását is élőben
+    adja, az élő kártya megnevezi a modult, és egy gombbal odavált. Az ebben az ablakban indított generálás végén
+    az asszisztens az új modult nyitja meg. A sor eseményei megvárják, amíg a panel szabad.
+  - *A régi felület:* a csomag `web-dist`-je eddig a 4.33.3-as forrásból készült, abban nem volt AI-munkasor és
+    élő nézet. Most a jelenlegi forrásból készült. Az API válaszai `no-store`, az `index.html` `no-cache`
+    fejlécet kap, így a böngésző nem mutat régi állapotot és régi oldalt.
+  - *Ellenőrzés:* `tests/assistant_follow_browser.cjs` (valódi felület, backend és lassan streamelő Ollama-utánzat;
+    a régi kódon a bejelentett két hibát adja), a sor és a fejlécek Python-tesztjei.
+
 - **Kódstílus a Java asszisztens promptjában.** A helyi modell kódja nem követte a céges PMD-szabályokat: a több
   soros kifejezésben a `+` és az `&&` a sor végére került, a változókat pedig túl korán hozta létre. A prompt most
   rövid kódstílus-részt kap egy mintával: az operátor az új sor elején áll, a lokális változó legfeljebb 5 sorral az
