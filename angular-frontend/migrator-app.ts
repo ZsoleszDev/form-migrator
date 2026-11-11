@@ -3333,7 +3333,13 @@ export class Migrator implements OnInit, OnDestroy {
     try {
       const result = await firstValueFrom(this.http.get<{ jobs: Job[] }>(this.url('/jobs')));
       if (this.destroyed || this.base() !== base) return;
+      const previous = new Map(this.jobs().map((job) => [job.id, job.status]));
       this.jobs.set(result.jobs);
+      // A module generated here has just finished: the Java assistant opens it (its AI queue starts now), unless the
+      // assistant is busy or has a draft. Before, it kept the previous module and its old state.
+      const finished = result.jobs.find((job) => job.status === 'completed' && !job.batch
+        && previous.has(job.id) && previous.get(job.id) !== 'completed');
+      if (finished && !this.assistantBusy() && !this.assistantDirty()) this.assistantJobId.set(finished.id);
       this.connectionError.set('');
       const selected = this.selectedJob();
       if (selected?.status === 'completed' && before?.status !== 'completed')

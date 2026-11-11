@@ -149,6 +149,20 @@ class WebTests(unittest.TestCase):
         self.client.__enter__()
         self.addCleanup(self.client.__exit__, None, None, None)
 
+    def test_live_state_is_never_cached_and_the_ui_page_is_revalidated(self):
+        # The AI queue and the task list are live: a browser must not show a stored answer. index.html is revalidated,
+        # so a rebuilt UI (new script hashes) is loaded instead of a cached old page.
+        self.assertEqual(self.client.get('/api/health').headers['cache-control'], 'no-store')
+        self.assertEqual(self.client.get('/api/assistant/queue').headers['cache-control'], 'no-store')
+        static = self.root / 'ui'
+        (static / 'assets').mkdir(parents=True)
+        (static / 'index.html').write_text('<!doctype html><title>UI</title>', encoding='utf-8')
+        (static / 'assets' / 'main-ABC.js').write_text('console.log(1);', encoding='utf-8')
+        with TestClient(create_app(Settings(data_dir=self.root / 'data2', static_dir=static)), base_url='http://localhost:8000') as client:
+            self.assertEqual(client.get('/').headers['cache-control'], 'no-cache')
+            self.assertNotIn('cache-control', client.get('/assets/main-ABC.js').headers)  # hashed: may be cached
+            self.assertEqual(client.get('/ai-log').headers['cache-control'], 'no-store')  # its own header stays
+
     def submit(self, options=None, sample='customer_fmb.xml', schema=True, source=None, filename=None):
         files = {'file': (filename or sample, source if source is not None else (ROOT / 'examples' / sample).read_bytes(), 'application/octet-stream')}
         if schema:

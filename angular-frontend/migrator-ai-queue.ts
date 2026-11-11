@@ -24,6 +24,8 @@ export interface AiRun {
 }
 export interface AiQueue {
   active: AiRun | null; busy_with_other_job: boolean; queued: AiRun[]; finished: AiRun[]; server_time: number;
+  /** The run of another module (a module-scoped view): shown live too, with a switch to that module. */
+  other_active?: AiRun | null;
   settings: {url: string; model: string; auto_run: boolean; auto_apply: boolean; num_ctx: number; num_predict: number; timeout: number};
 }
 /** Per module: how many triggers are done, waiting for a table structure, queued ... (AssistantManager.auto_summary). */
@@ -132,16 +134,23 @@ const PHASES: Record<string, string> = {
           }
         </div>
         @if (error()) { <p class="m-0 text-sm text-red-600" role="alert">{{ error() }}</p> }
-        @if (queue()?.busy_with_other_job) {
+        @if (queue()?.busy_with_other_job && !queue()?.other_active) {
           <p class="aq-muted m-0">Az AI most egy másik modulon dolgozik; ez a modul utána következik.</p>
         }
-        @if (activeHere(); as run) {
+        @if (liveRun(); as run) {
           <div class="aq-card aq-live" aria-live="polite" data-testid="ai-live">
+            @if (run.job_id !== jobId && jobId) {
+              <div class="aq-row" data-testid="ai-live-other">
+                <span class="aq-muted aq-grow">Az AI most egy másik modulon dolgozik: <strong>{{ jobNames[run.job_id] || run.job_id }}</strong>.
+                  Ez a modul utána következik.</span>
+                <p-button label="Átváltás erre a modulra" size="small" severity="secondary" variant="outlined" (onClick)="switchJob.emit(run.job_id)" />
+              </div>
+            }
             <div class="aq-row">
               <span class="aq-dot" aria-hidden="true"></span>
               <span class="aq-title aq-grow">{{ run.method }} <span class="aq-muted">{{ run.owner }}{{ run.event ? ' / ' + run.event : '' }}</span></span>
               <p-tag [value]="phaseLabel(run)" severity="info" />
-              <p-button label="Leállítás" size="small" severity="danger" variant="outlined" [disabled]="busy()" (onClick)="stop(run.id, false)" />
+              <p-button label="Leállítás" size="small" severity="danger" variant="outlined" [disabled]="busy()" (onClick)="stop(run.id, false, run.job_id !== jobId)" />
             </div>
             <p-progressbar mode="indeterminate" [style]="{height: '4px'}" />
             <div class="aq-stats">
@@ -223,9 +232,15 @@ export class MigratorAiQueue implements OnInit, OnChanges, OnDestroy {
   @Input() summary: AiSummary | null = null;
   @Input() tasks: AiTask[] = [];
   @Input() selectedTaskId = '';
+  /** Module labels by job id: the live card names the module of another module's run. */
+  @Input() jobNames: Record<string, string> = {};
   /** A run of this module finished (the parent reloads its task list and proposals). */
   @Output() finished = new EventEmitter<AiRun>();
   @Output() pick = new EventEmitter<string>();
+  /** The run the model works on now (this module's or another's), each time a new one starts; null when idle. */
+  @Output() activeRun = new EventEmitter<AiRun | null>();
+  /** The developer asked to open the module another run belongs to. */
+  @Output() switchJob = new EventEmitter<string>();
   @Output() activeChange = new EventEmitter<boolean>();
   /** compact: the developer clicked the toolbar indicator (the app opens the assistant tab). */
   @Output() open = new EventEmitter<void>();
@@ -237,6 +252,7 @@ export class MigratorAiQueue implements OnInit, OnChanges, OnDestroy {
   private skew = 0;
   private known = new Set<string>();
   private wasActive = false;
+  private lastRun: string | null = null;
   readonly queue = signal<AiQueue | null>(null);
   readonly now = signal(Date.now());
   readonly busy = signal(false);
@@ -247,6 +263,8 @@ export class MigratorAiQueue implements OnInit, OnChanges, OnDestroy {
     const active = this.queue()?.active;
     return active && (!this.jobId || active.job_id === this.jobId) ? active : null;
   });
+  /** What the live card shows: this module's run, else (module view) the run of another module. */
+  readonly liveRun = computed(() => this.activeHere() ?? (this.jobId ? this.queue()?.other_active ?? null : null));
   readonly queuedHere = computed(() => (this.queue()?.queued ?? []).filter(run => !this.jobId || run.job_id === this.jobId));
   readonly finishedHere = computed(() => (this.queue()?.finished ?? []).filter(run => !this.jobId || run.job_id === this.jobId).slice(0, 15));
 
@@ -256,7 +274,7 @@ export class MigratorAiQueue implements OnInit, OnChanges, OnDestroy {
   }
   ngOnChanges(changes: SimpleChanges): void {
     if ((changes['apiBase'] && !changes['apiBase'].firstChange) || (changes['jobId'] && !changes['jobId'].firstChange)) {
-      this.known.clear(); void this.refresh();
+      this.known.clear(); this.lastRun = null; void this.refresh();
     }
   }
   ngOnDestroy(): void { this.destroyed = true; clearTimeout(this.timer); clearInterval(this.ticker); }
@@ -285,8 +303,11 @@ export class MigratorAiQueue implements OnInit, OnChanges, OnDestroy {
       const active = Boolean(state.active || state.queued.length);
       if (active !== this.wasActive) this.activeChange.emit(active);
       this.wasActive = active;
+      // After the finished runs: the parent shows a result first, then follows the next run.
+      const live = state.active ?? state.other_active ?? null;
+      if ((live?.id ?? '') !== this.lastRun) { this.lastRun = live?.id ?? ''; this.activeRun.emit(live); }
       this.error.set('');
-      this.schedule(active ? 1000 : 5000);
+      this.schedule(active || live ? 1000 : 5000);
     } catch (error) {
       if (this.destroyed) return;
       if (!this.compact) this.error.set(this.text(error));
@@ -305,8 +326,10 @@ export class MigratorAiQueue implements OnInit, OnChanges, OnDestroy {
   async startAll(force: boolean): Promise<void> {
     await this.mutate(() => firstValueFrom(this.http.post(this.path('/auto'), {force}, this.mutation)));
   }
-  async stop(runId: string | null, clearQueue: boolean): Promise<void> {
-    await this.mutate(() => firstValueFrom(this.http.post(this.path('/cancel'), {run_id: runId, clear_queue: clearQueue}, this.mutation)));
+  async stop(runId: string | null, clearQueue: boolean, anyModule = false): Promise<void> {
+    // Another module's run is stopped through the queue of every module (a module's cancel only reaches its own).
+    const url = anyModule ? this.apiBase + '/assistant/cancel' : this.path('/cancel');
+    await this.mutate(() => firstValueFrom(this.http.post(url, {run_id: runId, clear_queue: clearQueue}, this.mutation)));
   }
   private async mutate(action: () => Promise<unknown>): Promise<void> {
     if (this.busy()) return;
