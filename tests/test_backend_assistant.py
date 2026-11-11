@@ -120,6 +120,10 @@ class BackendAssistantTests(unittest.TestCase):
         self.assertNotIn('format', client.requests[0])  # free Markdown answer, no JSON-escaped code
         self.assertIn(assistant_context.rules("service", has_tables=False, plsql_values=True), user)
         self.assertIn('FROM DUAL needs no table', user)
+        # the project's code checks: operator-first line breaks, a variable declared next to its use
+        self.assertIn(assistant_context.STYLE, user)
+        self.assertIn('+, && and || start the new line', user)
+        self.assertIn('at most 5 lines above it', user)
         self.assertIn('// SERVICE', user)
         self.assertNotIn('Additional requirements', user)
         self.assertIn(assistant_context.rules("service"), self.index['default_instructions'])

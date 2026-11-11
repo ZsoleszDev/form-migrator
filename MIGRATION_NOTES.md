@@ -1,27 +1,9 @@
 # Következő változat (a 4.35 után) — minden metódust az AI ír a service-ben, tippekkel; entity és üres repository; valódi mentés, Forms-sorrend
 
-- **Céges (AWU) modul: az AI a modul saját DTO-osztályait használja, Java 11-ben és PMD-barát kóddal.**
-  - *A hiba:* a szabályok fixen `Return new ActionResult(blocks, messages, commands, globals)`-t, `request.blocks()`-t és
-    `row.mező`-t írtak. Céges formátumban a DTO-k Lombok-osztályok (`RtActionResultDto`, privát mezők), így a modell
-    egy része szó szerint `return new ActionResult(...)`-t adott vissza, ami a migrátor ellenőrzésén átment, de nem
-    fordult le.
-  - *A prompt a modul nyelvén szól* (`frm_forms/dto_dialect.py`): `new RtActionResultDto(...)`, `request.getBlocks()`,
-    `row.getVevo()` / `row.setVevo(..)`, és a metódus megjegyzésének tippjei is így jelennek meg. A típusnevek a CL
-    DTO-kból és a metódus szignatúrájából jönnek. A már generált modulok újragenerálás nélkül is ezt kapják.
-  - *A maradék csúszásokat a migrátor helyben javítja*, új AI-hívás nélkül: `new ActionResult(` → a modul osztálya,
-    `request.blocks()` → `getBlocks()`, `row.x` / `row.x = v;` → getter/setter. Az alapformátum javításai (fordított
-    irányban) változatlanok.
-  - *A céges modul rekordtrigger-hookjai* (POST-QUERY, PRE-INSERT, WHEN-VALIDATE-ITEM …) mostantól AI-feladatok; eddig
-    a `…Row` típusnevet váró felismerő miatt kimaradtak.
-  - *Java 11 és PMD* (`frm_forms/java_lint.py`): a system prompt rövid szabálylistát kap. Mivel minden kérésnél azonos,
-    az Ollama prefix-gyorsítótára miatt CPU-n modellbetöltésenként egyszer kerül feldolgozásra. Egyértelmű javítás
-    helyben: `Stream.toList()`, `getFirst()`, literál elöl az `equals`-ban, `==` Stringen, `size() == 0`,
-    `toUpperCase()` locale nélkül, `new BigDecimal(0/1/10/0.1)`. Java 12+ szintaxis és API (record, szövegblokk,
-    switch-kifejezés, instanceof-minta, `formatted`) pontos javítási kéréssel megy vissza; az üres catch, a
-    `printStackTrace`, a `System.out` és az általános kivétel elkapása figyelmeztetés.
-  - *Ellenőrzés:* `tests/test_dto_dialect.py` (a céges modul promptja; az alapformátum dialektusában írt válaszok
-    javítva átvehetők, és a céges DPS ServiceImpl a CL DTO-kkal Java 11-ként lefordul, Lombok-helyettesítővel) és
-    `tests/test_java_lint.py`. A céges projekt saját PMD-szabálykészletével a kód itt nem futott.
+- **Kódstílus a Java asszisztens promptjában.** A helyi modell kódja nem követte a céges PMD-szabályokat: a több
+  soros kifejezésben a `+` és az `&&` a sor végére került, a változókat pedig túl korán hozta létre. A prompt most
+  rövid kódstílus-részt kap egy mintával: az operátor az új sor elején áll, a lokális változó legfeljebb 5 sorral az
+  első használata előtt jön létre.
 
 - **A LOV-os mező meghívja a saját LOV-végpontját.** Az autocomplete mező eddig üres `suggestions` listát kapott, a
   kész `lov<Név>` metódust semmi nem hívta. Most a mező `completeMethod`-ja (`on<Mező>Complete`) gépeléskor vagy a
