@@ -1,5 +1,10 @@
 # Következő változat (a 4.35 után) — minden metódust az AI ír a service-ben, tippekkel; entity és üres repository; valódi mentés, Forms-sorrend
 
+- **Kódstílus a Java asszisztens promptjában.** A helyi modell kódja nem követte a céges PMD-szabályokat: a több
+  soros kifejezésben a `+` és az `&&` a sor végére került, a változókat pedig túl korán hozta létre. A prompt most
+  rövid kódstílus-részt kap egy mintával: az operátor az új sor elején áll, a lokális változó legfeljebb 5 sorral az
+  első használata előtt jön létre.
+
 - **A LOV-os mező meghívja a saját LOV-végpontját.** Az autocomplete mező eddig üres `suggestions` listát kapott, a
   kész `lov<Név>` metódust semmi nem hívta. Most a mező `completeMethod`-ja (`on<Mező>Complete`) gépeléskor vagy a
   lista lenyitásakor elküldi a beírt szöveget és a rekordcsoport Forms-paramétereit, a sorokból pedig a mező

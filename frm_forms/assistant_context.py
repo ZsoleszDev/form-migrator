@@ -181,6 +181,19 @@ COMMIT_RULES = """Rules:
 5. It runs inside commitForm's transaction ({event}).
 6. Do not create new classes and do not change other methods. Private helper methods are allowed."""
 
+# The company's code checks (PMD / Checkstyle) the model's code must pass as written: shown, not only told, because
+# a small model copies a pattern more reliably than it follows a rule.
+STYLE = """Code style (the project's code checks):
+- A long expression continues on the next line with the operator first: +, && and || start the new line, they
+  never end a line.
+- Declare a local variable right before its first use, at most 5 lines above it; not all at the top of the method.
+```java
+String sql = "SELECT id, name FROM t"
+        + " WHERE code = :code";
+if (name != null
+        && !name.isEmpty()) {
+```"""
+
 # Forms built-ins and references -> one short Java line, only for those the method's Forms code uses.
 ACTION_HINTS = [
     (r"\bMESSAGE\s*\(", 'MESSAGE(x): messages.add(x).'),
@@ -485,6 +498,7 @@ def build(packet: dict, persistence: list[dict], helpers: dict, options, *, plsq
             if fields:
                 parts.append("Fields of " + (row_class.group(1) if row_class else "the row") + " (public, set them directly):\n" + "\n".join(fields))
         hint_kind = "action"
+    parts.append(STYLE)
     found = [] if hint_kind == "frame" else hints(forms_code(packet, method), hint_kind, all_generated, service)
     if query_api and service and not hook:
         # The rows are the answer: the query's own built-ins are no screen commands here.

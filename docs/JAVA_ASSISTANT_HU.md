@@ -171,6 +171,10 @@ szemantika, a képernyőértékek és az `ActionResult` használata. Adatvégpon
 lépései szerinti törzs, a `FormsChecks` mezőellenőrzés, a hookok hívása, a HTTP-válaszok (404, 409, 422), és az, hogy
 a zárolás és az írás `FormsErrors.translate`-tel adja a Forms-szerű hibát.
 
+A szabályok után rövid kódstílus-rész áll, a céges PMD/Checkstyle ellenőrzésekhez, egy mintával: a több soros
+kifejezés új sora az operátorral kezdődik (`+`, `&&`, `||` nem áll sor végén), és a lokális változó közvetlenül az
+első használata előtt, legfeljebb 5 sorral fölötte jön létre.
+
 A kódban hívott adatbázis-rutinoknál (igazolt szignatúrával) a kérés megmondja a hívás módját: függvényt
 `SELECT PKG.F(:a) FROM DUAL`-lal, IN paraméteres eljárást `BEGIN PKG.P(:a); END;`-dal, OUT paraméteresnél
 `StoredProcedureQuery`-vel. A rutin az Oracle-ben fut tovább, az AI nem írja újra.
