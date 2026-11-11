@@ -254,6 +254,12 @@ class FrameConstantTests(unittest.TestCase):
         self.assertTrue(again["cached"])
         self.assertEqual(again["response"]["body"], first["response"]["body"])
         self.assertIn("createNativeQuery(LOV_LOV_STATUSZ_SQL)", again["response"]["body"])
+        client = ai.MethodClient({"lovLovStatusz": lov_answer("LOV_LOV_STATUSZ_SQL")})
+        with patch("frm_forms.ollama.opener", return_value=client):  # the developer's retry: a new answer
+            retried = engine.propose(output, self.task(output, "lovLovStatusz")["id"], engine.Options(use_cache=False))
+        self.assertEqual(len(client.requests), 1)
+        self.assertFalse(retried["cached"])
+        entry = json.loads(cache.read_text(encoding="utf-8"))
         entry["raw"] = "Nem tudom."  # an answer today's checks reject: the model is asked again
         cache.write_text(json.dumps(entry), encoding="utf-8")
         fresh, client = self.propose(output, lov_answer("LOV_LOV_STATUSZ_SQL"))

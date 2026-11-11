@@ -385,6 +385,8 @@ class Options:
     instructions: str = ""
     project_context: str = ""
     cached_only: bool = False
+    # False: the cache is not read (a new model call); the answer is stored all the same
+    use_cache: bool = True
 
     def validate(self):
         self.url = ollama.base_url(self.url)
@@ -1198,7 +1200,7 @@ def _propose(prepared, options, cache, request, log, assistant_reply, jpa_assist
         log.data["deterministic"] = deterministic or reason
     if response is None and prepared["required_tokens"] > options.num_ctx:
         raise MigrationError(budget_message(prepared["required_tokens"], options.num_ctx))
-    if response is None and cache_file.is_file():
+    if response is None and options.use_cache and cache_file.is_file():
         # The model's raw answer to the very same request, read again with today's checks and repairs (the stored,
         # processed answer of an older migrator would skip them). An answer they reject means a new model call.
         try:
