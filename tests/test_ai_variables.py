@@ -3,7 +3,7 @@
 - java-variables.json: a variable the model creates (String igkod = ...) gets the map's value, also when it is set
   straight into a query; the service gets the entry's import and @Autowired field.
 - A parameter of SQL built at run time (sql.append(") and X = :igkod")) that no setParameter sets: bound from the
-  variable of that name when the piece is always in the statement; a warning otherwise.
+  variable of that name where its piece gets into the statement (sql_binding; the variants are in test_sql_binding).
 """
 import json
 import os
@@ -11,10 +11,11 @@ from pathlib import Path
 import shutil
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from frm_forms import answer_checks
 from frm_forms import backend_assistant as engine
+from frm_forms import sql_binding
 from java_support import trigger_mode
 import test_ai_triggers as ai
 
@@ -33,28 +34,36 @@ if (kod != null) {
 List<Object[]> rows = q.getResultList();'''
 
 
+CTX = SimpleNamespace(parameters={"kod": "String"}, variables={}, sql_constants=[])
+
+
 class BuiltSqlTests(unittest.TestCase):
     def test_a_parameter_always_in_the_statement_is_bound_from_its_variable(self):
         notes, warnings = [], []
-        fixed = answer_checks.bind_missing(BUILT, notes, warnings)
+        fixed = sql_binding.bind(BUILT, CTX, notes, warnings)
         self.assertIn('createNativeQuery(sql.toString()).setParameter("igkod", igkod);', fixed)
-        self.assertEqual(fixed.count('setParameter("kod"'), 1)  # set under its own if: left as written
+        self.assertEqual(fixed.count('setParameter("kod"'), 1)  # set under its own if: right, left as written
         self.assertEqual(warnings, [])
         self.assertIn(":igkod", notes[0])
 
-    def test_a_parameter_under_an_if_or_without_a_variable_is_a_warning(self):
-        conditional = BUILT.replace('q.setParameter("kod", kod);', '// nothing').replace('sql.append(") and AIT_ILLIGAZ_KOD = :igkod");', "")
+    def test_a_parameter_under_an_if_is_bound_in_that_if(self):
+        conditional = BUILT.replace('if (kod != null) {\n    q.setParameter("kod", kod);\n}\n', "")
         notes, warnings = [], []
-        self.assertEqual(answer_checks.bind_missing(conditional, notes, warnings), conditional)
-        self.assertTrue(any(":kod" in w for w in warnings), warnings)
+        fixed = sql_binding.bind(conditional, CTX, notes, warnings)
+        self.assertIn('    sql.append(" and KOD = :kod");\n    sqlParams.put("kod", SqlValues.bind(kod));\n}', fixed)
+        self.assertIn("Query q = entityManager.createNativeQuery(sql.toString())", fixed)
+        self.assertIn("sqlParams.forEach(q::setParameter);", fixed)
+        self.assertEqual(warnings, [])
+
+    def test_a_parameter_without_a_value_is_asked_from_the_model(self):
         unknown = BUILT.replace('String igkod = PlsqlValues.text(values, "YX", "XY");\n', "")
         notes, warnings = [], []
-        self.assertEqual(answer_checks.bind_missing(unknown, notes, warnings), unknown)
-        self.assertTrue(any("nincs ilyen nevű változó" in w for w in warnings), warnings)
+        self.assertEqual(sql_binding.bind(unknown, CTX, notes, warnings), unknown)
+        self.assertTrue(any(":igkod" in hu and "variable named igkod" in en for hu, en in sql_binding.problems(unknown, CTX)))
 
-    def test_written_sql_is_left_to_the_parameter_check(self):
-        code = 'var rows = entityManager.createNativeQuery("SELECT 1 FROM T WHERE X = :x").getResultList();'
-        self.assertEqual(answer_checks.bind_missing(code, [], []), code)
+    def test_written_sql_is_bound_from_the_variable_of_its_name(self):
+        code = 'String x = "1";\nvar rows = entityManager.createNativeQuery("SELECT 1 FROM T WHERE X = :x").getResultList();'
+        self.assertIn('.setParameter("x", x).getResultList()', sql_binding.bind(code, CTX, [], []))
 
 
 class VariableMapTests(unittest.TestCase):

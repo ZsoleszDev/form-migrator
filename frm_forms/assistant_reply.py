@@ -588,8 +588,8 @@ def check_service_code(code: str, ctx: Context, reply: Reply, missing: bool) -> 
                           "repository methods for the database.")
     if ctx.mode == "service" and not missing:
         # What compiles but fails or differs at run time: unset SQL parameters, a left-out statement or hook.
-        from . import answer_checks
-        for hu, en in answer_checks.problems(code, ctx.contract, ctx.sql_constants):
+        from . import answer_checks, sql_binding
+        for hu, en in answer_checks.problems(code, ctx.contract, ctx.sql_constants) + sql_binding.problems(code, ctx):
             reply.problem(hu, en)
     if ctx.mode == "service" and (re.search(r"(?<![\w$.])(?:jdbc|DbCalls|jdbcTemplate)\s*\.", mask)
                                   or re.search(r"\b[a-z]\w*Repository\s*\.", mask)):
@@ -775,11 +775,12 @@ def finish(ctx: Context, reply: Reply, service, helpers, service_imports, repo_p
     body = reply_repair.service(body, ctx, fixes)
     helpers = [reply_repair.service(h, ctx, fixes) for h in helpers]
     if ctx.mode == "service":
+        # Every :name of the native SQL bound where its piece gets into the statement: a missing setParameter, a
+        # conditional piece bound always or the other way round (sql_binding: plain Java, the model is not asked).
+        from . import answer_checks, sql_binding
+        body = sql_binding.bind(body, ctx, fixes, reply.warnings)
+        helpers = [sql_binding.bind(h, ctx, fixes, reply.warnings) for h in helpers]
         # A null bound to a native query: sent as '' (SqlValues.bind), which Oracle reads as a typed NULL.
-        from . import answer_checks
-        # A parameter of SQL built at run time that nothing sets (sql.append(" AND X = :x") without setParameter).
-        body = answer_checks.bind_missing(body, fixes, reply.warnings)
-        helpers = [answer_checks.bind_missing(h, fixes, reply.warnings) for h in helpers]
         body = answer_checks.bind(body, fixes)
         helpers = [answer_checks.bind(h, fixes) for h in helpers]
         if ctx.sql_constants:
@@ -788,6 +789,9 @@ def finish(ctx: Context, reply: Reply, service, helpers, service_imports, repo_p
             used = set()
             body = frame_sql.use_constants(body, ctx.sql_constants, fixes, reply.warnings, used)
             helpers = [frame_sql.use_constants(h, ctx.sql_constants, fixes, reply.warnings, used) for h in helpers]
+        # A screen value read into a variable nothing uses: PMD fails the build on it, and it does nothing.
+        body = sql_binding.unused(body, fixes, ctx)
+        helpers = [sql_binding.unused(h, fixes, ctx) for h in helpers]
     for text in dict.fromkeys(fixes):
         reply.note(text)
     # Repository methods: reuse identical existing ones, rename colliding ones (and the service calls).
