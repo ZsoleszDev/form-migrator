@@ -116,12 +116,12 @@ export class TesztComponent extends ServiceBase {
   // V_ELEK_ADLAP.UBI_INPTIP_KOD értéklistája (INPTIP): a beírt szövegre szűrt sorok a mező javaslatai.
   protected onUbiInptipKodComplete(event: { query?: string }): void {
     this.lovInptip({ term: event?.query ?? '', parameters: {} }).subscribe(res => {
-      const item = this.structures['vElekAdlap']?.find(s => s['ownId'] === 'V_ELEK_ADLAP.UBI_INPTIP_KOD');
-      if (item) {
-        item['suggestions'] = ((res?.rows ?? []) as Record<string, unknown>[]).map(row => ({
-          label: Object.values(row).filter(v => v != null && v !== '').join(' – '), value: row['KOD'],
-        }));
-      }
+      const suggestions = ((res?.rows ?? []) as Record<string, unknown>[]).map(row => ({
+        label: Object.values(row).filter(v => v != null && v !== '').join(' – '), value: row['KOD'],
+      }));
+      // új tömb: az űrlapblokk signal-inputja csak az új referenciát veszi észre
+      this.structures['vElekAdlap'] = (this.structures['vElekAdlap'] ?? []).map(s =>
+        s['ownId'] === 'V_ELEK_ADLAP.UBI_INPTIP_KOD' ? { ...s, suggestions } : s);
     });
   }
 
