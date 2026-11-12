@@ -303,6 +303,16 @@ A fordító nem látja a natív lekérdezések hibáit, ezért ezeket a migráto
   `setFirstResult`/`setMaxResults`), ezért ott csak a blokk lekérdezése kötelező. Az elvárt SQL és a hívások a
   `backend-plan.json` végpontjának `contract` mezőjében vannak.
 
+### Kívülről jövő értékek: java-variables.json és a futáskor összerakott SQL
+
+- **java-variables.json az AI kódjában is.** Ha a modell olyan nevű változót hoz létre, vagy olyan nevű SQL-paramétert
+  állít be, amely a térképben szerepel (`variableName`), a migrátor utólag kicseréli az értékét a térkép kifejezésére
+  (`String igkod = formsCommonsRepository.getIgKod(user);`). A service-be bekerül a bejegyzés importja és `@Autowired`
+  mezője. A modell nem kap róla tájékoztatást, ezért a prompt sem hosszabb.
+- **A futáskor összerakott SQL paramétere.** Ha az SQL `StringBuilder`-rel vagy `+=`-vel épül, és egy `:név`
+  paraméterét semmi nem állítja be, a migrátor beköti a `név` nevű változóból, amennyiben a darab mindig része az
+  SQL-nek (nem egy `if` alatt van). Különben figyelmeztet. Így a változó sem marad használatlan (PMD).
+
 ### Az adatvégpontok és a LOV-ok SQL-je: konstansok, Oracle szerinti összehasonlítás
 
 Ezeknek a metódusoknak az SQL-je a migrátoré (a blokk lekérdezése, a `FOR UPDATE NOWAIT` zárolás, az

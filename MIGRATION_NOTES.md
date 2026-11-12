@@ -1,5 +1,13 @@
 # Következő változat (a 4.35 után) — minden metódust az AI ír a service-ben, tippekkel; entity és üres repository; valódi mentés, Forms-sorrend
 
+- **A LOV javaslatai megjelennek a mezőben.** A lekérdezés jó volt, de a javaslatok a struktúratömbön belül
+  módosultak, az űrlapblokk signal-inputja ezt nem vette észre. Most új tömb kerül vissza, az érintett elem új
+  objektumként.
+- **java-variables.json az AI által írt metódusokban is, és a futáskor összerakott SQL hiányzó paramétere.** A térkép
+  eddig csak a determinisztikus kódban működött. Most az AI változóját is utólag kicseréli (import és `@Autowired`
+  mezővel), AI-hívás nélkül. A `StringBuilder`-rel épített SQL feltétel nélküli `:név` paraméterét, ha nincs
+  `setParameter`, a migrátor a `név` változóból köti be (különben figyelmeztet), így a változó sem marad használatlan.
+
 - **A gyorsítótár törlése a Java asszisztens válaszait is törli, az Újrapróbálás új AI-hívás.** Az „AI-gyorsítótár
   törlése” gomb eddig csak a generálás gyorsítótárát (`<adatmappa>/cache`) ürítette, a Java asszisztens tárolt
   válaszait (`<adatmappa>/assistant-cache`) nem, így a végpontok továbbra is a régi válaszokból készültek. Most mindkettőt

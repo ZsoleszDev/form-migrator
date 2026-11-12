@@ -82,6 +82,8 @@ class Context:
     parameters: dict = field(default_factory=dict)   # the method's parameters: name -> type
     # A data endpoint or LOV: its SQL as constants of the service (frame_sql): {"name", "sql", "required", "what"}.
     sql_constants: list = field(default_factory=list)
+    # java-variables.json: variableName -> {"name", "value", "autowired", "type", "imports"} (java_variables.entry_of)
+    variables: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -775,6 +777,9 @@ def finish(ctx: Context, reply: Reply, service, helpers, service_imports, repo_p
     if ctx.mode == "service":
         # A null bound to a native query: sent as '' (SqlValues.bind), which Oracle reads as a typed NULL.
         from . import answer_checks
+        # A parameter of SQL built at run time that nothing sets (sql.append(" AND X = :x") without setParameter).
+        body = answer_checks.bind_missing(body, fixes, reply.warnings)
+        helpers = [answer_checks.bind_missing(h, fixes, reply.warnings) for h in helpers]
         body = answer_checks.bind(body, fixes)
         helpers = [answer_checks.bind(h, fixes) for h in helpers]
         if ctx.sql_constants:

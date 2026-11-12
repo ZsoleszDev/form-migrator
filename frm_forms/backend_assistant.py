@@ -210,6 +210,11 @@ def prepare_workspace(output: Path) -> dict:
     # backend_trigger_mode=ai: the record/item triggers of the CRUD flow and the commit triggers are private
     # hooks of the ServiceImpl (triggerOnInsertRendeles ...); each is a task of its own, like an endpoint.
     applied_hooks = {h["method"] for h in plan.get("ai_hooks_applied", [])}
+    from . import java_variables
+    try:
+        variable_map = list(java_variables.load(effective["config"]).values())
+    except MigrationError:
+        variable_map = []
     cl_contract = safe_file(output, "analysis/cl-contract.json")
     dto_types = (read_json(cl_contract).get("dto_types") or {}) if cl_contract.is_file() else {}
     endpoints += [h for h in ai_hooks(service, ir, {e["method"] for e in endpoints}, dto_types)
@@ -320,6 +325,8 @@ def prepare_workspace(output: Path) -> dict:
                   "module_gate": plan.get("module_gate", {}),
                   # the company DTO names (OrdersRow -> OrdersOrdersDto), for the prompt and the answer's repairs
                   "dto_types": dto_types,
+                  # java-variables.json: a variable the written method creates gets its value from the map, afterwards
+                  "java_variables": variable_map,
                   # backend_trigger_mode=ai: the model runs the Forms SQL as written (no entity needed), so a table
                   # structure never holds a task back; it is for the Domain entity of the table (jpa_crud).
                   "table_requirements": sheet["tables"], "pending_tables": [] if ai_mode else sheet["pending"],
@@ -621,6 +628,7 @@ def finish_candidate(result: str, service: str, packet: dict, response: dict) ->
         # The SQL constants the method runs (frame_sql): declared in the class with the comment's exact SQL.
         from . import frame_sql
         result = frame_sql.declare(result, frame_sql.statements(packet))
+    result = variable_fields(result, packet, response)
     mapping = dict(java_tidy_known())
     if packet.get("data_access") == "service":
         # The EntityManager API of the service's native SQL, from the project's JPA (jpa_namespace).
@@ -635,6 +643,27 @@ def finish_candidate(result: str, service: str, packet: dict, response: dict) ->
     if packet.get("plsql_values_import"):
         mapping["PlsqlValues"] = packet["plsql_values_import"]
     return ensure_imports(result, mapping)
+
+
+def variable_fields(result: str, packet: dict, response: dict) -> str:
+    """The java-variables.json entries the written method uses (their value is in its code): the entry's import and,
+    at the top of the class, its @Autowired field (not when the class has one already)."""
+    code = response["body"] + "\n" + response["private_methods"]
+    for entry in packet.get("java_variables") or []:
+        if not entry.get("value") or entry["value"] not in code:
+            continue
+        for imp in entry.get("imports") or []:
+            if not re.search(r"^\s*import\s+" + re.escape(imp) + r"\s*;", result, re.M):
+                package = re.search(r"^package\s+[\w.]+;\s*\n", result, re.M)
+                pos = package.end() if package else 0
+                result = result[:pos] + "import " + imp + ";\n" + result[pos:]
+        field = entry.get("autowired")
+        if field and entry.get("type") and not re.search(r"\b" + re.escape(field) + r"\s*;", java_mask(result)):
+            match = re.search(r"\bpublic\s+class\s+\w+[^{]*\{", java_mask(result))
+            if match:
+                result = (result[:match.end()] + "\n    @org.springframework.beans.factory.annotation.Autowired\n"
+                          f"    private {entry['type']} {field};\n" + result[match.end():])
+    return result
 
 
 def used_routines(packet: dict, response: dict) -> list[dict]:
@@ -1108,7 +1137,8 @@ def reply_context(prepared: dict, options: Options):
         beans=bool(dialect["beans"]), dto_types=dict(dialect["types"]),
         dto_classes=dict(dialect["classes"]) if dialect["beans"] else {},
         parameters=dto_dialect.signature(packet.get("signature") or packet.get("existing_method") or "")[2],
-        sql_constants=frame_sql.statements(packet) if options.data_access == "service" else [])
+        sql_constants=frame_sql.statements(packet) if options.data_access == "service" else [],
+        variables={e["name"]: e for e in packet.get("java_variables") or [] if e.get("name") and e.get("value")})
 
 
 def id_type(descriptor: dict) -> str:
