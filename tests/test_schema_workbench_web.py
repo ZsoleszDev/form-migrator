@@ -66,7 +66,8 @@ class SchemaWebTests(unittest.TestCase):
         with patch('frm_forms.ollama.opener', side_effect=AssertionError('no model call')):
             preview = self.client.post(self.base + '/prompt', headers=HEADERS, json={'task_id': task['id']})
         self.assertEqual(preview.status_code, 200, preview.text)
-        self.assertIn("the service's `entityManager` field", preview.json()['user'])
+        self.assertIn("the service's `entityManager` field", preview.json()['system'])  # every method's rule
+        self.assertIn("run the Oracle SQL of the comments as written, through the entityManager", preview.json()['user'])
 
     def test_save_export_index_and_retry_keep_the_same_structure(self):
         request = self.request()
