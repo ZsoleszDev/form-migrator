@@ -142,16 +142,18 @@ class ScreenCode:
                           lov['columns'][0]['column'] if lov['columns'] else '')
             value = 'row[' + sq(column.upper()) + ']' if column else 'Object.values(row)[0]'
             self.complete[owner] = method
+            # The form block takes its structure as a signal input: it sees a new array, not a change inside the old one
+            # (the rows came back, the list stayed empty). The item gets a new object, the others stay as they are.
             self.methods.append(
                 f'  // {owner} értéklistája ({name}): a beírt szövegre szűrt sorok a mező javaslatai.\n'
                 f'  protected {method}(event: {{ query?: string }}): void {{\n'
                 f'    this.{lov["call"]}({{ term: event?.query ?? \'\', parameters: {parameters} }}).subscribe(res => {{\n'
-                f'      const item = this.structures[{sq(region)}]?.find(s => s[\'ownId\'] === {sq(owner)});\n'
-                '      if (item) {\n'
-                '        item[\'suggestions\'] = ((res?.rows ?? []) as Record<string, unknown>[]).map(row => ({\n'
-                f"          label: Object.values(row).filter(v => v != null && v !== '').join(' – '), value: {value},\n"
-                '        }));\n'
-                '      }\n'
+                '      const suggestions = ((res?.rows ?? []) as Record<string, unknown>[]).map(row => ({\n'
+                f"        label: Object.values(row).filter(v => v != null && v !== '').join(' – '), value: {value},\n"
+                '      }));\n'
+                '      // új tömb: az űrlapblokk signal-inputja csak az új referenciát veszi észre\n'
+                f'      this.structures[{sq(region)}] = (this.structures[{sq(region)}] ?? []).map(s =>\n'
+                f"        s['ownId'] === {sq(owner)} ? {{ ...s, suggestions }} : s);\n"
                 '    });\n'
                 '  }')
 

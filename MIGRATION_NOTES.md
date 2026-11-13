@@ -1,5 +1,29 @@
 # Következő változat (a 4.35 után) — minden metódust az AI ír a service-ben, tippekkel; entity és üres repository; valódi mentés, Forms-sorrend
 
+- **A LOV javaslatai megjelennek a mezőben.** A lekérdezés jó volt, de a javaslatok a struktúratömbön belül
+  módosultak, az űrlapblokk signal-inputja ezt nem vette észre. Most új tömb kerül vissza, az érintett elem új
+  objektumként.
+- **A natív SQL minden `:név` paramétere ott kap értéket, ahol a darabja az SQL-be kerül: általánosan, nem egy
+  esetre.** A kis modell az SQL-t jól írja, de a paraméterek könyvelését elrontja, főleg ha a Forms `DEFAULT_WHERE`-jéhez
+  hasonlóan darabokból rakja össze. Elfelejti a `setParameter`-t (a változó használatlan marad, PMD), a feltételes
+  darab paraméterét mindig köti (hamis feltételnél Hibernate-hiba), vagy fordítva. A migrátor most minden
+  lekérdezésnél végigköveti az SQL darabjait: literál, konstans, `String` / `StringBuilder` / `List<String>`, egymásból
+  építve is (`sql.append(where)`, `String.join(" AND ", feltetelek)`). Mindegyiknél tudja, milyen feltétel alatt kerül
+  az SQL-be, és látja a kötéseket is (`setParameter` a láncon vagy a változón, `Map`-be tett értékek). A rossz vagy
+  hiányzó kötést helyben javítja, AI-hívás nélkül:
+  - a mindig jelen lévő darab paraméterét a lekérdezésen köti;
+  - a feltételesét egy `Map`-ben, közvetlenül a darab mellett (`sqlParams.put(...)`, majd
+    `sqlParams.forEach(query::setParameter)`). Ez sima Java, segédosztály nélkül.
+
+  Az érték forrása, sorrendben: a modell saját kötése (ha ott elérhető), az azonos nevű változó, a java-variables.json
+  bejegyzése. Ha egyik sincs, a modell pontos javítási kérést kap. Nem nyúl a futáskor képzett paraméternévhez
+  (`":p" + i`), az újrakezdett builderhez, a `?:`-tal választott darabhoz és a helyes kötéshez (az if/else ágakban
+  külön értékkel kötöttet is helyesnek látja). A használatlan, csak képernyőértéket olvasó változót törli (PMD). A
+  prompt egy sorral bővült: a feltételes darab `Map`-es mintája.
+- **java-variables.json az AI által írt metódusokban is.** A térkép eddig csak a determinisztikus kódban működött.
+  Most az AI változóját is utólag kicseréli (import és `@Autowired` mezővel), AI-hívás nélkül; ha a modell nem is
+  hozott létre változót a paraméterhez, a kötés a bejegyzés kifejezését kapja.
+
 - **A gyorsítótár törlése a Java asszisztens válaszait is törli, az Újrapróbálás új AI-hívás.** Az „AI-gyorsítótár
   törlése” gomb eddig csak a generálás gyorsítótárát (`<adatmappa>/cache`) ürítette, a Java asszisztens tárolt
   válaszait (`<adatmappa>/assistant-cache`) nem, így a végpontok továbbra is a régi válaszokból készültek. Most mindkettőt

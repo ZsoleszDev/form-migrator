@@ -277,7 +277,45 @@ def bean_fields_left(code: str, ctx) -> list[str]:
     return sorted(set(left))
 
 
+def variables(code: str, ctx, notes: list) -> str:
+    """java-variables.json in the written method: a variable of the map gets the map's value (String igkod =
+    formsCommonsRepository.getIgKod(user);), also when it is set straight into a query: setParameter("igkod", ...).
+    The value comes from the developer's map, afterwards; the model is not told about it."""
+    entries = getattr(ctx, "variables", None) or {}
+    if not entries:
+        return code
+    from .answer_checks import statement_end
+    changed = []
+    for name, entry in entries.items():
+        targets = [name]
+        mask = java_mask(code)
+        for call in re.finditer(r"\.\s*setParameter\s*\(\s*\"" + re.escape(name) + r"\"\s*,", mask):
+            end = closing_paren(mask, call.end() - mask[:call.end()][::-1].index("(") - 1)
+            value = code[call.end():end].strip() if end > 0 else ""
+            if re.fullmatch(r"[A-Za-z_$][\w$]*", value):
+                targets.append(value)  # set from another local: that one gets the value
+            elif value and value != entry["value"] and end > 0:
+                start = call.end() + (len(code[call.end():end]) - len(code[call.end():end].lstrip()))
+                code = code[:start] + entry["value"] + code[end:]
+                changed.append(name)
+                mask = java_mask(code)
+        for target in dict.fromkeys(targets):
+            mask = java_mask(code)
+            declared = re.search(r"(?<![\w$.])(?:final\s+)?[A-Za-z_$][\w$.<>\[\]]*\s+" + re.escape(target) + r"\s*=(?!=)", mask)
+            if not declared:
+                continue
+            end = statement_end(mask, declared.end())
+            if code[declared.end():end].strip() != entry["value"]:
+                code = code[:declared.end()] + " " + entry["value"] + code[end:]
+                changed.append(name)
+    if changed:
+        notes.append("Helyben kicserélve a java-variables.json alapján: " + ", ".join(dict.fromkeys(changed))
+                     + " (a változó értéke a térkép kifejezése).")
+    return code
+
+
 def service(code: str, ctx, notes: list) -> str:
+    code = variables(code, ctx, notes)
     code = dto_names(code, ctx, notes)
     if getattr(ctx, "beans", False):
         code = bean_access(code, ctx, notes)

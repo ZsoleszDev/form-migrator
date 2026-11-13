@@ -296,12 +296,58 @@ A fordító nem látja a natív lekérdezések hibáit, ezért ezeket a migráto
 (`frm_forms/answer_checks.py`), és pontos, angol nyelvű javítási kérést küld a modellnek:
 
 - **Paraméterek:** az SQL minden `:név` paramétere kap értéket, és a `setParameter` nem állít be olyan nevet, amely
-  nincs az SQL-ben. Csak a szövegliterálként írt SQL-t ítéli meg; a futáskor összerakottat és a továbbadott
-  lekérdezést nem.
+  nincs az SQL-ben. A futáskor összerakott SQL-nél a hiányzó kötést előbb helyben pótolja (lásd lent); csak az
+  marad hiba, aminek az értékét sehonnan nem tudja venni. A továbbadott lekérdezést nem ítéli meg.
 - **Adatvégpont és LOV:** a kód a megjegyzés SQL-jét futtatja, és a megjegyzésben megnevezett triggereket a
   megadott sorrendben hívja. A lista lapozása kétféleképp is írható (`OFFSET … FETCH` az SQL-ben, vagy
   `setFirstResult`/`setMaxResults`), ezért ott csak a blokk lekérdezése kötelező. Az elvárt SQL és a hívások a
   `backend-plan.json` végpontjának `contract` mezőjében vannak.
+
+### Kívülről jövő értékek: java-variables.json és a futáskor összerakott SQL
+
+- **java-variables.json az AI kódjában is.** Ha a modell olyan nevű változót hoz létre, vagy olyan nevű SQL-paramétert
+  állít be, amely a térképben szerepel (`variableName`), a migrátor utólag kicseréli az értékét a térkép kifejezésére
+  (`String igkod = formsCommonsRepository.getIgKod(user);`). A service-be bekerül a bejegyzés importja és `@Autowired`
+  mezője. A modell nem kap róla tájékoztatást, ezért a prompt sem hosszabb.
+- **A futáskor összerakott SQL paramétere:** lásd a következő részt.
+
+### A natív SQL paramétereinek kötése
+
+A kis modell az SQL-t jól írja, a kötések könyvelését viszont elrontja, főleg ha a Forms `DEFAULT_WHERE`-jéhez
+hasonlóan darabokból rakja össze a lekérdezést. Ez nem a metódus logikáján múlik, ezért a migrátor helyben rendbe
+teszi (`frm_forms/sql_binding.py`), újabb AI-hívás nélkül.
+
+**Mit lát.** Minden `createNativeQuery`-nél követi az SQL darabjait: a literált, az SQL-konstanst, és a lekérdezés
+előtt épített `String`-et (`+=`), `StringBuilder`-t (`append`) és `List<String>`-et (`add`, majd `String.join`),
+egymásból építve is (`sql.append(where)`). Minden darabnál tudja, milyen feltétel alatt kerül az SQL-be (`if`,
+`else`, ciklus, kapcsos zárójellel vagy anélkül). Látja a kötéseket is: `setParameter` a láncon vagy a lekérdezés
+változóján, és a lekérdezésre ráadott `Map` elemei (`params.forEach(q::setParameter)`, lambda, `entrySet`-ciklus).
+
+**Mit javít:**
+
+| A modell kódja | Javítás |
+| --- | --- |
+| a mindig jelen lévő darab `:név`-e nincs kötve | `.setParameter("név", érték)` a lekérdezésen |
+| a mindig jelen lévő darab `:név`-e csak egy `if` alatt kötött | a kötés feltétel nélküli lesz, a kiürült `if` törlődik |
+| az `if` alatti darab `:név`-e mindig kötött, vagy sehol | `sqlParams.put("név", SqlValues.bind(érték));` a darab mellé, ugyanabba az `if`-be (a kapcsos zárójel nélküli `if` kapcsos zárójelet kap); `Map<String, Object> sqlParams = new LinkedHashMap<>();` a builder után, `sqlParams.forEach(q::setParameter);` a lekérdezés után. Ha a lekérdezésnek nincs változója, `Query sqlQuery = …` lesz belőle |
+| a modell saját `Map`-jéből hiányzik egy érték | a darab mellé kerül az ő `Map`-jébe; az értékei `SqlValues.bind(...)`-ot kapnak |
+| szövegliterál SQL `:név`-e nincs kötve | `.setParameter("név", érték)`, ha van hozzá érték |
+| csak képernyőértéket vagy állandót olvasó, használatlan változó | törli (PMD UnusedLocalVariable); az SQL-paraméterrel azonos nevűt nem |
+
+**Az érték forrása,** sorrendben: a modell saját kötésének kifejezése (ha az ott, ahová kerül, elérhető), az
+azonos nevű változó vagy metódusparaméter (más írásmóddal is: `:p_kod` → `pKod`), végül a java-variables.json
+bejegyzése. Ha egyik sincs, a modell egyetlen pontos javítási kérést kap: hozzon létre `név` nevű változót a darab
+előtt.
+
+**Amihez nem nyúl** (figyelmeztetést kaphat):
+
+- a futáskor képzett paraméternév (`" OR ID = :p" + i`);
+- az újrakezdett builder (`setLength(0)`, új értékadás);
+- a `?:`-tal választott darab: kivétel a „ha üres, ne kerüljön bele” minta (`where.isEmpty() ? "" : …`);
+- a helyes kötés, az if/else ágakban külön értékkel kötött is.
+
+A prompt egy sora mutatja a feltételes darab mintáját: SQL-darab `if` alatt → az értéke ugyanabban az `if`-ben egy
+`Map`-be, majd `params.forEach(query::setParameter)`.
 
 ### Az adatvégpontok és a LOV-ok SQL-je: konstansok, Oracle szerinti összehasonlítás
 

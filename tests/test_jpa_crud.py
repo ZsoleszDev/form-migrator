@@ -120,7 +120,10 @@ class JpaCrudTests(unittest.TestCase):
         method = screen[screen.index('protected onStatuszComplete('):]
         method = method[:method.index('\n  }\n')]
         self.assertIn("this.lovLovstatusz({ term: event?.query ?? '', parameters: {} }).subscribe(res => {", method)
-        self.assertIn("this.structures['rendeles']?.find(s => s['ownId'] === 'RENDELES.STATUSZ')", method)
+        # a new array: the form block's structure is a signal input, a change inside the old array is not seen
+        self.assertIn("this.structures['rendeles'] = (this.structures['rendeles'] ?? []).map(s =>\n"
+                      "        s['ownId'] === 'RENDELES.STATUSZ' ? { ...s, suggestions } : s);", method)
+        self.assertNotIn("item['suggestions'] =", method)
         self.assertIn("value: row['KOD'],", method)  # the column the LOV returns into the item
 
     def test_the_select_list_names_the_lov_columns(self):
