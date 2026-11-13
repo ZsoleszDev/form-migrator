@@ -127,17 +127,17 @@ class CompanyDialectTests(unittest.TestCase):
 
     def test_the_button_rules_name_the_modules_result_class(self):
         user = self.preview(self.company, "onCtrlCountBtn")["user"]
-        self.assertIn("5. Return new OrdersActionResultDto(blocks, messages, commands, globals)", user)
+        self.assertIn("4. Return new OrdersActionResultDto(blocks, messages, commands, globals)", user)
         self.assertIn("return new OrdersActionResultDto(blocks, messages, commands, Map.of());", user)  # the skeleton
         self.assertNotRegex(user, r"(?<![\w$])ActionResult(?![\w$])")
-        self.assertIn('request.getBlocks().get("BLOCK").get("ITEM")', user)
+        self.assertIn('PlsqlValues.text(request.getBlocks(), "BLOCK", "ITEM")', user)  # null-safe screen values
         self.assertNotIn("request.blocks()", user)
         self.assertIn("public OrdersActionResultDto onCtrlCountBtn(UserDto user, OrdersActionRequestDto request)", user)
 
     def test_the_default_format_keeps_its_rules(self):
         user = self.preview(self.plain, "onCtrlCountBtn")["user"]
-        self.assertIn("5. Return new ActionResult(blocks, messages, commands, globals)", user)
-        self.assertIn('request.blocks().get("BLOCK").get("ITEM")', user)
+        self.assertIn("4. Return new ActionResult(blocks, messages, commands, globals)", user)
+        self.assertIn('PlsqlValues.text(request.blocks(), "BLOCK", "ITEM")', user)
         self.assertNotIn("Lombok", user)
         hook = self.preview(self.plain, "triggerPostQueryOrders")["user"]
         self.assertIn("assign row.field directly.", hook)

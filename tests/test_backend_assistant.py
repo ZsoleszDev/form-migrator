@@ -116,14 +116,16 @@ class BackendAssistantTests(unittest.TestCase):
     def test_complete_migration_task_is_supplied_without_user_prompt(self):
         _, client = self.propose()
         system, user = (m['content'] for m in client.requests[0]['messages'])
-        self.assertEqual(system, assistant_context.SYSTEM)
+        # every method's rules (Java 11 / PMD, Oracle, the database, the code style) are the system prompt
+        self.assertEqual(system, assistant_context.system_prompt("service"))
         self.assertNotIn('format', client.requests[0])  # free Markdown answer, no JSON-escaped code
         self.assertIn(assistant_context.rules("service", has_tables=False, plsql_values=True), user)
-        self.assertIn('FROM DUAL needs no table', user)
+        self.assertIn('FROM DUAL needs no table', system)
         # the project's code checks: operator-first line breaks, a variable declared next to its use
-        self.assertIn(assistant_context.STYLE, user)
-        self.assertIn('+, && and || start the new line', user)
-        self.assertIn('at most 5 lines above it', user)
+        self.assertIn(assistant_context.STYLE, system)
+        self.assertIn('+, && and || start the new line', system)
+        self.assertIn('at most 5 lines above it', system)
+        self.assertNotIn('Keep the Oracle behaviour', user)  # said once, in the system prompt
         self.assertIn('// SERVICE', user)
         self.assertNotIn('Additional requirements', user)
         self.assertIn(assistant_context.rules("service"), self.index['default_instructions'])
@@ -455,10 +457,11 @@ class BackendAssistantTests(unittest.TestCase):
         with patch('frm_forms.ollama.opener', side_effect=AssertionError('preview must not call the model')):
             shown = assistant.preview(self.output, self.task['id'], self.options)
         self.assertEqual(shown['warnings'], [])
-        # The per-task part stays small. The system prompt (with the Java 11 / PMD lines) is the same for every task:
-        # Ollama reads it once per model load (the common prefix of the requests is cached).
-        self.assertLess(len(shown['user'].encode('utf-8')), 5600)
-        self.assertEqual(shown['system'], assistant_context.SYSTEM)
+        # The per-task part stays small. The system prompt (Java 11 / PMD, Oracle, the database rule, the code style)
+        # is the same for every task: Ollama reads it once per model load (the common prefix of the requests is cached).
+        self.assertLess(len(shown['user'].encode('utf-8')), 4400)
+        self.assertEqual(shown['system'], assistant_context.system_prompt("service"))
+        self.assertLess(len(shown['system'].encode('utf-8')), 2700)
         self.assertLess(shown['bytes'], 7000)
         self.assertGreater(shown['original_bytes'], shown['bytes'])
         _, client = self.propose()

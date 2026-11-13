@@ -240,15 +240,21 @@ def problems(code: str, contract: dict | None = None, constants: list | None = N
             found.append(("A feladat SQL-utasítása hiányzik vagy megváltozott: " + short,
                           "Run this SQL of the comment exactly as written (same columns, conditions and parameter "
                           "names): " + " ".join(statement.split())))
-    position = -1
     for call in contract.get("calls", []):
-        match = re.search(r"(?<![\w$.])" + re.escape(call) + r"\s*\(", mask)
-        if not match:
+        if not re.search(r"(?<![\w$.])" + re.escape(call) + r"\s*\(", mask):
             found.append(("A metódus nem hívja meg a(z) " + call + " triggert.",
                           "Call " + call + "(...) as the comment says; the method exists."))
-        elif match.start() < position:
-            found.append(("A triggerek hívási sorrendje eltér a Formsétól (" + call + ").",
-                          "Call the trigger hooks in the order of the comment; " + call + " comes later."))
-        else:
+    return found
+
+
+def order_warnings(code: str, contract: dict | None) -> list[str]:
+    """The hooks called in another order than the Forms one: shown to the developer, no correction round (the first
+    call of each is compared; a call in a loop or a helper can make the order look different)."""
+    mask, position, found = java_mask(code), -1, []
+    for call in (contract or {}).get("calls", []):
+        match = re.search(r"(?<![\w$.])" + re.escape(call) + r"\s*\(", mask)
+        if match and match.start() < position:
+            found.append(f"A triggerek hívási sorrendje eltér a Formsétól ({call} korábban fut); ellenőrizd.")
+        elif match:
             position = match.start()
     return found

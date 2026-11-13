@@ -210,19 +210,34 @@ def helper_version(path: Path, name: str) -> str | None:
     return found.group(1) if found else None
 
 
-def common_tools_in_project(layout: dict, root=None) -> str | None:
-    """The package of the CommonMigrateTools.java already in the project (in the source roots of the chosen Java
-    parts): the generated imports point at it."""
+def common_tools_copies(layout: dict, root=None) -> list[Path]:
+    """The CommonMigrateTools.java files already in the project (in the source roots of the chosen Java parts)."""
     root = Path(root).expanduser().resolve() if root else None
     folders = []
     for layer in LAYERS:
         value = (layout or {}).get(layer)
         if value and (root is not None or Path(value).expanduser().is_absolute()):
             folders.append(chosen_folder(layer, value, root))
-    for path in find_helper(java_roots(folders), COMMON_TOOLS):
+    return find_helper(java_roots(folders), COMMON_TOOLS)
+
+
+def common_tools_in_project(layout: dict, root=None) -> str | None:
+    """The package of the CommonMigrateTools.java already in the project: the generated imports point at it."""
+    for path in common_tools_copies(layout, root):
         found = PACKAGE_LINE.search(path.read_text(encoding='utf-8', errors='ignore'))
         if found:
             return found.group(1)
+    return None
+
+
+def outdated_common_tools(layout: dict, generated: Path, root=None) -> tuple[Path, str] | None:
+    """(the project's copy, its version) when it is older than the generated CommonMigrateTools.java: what the
+    module calls of it (LovQuery.limit, SqlValues.bind ...) would not compile there. None: up to date, or unknown."""
+    wanted = helper_version(generated, COMMON_TOOLS) if generated.is_file() else None
+    for path in common_tools_copies(layout, root):
+        if PACKAGE_LINE.search(path.read_text(encoding='utf-8', errors='ignore')):
+            found = helper_version(path, COMMON_TOOLS)
+            return (path, found or '?') if wanted and (found is None or int(found) < int(wanted)) else None
     return None
 
 

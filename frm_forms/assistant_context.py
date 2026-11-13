@@ -33,23 +33,23 @@ The code must compile with Java 11 and pass PMD:
 - Catch the specific exception (PersistenceException), never an empty catch block; keep the cause when rethrowing.
 - No System.out, printStackTrace or reassigned parameters.
 - Use the class names of the method's signature and comments (its DTOs), never a generic name of the rules."""
+# Oracle semantics of every task: in the system prompt, not repeated in each method's rules.
+ORACLE = """Keep the Oracle behaviour: '' and NULL are both null, NUMBER is BigDecimal, DATE is LocalDateTime, SELECT INTO
+without a row is NO_DATA_FOUND and with several rows TOO_MANY_ROWS; keep the same checks, messages and order.
+FROM DUAL needs no table (SYSDATE is LocalDateTime.now())."""
 
 RULES = """Rules:
 1. Keep the method signature and the `return log1x(..., () -> { ... });` wrapper. Write the body inside it
    (empty now, or a PL/SQL or JDBC call) so that it implements the commented original Oracle Forms code.
    Do not copy the commented original code into your answer; the migrator keeps it.
 2. {data_rule}
-3. Keep the Oracle behaviour: '' and NULL are both null, NUMBER is BigDecimal, DATE is LocalDateTime,
-   SELECT INTO without a row is NO_DATA_FOUND and with several rows TOO_MANY_ROWS; keep the same checks,
-   messages and order. FROM DUAL needs no table (SYSDATE is LocalDateTime.now()).
-4. Screen values: request.blocks().get("BLOCK").get("ITEM") (a String or null);
-   parameters: request.parameters().get("NAME").{helpers}
-5. Return new ActionResult(blocks, messages, commands, globals): blocks is a Map<String, Map<String, String>>
+3. {screen_rule}
+4. Return new ActionResult(blocks, messages, commands, globals): blocks is a Map<String, Map<String, String>>
    of the items to write back, messages a List<String> (MESSAGE texts), commands the Forms built-ins for the
    screen in order, e.g. List.of("GO_BLOCK", "BLOCK"), List.of("SET_ITEM_PROPERTY", "BLOCK.ITEM", "ENABLED",
    "PROPERTY_FALSE"), List.of("EXECUTE_QUERY"), and globals a Map<String, String> of the :GLOBAL values written.
    Show an error to the user with throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "text").
-6. Do not create new classes and do not change other methods. Private helper methods are allowed."""
+5. Do not create new classes and do not change other methods. Private helper methods are allowed."""
 
 JPA_RULE = ("Database access only through the repositories listed below. Each one is an interface extending\n"
             "   JpaRepository<Domain, ID> (findById, save, delete are inherited). Write a new method without a body,\n"
@@ -71,14 +71,16 @@ ROUTINE_RULE = ("\n   The database routines of the Forms code run in Oracle thro
                 "   or skip a routine.")
 # data access "service" (the default): the model writes everything in the service, the Forms SQL as native SQL through
 # the EntityManager. No repository (the developer may move the SQL there later), no JDBC, no generated methods.
-SERVICE_RULE = ("Database access: the service's `entityManager` field (an injected EntityManager). Run the Oracle SQL of\n"
-                "   the comments as written, as native SQL with named parameters (never concatenated values):\n"
-                "   entityManager.createNativeQuery(sql).setParameter(\"name\", value), then .getResultList() (List<Object[]>,\n"
-                "   or List<Object> for one column), .getSingleResult() or .executeUpdate(). Set every :name of the SQL,\n"
-                "   a value that may be null as SqlValues.bind(value). Read a column value with SqlValues.text(o),\n"
-                "   SqlValues.number(o) or SqlValues.dateTime(o). No repositories, no JDBC.\n"
-                "   SQL added under an if (sql.append): put its :name into a Map<String, Object> in that if, then\n"
-                "   params.forEach(query::setParameter).")
+SERVICE_RULE = """Database access (every method): the service's `entityManager` field (an injected EntityManager), native SQL
+with named parameters, never concatenated values: entityManager.createNativeQuery(sql).setParameter("name", value),
+then .getResultList() (List<Object[]>, or List<Object> for one column), .getSingleResult() or .executeUpdate(). Set
+every :name of the SQL. Read a column value with SqlValues.text(o), SqlValues.number(o) or SqlValues.dateTime(o).
+SQL added under an if (sql.append): put its :name into a Map<String, Object> in that if, then
+params.forEach(query::setParameter). No repositories, no JDBC."""
+# Rule 2 of a method in the service mode (the database rule itself is in the system prompt).
+SERVICE_TASK = "Database access: run the Oracle SQL of the comments as written, through the entityManager."
+SERVICE_CONSTANTS = ("Database access: run the SQL constants listed below (the exact SQL of the comment) through the\n"
+                     "   entityManager: entityManager.createNativeQuery({first}); never write that SQL yourself.")
 SERVICE_ROUTINES = ("\n   The database routines of the Forms code keep running in Oracle: call each one through the entityManager\n"
                     "   as listed below; never re-implement or skip a routine.")
 # A data endpoint or a LOV (ai_frames): the steps are in the method's //region AI-feladat comment.
@@ -86,41 +88,57 @@ FRAME_RULES = """Rules:
 1. Keep the method signature and the `return log1x(..., () -> { ... });` wrapper. Write the body inside it so that it
    does the steps of the AI-feladat comment, in that order. Do not copy the comment into your answer.
 2. {data_rule}
-3. Keep the Oracle behaviour: '' and NULL are both null, NUMBER is BigDecimal, DATE is LocalDateTime.
-4. Field checks: var errors = new ArrayList<String>(); FormsChecks.required(errors, "ITEM", row.field);
-   FormsChecks.maxLength(errors, "ITEM", row.field, length); FormsChecks.digits(errors, "ITEM", row.field, integer
-   digits, scale); FormsChecks.throwIfAny(errors). Call the trigger hooks the comment names (they exist; do not write
-   them). Row DTOs have public fields (row.code); requests have accessors (request.limit()).
-5. An HTTP answer: throw new ResponseStatusException(HttpStatus.NOT_FOUND / CONFLICT / UNPROCESSABLE_ENTITY, "text").
-   Run the lock and the writes in try { ... } catch (PersistenceException e) { throw FormsErrors.translate(e); }
-   (a record locked by another session, a constraint or a database trigger error: its Forms-like answer).
-6. Do not create new classes and do not change other methods. Private helper methods are allowed."""
+3. {checks}Row DTOs have public fields (row.code); requests have accessors (request.limit()).
+4. {answers}
+5. Do not create new classes and do not change other methods. Private helper methods are allowed."""
+# Rules 3 and 4 by the endpoint's operation: a list or a LOV only reads (no field checks, no lock, no writes).
+FRAME_CHECKS = {
+    "write": ("Field checks: var errors = new ArrayList<String>(); FormsChecks.required(errors, \"ITEM\", row.field);\n"
+              "   FormsChecks.maxLength(errors, \"ITEM\", row.field, length); FormsChecks.digits(errors, \"ITEM\", row.field, integer\n"
+              "   digits, scale); FormsChecks.throwIfAny(errors). Call the trigger hooks the comment names (they exist; do not write\n"
+              "   them). "),
+    "delete": "Call the trigger hooks the comment names (they exist; do not write them).\n   ",
+    "read": "Call the trigger hooks the comment names (they exist; do not write them).\n   ",
+    "lov": "",
+}
+FRAME_ANSWERS = {
+    "write": ("An HTTP answer: throw new ResponseStatusException(HttpStatus.NOT_FOUND / CONFLICT / UNPROCESSABLE_ENTITY, \"text\").\n"
+              "   Run the lock and the writes in try { ... } catch (PersistenceException e) { throw FormsErrors.translate(e); }\n"
+              "   (a record locked by another session, a constraint or a database trigger error: its Forms-like answer)."),
+    "read": "An error: throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, \"text\").",
+}
 JDBC_RULE = ("Database access: use the service's existing `jdbc` field (NamedParameterJdbcTemplate) with named,\n"
              "   bound parameters{jdbc_helpers}; never concatenate values into SQL.")
-PLSQL_VALUES = ("\n   Helpers: PlsqlValues.text(request.blocks(), \"BLOCK\", \"ITEM\"), PlsqlValues.number(...) returns\n"
-                "   BigDecimal, PlsqlValues.datetime(...) returns LocalDateTime, PlsqlValues.put(blocks, \"BLOCK\", \"ITEM\", value).")
+# Rule 3 of a button: the screen's values, through the null-safe PlsqlValues helpers when the module has them (a block
+# the screen does not send is null: request.blocks().get("BLOCK").get("ITEM") would throw).
+SCREEN_RAW = ('Screen values: request.blocks().get("BLOCK").get("ITEM") (a String or null);\n'
+              '   parameters: request.parameters().get("NAME").')
+SCREEN_HELPERS = ('Screen values: PlsqlValues.text(request.blocks(), "BLOCK", "ITEM") (a String or null),\n'
+                  '   PlsqlValues.number(...) (BigDecimal), PlsqlValues.datetime(...) (LocalDateTime); write back with\n'
+                  '   PlsqlValues.put(blocks, "BLOCK", "ITEM", value); parameters: request.parameters().get("NAME").')
 SIMPLE_TYPES = {"java.math.BigDecimal": "BigDecimal", "java.time.LocalDateTime": "LocalDateTime",
                 "java.time.OffsetDateTime": "OffsetDateTime", "java.time.LocalDate": "LocalDate"}
 FULL_TABLE_COLUMNS = 15
 
 
-OTHER_RESULT = """4. Keep the return type and the request type. Read the request and build the result the same way the
+OTHER_RESULT = """3. Keep the return type and the request type. Read the request and build the result the same way the
    current method body does (the same constructors and accessors).
-5. Show an error to the user with throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "text")."""
+4. Show an error to the user with throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "text")."""
 
 # A query button (its own DEFAULT_WHERE + EXECUTE_QUERY): the endpoint returns the target block's rows.
-QUERY_RESULT = """4. Screen values: request.blocks().get("BLOCK").get("ITEM") (a String or null); parameters:
+QUERY_RESULT = """3. Screen values: request.blocks().get("BLOCK").get("ITEM") (a String or null); parameters:
    request.parameters().get("NAME"); paging: request.offset(), request.limit().
-5. This button queries the {block} block: build the filter (and the order) the Forms code builds with
+4. This button queries the {block} block: build the filter (and the order) the Forms code builds with
    SET_BLOCK_PROPERTY DEFAULT_WHERE / ORDER_BY, run it through one repository @Query method (JPQL over the
    Domain) that holds every condition the code can add, each switched by a parameter, e.g.
    (:withKod = FALSE OR d.kod = :kod); bound values, never string concatenation. Map every Domain to a new
    {row_class} (its fields are listed below) and return new PageResult<>(rows, messages). MESSAGE texts go to messages; an error:
    throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "text")."""
 
-SERVICE_QUERY_RESULT = """4. Screen values: request.blocks().get("BLOCK").get("ITEM") (a String or null); parameters:
-   request.parameters().get("NAME"); paging: request.offset(), request.limit().
-5. This button queries the {block} block: its query, the row mapping and the fetch hooks are in the comment. Put the
+SERVICE_QUERY_RESULT = """3. Screen values: PlsqlValues.text(request.blocks(), "BLOCK", "ITEM") (a String or null),
+   PlsqlValues.number(...) (BigDecimal); parameters: request.parameters().get("NAME"); paging: request.offset(),
+   request.limit().
+4. This button queries the {block} block: its query, the row mapping and the fetch hooks are in the comment. Put the
    WHERE (and ORDER BY) the Forms code sets with SET_BLOCK_PROPERTY DEFAULT_WHERE / ORDER_BY into that query, with
    named parameters for the screen values (never concatenated), run it through the entityManager, map every row to a
    new {row_class} and return new PageResult<>(rows, messages, hasMore). MESSAGE texts go to messages; an error:
@@ -146,14 +164,11 @@ HOOK_RULES = """Rules:
    (empty) body with Java that implements the commented original Oracle Forms
    trigger. Do not copy the commented original code into your answer; the migrator keeps it.
 2. {data_rule}
-3. Keep the Oracle behaviour: '' and NULL are both null, NUMBER is BigDecimal, DATE is LocalDateTime,
-   SELECT INTO without a row is NO_DATA_FOUND and with several rows TOO_MANY_ROWS; keep the same checks,
-   messages and order. FROM DUAL needs no table (SYSDATE is LocalDateTime.now()).
-4. The record: every :{block}.ITEM (or :ITEM) of the trigger is a field of `row` (the list below); read and
+3. The record: every :{block}.ITEM (or :ITEM) of the trigger is a field of `row` (the list below); read and
    assign row.field directly. MESSAGE('x') is context.message("x"); RAISE FORM_TRIGGER_FAILURE is
    context.abort() (it throws, HTTP 422 with the last message).
-5. {event_rule}
-6. Do not create new classes and do not change other methods. Private helper methods are allowed."""
+4. {event_rule}
+5. Do not create new classes and do not change other methods. Private helper methods are allowed."""
 
 EVENT_RULES = {
     "POST-QUERY": "POST-QUERY runs for every fetched row: fill the non-database fields (descriptions, totals); do not change database fields.",
@@ -187,14 +202,12 @@ COMMIT_RULES = """Rules:
 1. Keep the method signature exactly. Write its (empty) body with Java that
    implements the commented original Oracle Forms trigger. Do not copy the commented original code.
 2. {data_rule}
-3. Keep the Oracle behaviour: '' and NULL are both null, NUMBER is BigDecimal, DATE is LocalDateTime,
-   SELECT INTO without a row is NO_DATA_FOUND and with several rows TOO_MANY_ROWS.
-4. Screen values: values.get("BLOCK").get("ITEM") (a String or null); parameters.get("GLOBAL.NAME").
+3. Screen values: values.get("BLOCK").get("ITEM") (a String or null); parameters.get("GLOBAL.NAME").
    Write back: blocks (Map<String, Map<String, String>>), globals.put("GLOBAL.NAME", value); MESSAGE texts:
    messages.add("x"); Forms built-ins for the screen: commands.add(List.of("GO_BLOCK", "BLOCK")).
    An error: throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "text").
-5. It runs inside commitForm's transaction ({event}).
-6. Do not create new classes and do not change other methods. Private helper methods are allowed."""
+4. It runs inside commitForm's transaction ({event}).
+5. Do not create new classes and do not change other methods. Private helper methods are allowed."""
 
 # The company's code checks (PMD / Checkstyle) the model's code must pass as written: shown, not only told, because
 # a small model copies a pattern more reliably than it follows a rule.
@@ -290,6 +303,12 @@ HOOK_HINTS = [
 ]
 
 
+def system_prompt(data_access: str = "service") -> str:
+    """What every task of a data-access mode shares, before anything of the task: Ollama keeps a request's common
+    prefix cached while the model stays loaded, so these lines cost prompt time once, not once per method."""
+    return "\n\n".join([SYSTEM, ORACLE] + ([SERVICE_RULE] if data_access == "service" else []) + [STYLE])
+
+
 def jpa_rule(has_tables: bool, generated: dict | None) -> str:
     """Rule 2 in jpa mode: the generated repository methods of the code's SQL (jpa_sql), when there are any."""
     if generated and generated.get("methods"):
@@ -300,26 +319,26 @@ def jpa_rule(has_tables: bool, generated: dict | None) -> str:
 def rules(data_access: str = "jpa", has_tables: bool = True, plsql_values: bool = True, jdbc_helpers: bool = False,
           action_api: bool = True, routines: bool = False, generated: dict | None = None) -> str:
     if data_access == "service":
-        data_rule = SERVICE_RULE + (SERVICE_ROUTINES if routines else "")
+        data_rule = SERVICE_TASK + (SERVICE_ROUTINES if routines else "")
     elif data_access == "jpa":
         data_rule = jpa_rule(has_tables, generated) + (ROUTINE_RULE if routines else "")
     else:
         data_rule = JDBC_RULE.replace("{jdbc_helpers}", " and the generated helpers below where they fit" if jdbc_helpers else "")
         data_rule += ROUTINE_RULE if routines else ""
     # Plain replacement: the rules quote Java code with literal braces.
-    text = RULES.replace("{data_rule}", data_rule).replace("{helpers}", PLSQL_VALUES if plsql_values else "")
+    text = RULES.replace("{data_rule}", data_rule).replace("{screen_rule}", SCREEN_HELPERS if plsql_values else SCREEN_RAW)
     if data_access == "service":
         text = text.replace("(empty now, or a PL/SQL or JDBC call)", "(empty now)")
     if not action_api:
         # Query buttons and CRUD endpoints have their own request/result DTOs, not ActionRequest/ActionResult.
-        text = re.sub(r"\n4\. Screen values:[\s\S]*?(?=\n6\. )", "\n" + OTHER_RESULT, text)
+        text = re.sub(r"\n3\. Screen values:[\s\S]*?(?=\n5\. )", "\n" + OTHER_RESULT, text)
     return text
 
 
 def hook_rules(packet: dict, data_access: str, has_tables: bool, generated: dict | None = None) -> str:
     hook = packet.get("hook") or {}
     if data_access == "service":
-        data_rule = SERVICE_RULE + (SERVICE_ROUTINES if packet.get("db_routines") else "")
+        data_rule = SERVICE_TASK + (SERVICE_ROUTINES if packet.get("db_routines") else "")
     else:
         data_rule = jpa_rule(has_tables, generated) if data_access == "jpa" else JDBC_RULE.replace("{jdbc_helpers}", "")
         data_rule += ROUTINE_RULE if packet.get("db_routines") else ""
@@ -488,6 +507,7 @@ def build(packet: dict, persistence: list[dict], helpers: dict, options, *, plsq
     returns, _, _ = dto_dialect.signature(header)
     action_api = "ActionResult" in header
     query_api = "QueryActionRequest" in header
+    constants = []
     if hook:
         hook_kind = (packet.get("hook") or {}).get("kind", "record")
         parts = ["Rewrite this private Java method so that it implements the original Oracle Forms trigger in plain Java.",
@@ -498,45 +518,45 @@ def build(packet: dict, persistence: list[dict], helpers: dict, options, *, plsq
                 parts.append("The record (" + (packet.get("hook") or {}).get("row_class", "Row") + " row):\n" + "\n".join(fields))
         hint_kind = "hook" if hook_kind == "record" else "commit"
     elif frame:
-        parts = ["Write the body of this Java method from the steps of its AI-feladat comment (the original Oracle Forms "
-                 "block behaviour), in plain Java.",
-                 FRAME_RULES.replace("{data_rule}", SERVICE_RULE if service else
-                                     jpa_rule(bool(used), generated) if data_access == "jpa" else JDBC_RULE.replace("{jdbc_helpers}", ""))]
-        hint_kind = "frame"
         from . import frame_sql
         constants = frame_sql.statements(packet) if service else []
+        # The SQL is the migrator's: run it by name, never retype it (a long statement rarely comes back exactly).
+        data_rule = (SERVICE_CONSTANTS.replace("{first}", constants[0]["name"]) if constants else SERVICE_TASK) if service else (
+            jpa_rule(bool(used), generated) if data_access == "jpa" else JDBC_RULE.replace("{jdbc_helpers}", ""))
+        operation = (packet.get("endpoint") or {}).get("operation") or ""
+        group = ("lov" if operation == "lov" else "read" if operation in {"list", "search"} else
+                 "delete" if operation == "delete" else "write")
+        parts = ["Write the body of this Java method from the steps of its AI-feladat comment (the original Oracle Forms "
+                 "block behaviour), in plain Java.",
+                 FRAME_RULES.replace("{data_rule}", data_rule).replace("{checks}", FRAME_CHECKS[group])
+                 .replace("{answers}", FRAME_ANSWERS["write" if group in {"write", "delete"} else "read"])]
+        hint_kind = "frame"
         if constants:
-            # The SQL is the migrator's: run it by name, never retype it (a long statement rarely comes back exactly).
-            first = constants[0]["name"]
-            parts[1] = (parts[1].replace("Run the Oracle SQL of\n   the comments as written, as native SQL",
-                                         "Run the SQL constants listed below\n   (the exact SQL of the comment), as native SQL")
-                        .replace("createNativeQuery(sql)", "createNativeQuery(" + first + ")"))
-            parts.append("SQL constants of the service (the migrator declares them with the comment's SQL; use them, "
-                         "never write that SQL yourself):\n" + "\n".join(frame_sql.prompt_lines(constants)))
+            parts.append("SQL constants of the service (the migrator declares them with the comment's SQL):\n"
+                         + "\n".join(frame_sql.prompt_lines(constants)))
     else:
         parts = ["Rewrite this Java method so that it implements the original Oracle Forms code in plain Java.",
                  rules(data_access, bool(used), plsql_values, bool(helpers), action_api, bool(packet.get("db_routines")),
                        generated)]
         if returns and not action_api:
             # The body is empty in ai mode: "the same way the current body does" alone names no result class.
-            parts[1] = parts[1].replace("4. Keep the return type and", f"4. Keep the return type ({returns}) and")
+            parts[1] = parts[1].replace("3. Keep the return type and", f"3. Keep the return type ({returns}) and")
         if query_api and service:
             target = (packet.get("endpoint") or {}).get("query_block") or "target"
             row_class = re.search(r"PageResult\w*<(\w+)>", header)
-            parts[1] = re.sub(r"\n4\. Keep the return type[\s\S]*?(?=\n6\. )", "\n" + SERVICE_QUERY_RESULT
+            parts[1] = re.sub(r"\n3\. Keep the return type[\s\S]*?(?=\n5\. )", "\n" + SERVICE_QUERY_RESULT
                               .replace("{block}", target).replace("{row_class}", row_class.group(1) if row_class else "Row"), parts[1])
         elif query_api:
             target = (packet.get("endpoint") or {}).get("query_block") or "target"
             block = next((b for b in packet.get("blocks", []) if b.get("name") == target), {})
             row_class = re.search(r"PageResult\w*<(\w+)>", header)
-            parts[1] = re.sub(r"\n4\. Keep the return type[\s\S]*?(?=\n6\. )", "\n" + QUERY_RESULT
+            parts[1] = re.sub(r"\n3\. Keep the return type[\s\S]*?(?=\n5\. )", "\n" + QUERY_RESULT
                               .replace("{block}", target + (" (" + block["table"] + ")" if block.get("table") else ""))
                               .replace("{row_class}", row_class.group(1) if row_class else "Row"), parts[1])
             fields = query_fields(packet)
             if fields:
                 parts.append("Fields of " + (row_class.group(1) if row_class else "the row") + " (public, set them directly):\n" + "\n".join(fields))
         hint_kind = "action"
-    parts.append(STYLE)
     found = [] if hint_kind == "frame" else hints(forms_code(packet, method), hint_kind, all_generated, service)
     if query_api and service and not hook:
         # The rows are the answer: the query's own built-ins are no screen commands here.
@@ -585,6 +605,9 @@ def build(packet: dict, persistence: list[dict], helpers: dict, options, *, plsq
     if not hook and action_api and plsql_values:
         skeleton = ACTION_SKELETON.replace("the repository methods", "the entityManager queries") if service else ACTION_SKELETON
         parts.append(dto_dialect.prompt_text(skeleton, dialect))
+    if constants:
+        # The comment's SQL is the constant's: named, not repeated (shorter, and nothing to retype).
+        method = frame_sql.cite(method, constants, " ".join(c["name"] for c in constants))
     parts.append("Method:\n```java\n" + dto_dialect.method_notes(method, dialect).strip("\n") + "\n```")
     answer = ["Answer format (code only, no explanation):", "```java", "// SERVICE",
               "<the complete rewritten method, followed by any new private helper methods>", "```"]
@@ -595,9 +618,10 @@ def build(packet: dict, persistence: list[dict], helpers: dict, options, *, plsq
                "Optionally add NOTES: with at most 3 short lines in Hungarian."]
     parts.append("\n".join(answer))
     user = "\n\n".join(parts) + "\n"
-    return {"system": SYSTEM, "user": user, "repositories": [p["repository"] for p in used],
+    system = system_prompt(data_access)
+    return {"system": system, "user": user, "repositories": [p["repository"] for p in used],
             "entities": [p["entity"] for p in used], "omitted_tables": omitted,
             "generated_methods": [m.repository + "." + m.name for m in generated["methods"]],
             "refused_sql": [r["statement"] for r in generated["refused"]],
             "dto_dialect": "beans" if beans else "fields",
-            "method_chars": len(method), "bytes": len((SYSTEM + user).encode("utf-8"))}
+            "method_chars": len(method), "bytes": len((system + user).encode("utf-8"))}

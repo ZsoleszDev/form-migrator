@@ -64,7 +64,10 @@ class NativeQueryTests(unittest.TestCase):
         self.assertEqual(missing, ["Call triggerPreInsertOrders(...) as the comment says; the method exists."])
         swapped = CREATE.replace("triggerWhenValidateItemCodeOrders(row, context);\n", "").replace(
             "triggerPreInsertOrders(row, context);\n", "triggerPreInsertOrders(row, context);\ntriggerWhenValidateItemCodeOrders(row, context);\n")
-        self.assertIn("in the order of the comment", self.english(swapped, CONTRACT)[0])
+        # another order is shown to the developer, not a correction round (a loop or a helper can reorder the text)
+        self.assertEqual(self.english(swapped, CONTRACT), [])
+        self.assertIn("triggerPreInsertOrders korábban fut", checks.order_warnings(swapped, CONTRACT)[0])
+        self.assertEqual(checks.order_warnings(CREATE, CONTRACT), [])
         # a hook named only in a comment is not a call
         self.assertTrue(self.english(CREATE.replace("triggerPreInsertOrders(row, context);", "// triggerPreInsertOrders(row, context);"),
                                      CONTRACT))

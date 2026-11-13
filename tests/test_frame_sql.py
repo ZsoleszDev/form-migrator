@@ -178,6 +178,13 @@ class FrameConstantTests(unittest.TestCase):
         self.assertIn("- LOV_LOV_STATUSZ_SQL: the record group query of the comment, with its filter and limit; "
                       "parameters :p0, :term, :limit", user)
         self.assertNotIn("Run the Oracle SQL of\n   the comments as written", user)
+        # the comment's SQL is named in the prompt, not repeated: shorter, and nothing to retype
+        self.assertRegex(user, r"// SQL \(a rekordcsoport lekérdezése, a beírt szövegre szűrve\):\n\s*// LOV_LOV_STATUSZ_SQL\n")
+        self.assertNotIn("V_M_KODERT.ME_KNEV_NEV ME_KNEV_NEV", user)
+        self.assertIn("mezőbe gépelt szöveg", user)  # what :term is
+        # a LOV only reads: no field checks, no lock/write rules
+        self.assertNotIn("FormsChecks", user)
+        self.assertNotIn("FormsErrors.translate", user)
         button = engine.preview(self.output, self.task(self.output, "onCtrlPbMent")["id"], self.options)["user"]
         self.assertNotIn("SQL constants of the service", button)
 
@@ -210,7 +217,8 @@ class FrameConstantTests(unittest.TestCase):
         method = ai.method_text(service, "lovLovStatusz")
         self.assertIn("//region AI-feladat: LOV_STATUSZ", method)
         self.assertRegex(method, r"// SQL \(a rekordcsoport lekérdezése, a beírt szövegre szűrve\):\n\s*// LOV_LOV_STATUSZ_SQL\n")
-        self.assertIn("// Paraméterek: :term = LovQuery.term(", method)
+        self.assertIn("// Paraméterek: :term = request.", method)  # the typed text; no helper needed for it
+        self.assertIn("mezőbe gépelt szöveg", method)
         self.assertEqual(service.count("WHERE S.TIPUS = :p0"), 1)
         self.assertNotIn("a migrátor tartja karban", service)
         if shutil.which("java"):

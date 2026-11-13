@@ -20,6 +20,7 @@ from .java_scan import (balanced, dedent, java_mask, matching_brace, methods_by_
                         scan_members, strip_annotations, without_sequence_queries)
 
 FQN = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_$][\w$]*)+")
+LITERAL_TOKEN = re.compile(r'"(?:\\.|[^"\\\n])*"')
 IMPORT_LINE = re.compile(r"^[ \t]*import[ \t]+(static[ \t]+)?([\w.$]+?)(\.\*)?[ \t]*;[ \t]*$", re.M)
 PACKAGE_LINE = re.compile(r"^[ \t]*package[ \t]+[\w.]+[ \t]*;[ \t]*$", re.M)
 FENCE_OPEN = re.compile(r"^[ \t]{0,3}(?P<fence>`{3,}|~{3,})[ \t]*(?P<lang>[^\s`]*)[^\n]*$", re.M)
@@ -410,15 +411,61 @@ def service_parts(block: Block, ctx: Context, reply: Reply, info: dict, existing
                                "(csak a kiválasztott végpont változik).")
                     continue
             helpers.append(with_access(text, "private"))
+        dropped = {}
         for member in members:
             if member.kind == "field" and (types or methods):
                 if re.search(r"Repository\b", member.header):
                     reply.note("A repository-mezőt a migrátor köti be a service-be; az AI mezőjét elhagytuk.")
-                elif member.name not in {"log", "jdbc"} and not re.search(r"(?<![\w$])static(?![\w$])", member.header):
-                    reply.warn("A service-be javasolt mezőt (" + member.name + ") nem vettük át; használj helyi változót.")
+                elif member.name not in {"log", "jdbc"}:
+                    dropped[member.name] = constant_value(code[member.start:member.end])
             elif member.kind == "type":
                 reply.warn("A SERVICE blokk belső osztályát (" + member.name + ") nem vettük át.")
+        body, helpers = class_fields(dropped, body, helpers, ctx, reply)
     return {"body": clean_body(body, reply), "helpers": helpers, "imports": imports}
+
+
+def constant_value(declaration: str) -> str | None:
+    """The value of a `static final` field initialized with literals only ("SELECT ..." + "FROM ...", 50, true), as
+    one literal; None for anything else."""
+    mask = java_mask(declaration)
+    match = re.match(r"\s*(?:(?:private|protected|public)\s+)?(?=[^=]*\bstatic\b)(?=[^=]*\bfinal\b)[^=]*=", mask)
+    if not match:
+        return None
+    value = declaration[match.end():].strip().rstrip(";").strip()
+    literals = LITERAL_TOKEN.findall(value)
+    if literals and not re.sub(r'"(?:\\.|[^"\\\n])*"', "", value).replace("+", "").strip():
+        return '"' + "".join(text[1:-1] for text in literals) + '"'
+    return value if re.fullmatch(r"-?\d[\w.]*|true|false|'(?:\\.|[^'\\])+'", value) else None
+
+
+def class_fields(dropped: dict, body: str, helpers: list, ctx: Context, reply: Reply) -> tuple[str, list]:
+    """The fields the model declared next to its method: the class gets none. A constant of literals the code uses is
+    written into the code; a field the service already has (or the task's SQL constant) is the class's; any other
+    field the code uses would not compile: the model is asked once for a local variable."""
+    known = known_fields(ctx) | {c["name"] for c in ctx.sql_constants}
+    for name, value in dropped.items():
+        uses = re.compile(r"(?:(?<=this\.)|(?<![\w$.]))" + re.escape(name) + r"(?![\w$])")
+        used = any(uses.search(java_mask(text)) for text in [body, *helpers])
+        if name in known or not used:
+            if not used and name not in known:
+                reply.note(f"Az AI {name} mezőjét nem vettük át (a kód nem használja).")
+            continue
+        if value is None:
+            reply.problem(f"A kód a(z) {name} mezőt használja, de osztálymezőt a migrátor nem vesz át.",
+                          f"Do not declare fields or constants in the class: declare {name} as a local variable inside "
+                          "the method that uses it.")
+            continue
+        body, helpers = inline(body, uses, value), [inline(h, uses, value) for h in helpers]
+        reply.note(f"A(z) {name} konstans értékét a kódba írtuk (osztálymezőt a migrátor nem vesz fel).")
+    return body, helpers
+
+
+def inline(code: str, uses, value: str) -> str:
+    mask = java_mask(code)
+    for match in reversed(list(uses.finditer(mask))):
+        start = match.start() - (5 if code[max(0, match.start() - 5):match.start()] == "this." else 0)
+        code = code[:start] + value + code[match.end():]
+    return code
 
 
 def as_default(text: str, name: str) -> str:
@@ -591,8 +638,10 @@ def check_service_code(code: str, ctx: Context, reply: Reply, missing: bool) -> 
         from . import answer_checks, sql_binding
         for hu, en in answer_checks.problems(code, ctx.contract, ctx.sql_constants) + sql_binding.problems(code, ctx):
             reply.problem(hu, en)
+        for text in answer_checks.order_warnings(code, ctx.contract):
+            reply.warn(text)
     if ctx.mode == "service" and (re.search(r"(?<![\w$.])(?:jdbc|DbCalls|jdbcTemplate)\s*\.", mask)
-                                  or re.search(r"\b[a-z]\w*Repository\s*\.", mask)):
+                                  or set(re.findall(r"\b([a-z]\w*Repository)\s*\.", mask)) - known_fields(ctx)):
         reply.problem("A service JDBC-t vagy repositoryt hív; az SQL-t az entityManager futtatja.",
                       "There is no jdbc field and no repository here: run the SQL with entityManager.createNativeQuery(...).")
     # Java 12+ syntax or API: it does not compile with the company's Java 11 (java_lint; also without a local JDK).
@@ -618,6 +667,17 @@ def check_service_code(code: str, ctx: Context, reply: Reply, missing: bool) -> 
                       "exactly what is missing under MISSING:.")
 
 
+def known_fields(ctx: Context) -> set:
+    """Fields the method may call besides the task's repositories: those the service class already has (the
+    developer's @Autowired beans) and the java-variables.json entries' (the migrator adds their field, and its
+    repair writes their value - formsCommonsRepository.getIgKod(user) - into the code)."""
+    names = {e["autowired"] for e in (ctx.variables or {}).values() if e.get("autowired")}
+    if ctx.service:
+        names |= set(re.findall(r"(?m)^[ \t]*(?:(?:private|protected|public|static|final|transient|volatile)\s+)+"
+                                r"[\w$.]+(?:\s*<[^;=(){}]*>)?\s+([A-Za-z_$][\w$]*)\s*(?:=[^;]*)?;", java_mask(ctx.service)))
+    return names
+
+
 def consistency(ctx: Context, service_code: str, new_methods: dict, reply: Reply) -> None:
     mask = java_mask(service_code)
     variables = {r.variable for r in ctx.repositories}
@@ -636,7 +696,8 @@ def consistency(ctx: Context, service_code: str, new_methods: dict, reply: Reply
                               f"The service calls {repo.variable}.{name}(...), but the REPOSITORY {repo.name} block does "
                               "not define it. Add it there as an @Query method without a body (JPQL over "
                               f"{repo.entity}, or nativeQuery = true with the original SQL).")
-    for unknown in sorted(set(re.findall(r"(?:(?<=this\.)|(?<![\w$.]))([a-z][\w$]*Repository)\s*\.", mask)) - variables):
+    found = set(re.findall(r"(?:(?<=this\.)|(?<![\w$.]))([a-z][\w$]*Repository)\s*\.", mask))
+    for unknown in sorted(found - variables - known_fields(ctx)):
         names = ", ".join(sorted(variables))
         reply.problem(f"A service ismeretlen repositoryt használ: {unknown} (elérhető: {names or 'nincs'}).",
                       f"`{unknown}` does not exist. " + (f"Use only these repository fields: {names}." if names else
@@ -711,7 +772,9 @@ def assemble(blocks: list[Block], ctx: Context, reply: Reply) -> Reply:
             reply.note("Az AI entity-osztályt is írt; az entityt a migrátor generálja, ezt a blokkot kihagytuk.")
         elif kind == "repository" and target is None:
             info["note"] = "ismeretlen repository"
-            if ctx.mode != "jpa" or not ctx.repositories:
+            if ctx.mode != "jpa":
+                reply.warn("Az AI repository-kódot is írt; ebben a módban a service futtatja az SQL-t, a blokkot kihagytuk.")
+            elif not ctx.repositories:
                 reply.problem("Az AI repository-kódot írt, de ehhez a metódushoz nincs elérhető repository.",
                               "No repository is available for this method. Do not write repository code; if the logic "
                               "needs a table, list it under MISSING:.")
@@ -775,20 +838,24 @@ def finish(ctx: Context, reply: Reply, service, helpers, service_imports, repo_p
     body = reply_repair.service(body, ctx, fixes)
     helpers = [reply_repair.service(h, ctx, fixes) for h in helpers]
     if ctx.mode == "service":
-        # Every :name of the native SQL bound where its piece gets into the statement: a missing setParameter, a
-        # conditional piece bound always or the other way round (sql_binding: plain Java, the model is not asked).
         from . import answer_checks, sql_binding
-        body = sql_binding.bind(body, ctx, fixes, reply.warnings)
-        helpers = [sql_binding.bind(h, ctx, fixes, reply.warnings) for h in helpers]
-        # A null bound to a native query: sent as '' (SqlValues.bind), which Oracle reads as a typed NULL.
-        body = answer_checks.bind(body, fixes)
-        helpers = [answer_checks.bind(h, fixes) for h in helpers]
         if ctx.sql_constants:
-            # The endpoint's SQL retyped by the model: its constant runs instead (the comment's SQL exactly).
+            # The endpoint's SQL retyped by the model: its constant runs instead (the comment's SQL exactly). First:
+            # the binds below are judged against the statement that really runs.
             from . import frame_sql
             used = set()
             body = frame_sql.use_constants(body, ctx.sql_constants, fixes, reply.warnings, used)
             helpers = [frame_sql.use_constants(h, ctx.sql_constants, fixes, reply.warnings, used) for h in helpers]
+        # Every :name of the native SQL bound where its piece gets into the statement: a missing setParameter, a
+        # conditional piece bound always or the other way round (sql_binding: plain Java, the model is not asked).
+        body = sql_binding.bind(body, ctx, fixes, reply.warnings)
+        helpers = [sql_binding.bind(h, ctx, fixes, reply.warnings) for h in helpers]
+        # ... and a setParameter for a name the written SQL does not have goes (Hibernate would refuse the query).
+        body = sql_binding.drop_extra(body, ctx, reply.warnings)
+        helpers = [sql_binding.drop_extra(h, ctx, reply.warnings) for h in helpers]
+        # A null bound to a native query: sent as '' (SqlValues.bind), which Oracle reads as a typed NULL.
+        body = answer_checks.bind(body, fixes)
+        helpers = [answer_checks.bind(h, fixes) for h in helpers]
         # A screen value read into a variable nothing uses: PMD fails the build on it, and it does nothing.
         body = sql_binding.unused(body, fixes, ctx)
         helpers = [sql_binding.unused(h, fixes, ctx) for h in helpers]
@@ -832,8 +899,7 @@ def finish(ctx: Context, reply: Reply, service, helpers, service_imports, repo_p
         if member is None: continue
         name = member.name
         if name in ctx.routines:
-            reply.problem(f"Az AI megírta a(z) {name} adatbázis-rutin metódusát; azt a migrátor adja.",
-                          f"Do not write {name}: it is the generated method of a database routine. Call it.")
+            reply.note(f"Az AI megírta a(z) {name} adatbázis-rutin metódusát; a migrátor generált változata marad.")
             continue
         if name in existing_service:
             new = unique(ctx.method + pascal(name), existing_service | helper_names)
