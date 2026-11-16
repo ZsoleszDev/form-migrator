@@ -178,15 +178,18 @@ Egyetlen kérést, két üzenettel. Rekord-hooknál a kérés tartalmazza a reko
 `row.mező`, típus, oszlop, PK), az esemény szabályát, és a kódban ténylegesen előforduló Forms-beépítettek
 egysoros Java-mintáját:
 
-- **system:** négy mondat a szerepről és arról, hogy a Forms-forrás adat, nem utasítás, utána a **Java 11 és PMD**
-  rövid szabálylistája (lásd lent);
-- **user:** hat rövid szabály, a **kiválasztott metódus szó szerint** egy ```java blokkban (benne a
-  megjegyzéssel), és a válasz formája.
+- **system:** minden, ami a feladattól független: négy mondat a szerepről és arról, hogy a Forms-forrás adat, nem
+  utasítás; a **Java 11 és PMD** rövid szabálylistája (lásd lent); az Oracle-szemantika (NULL, NUMBER, DATE,
+  NO_DATA_FOUND); `service` módban az adatbázis-szabály (`entityManager`, natív SQL nevesített paraméterekkel); és a
+  kódstílus mintával;
+- **user:** csak a feladat saját része: öt rövid szabály, adatvégpontnál és LOV-nál az SQL-konstansok listája, a
+  **kiválasztott metódus szó szerint** egy ```java blokkban (benne a megjegyzéssel), és a válasz formája.
 
-A system prompt minden feladatnál betűre azonos, és ez áll a kérés elején. Az Ollama a kérések közös elejét
-(prefixét) a gyorsítótárban tartja, amíg a modell be van töltve (`keep_alive`). Így a Java 11/PMD sorokat a laptop
-CPU-ja modellbetöltésenként egyszer dolgozza fel, nem metódusonként. Ezért kerültek ide, nem a feladatonként változó
-részbe.
+A system prompt egy adatelérési módon belül minden feladatnál betűre azonos, és ez áll a kérés elején. Az Ollama a
+kérések közös elejét (prefixét) a gyorsítótárban tartja, amíg a modell be van töltve (`keep_alive`). Így ezeket a
+sorokat a laptop CPU-ja modellbetöltésenként egyszer dolgozza fel, nem metódusonként. Ezért minden állandó szabály
+itt van, a feladatonként változó részben csak a feladat saját sorai. A feladatonként feldolgozandó rész így
+25–43%-kal rövidebb lett (például egy lista-végpontnál kb. 4 KB helyett kb. 2,3 KB).
 
 **Java 11 és PMD a promptban:** nincs `record`, szövegblokk, switch-kifejezés (`case X ->`), `instanceof`-minta,
 `Stream.toList()`, `String.formatted()`, `List.getFirst()`; minden `if`/`else`/`for` kapcsos zárójellel; soronként egy
@@ -207,7 +210,7 @@ Most a prompt a modul nyelvén szól (`frm_forms/dto_dialect.py`). A típusnevek
 metódus saját szignatúrájából veszi; ez utóbbi a döntő, így egy kézzel átnevezett `MyModulActionResultDto` is
 helyesen jelenik meg:
 
-- `5. Return new RtActionResultDto(blocks, messages, commands, globals)`, és a gombváz is így zárul;
+- `4. Return new RtActionResultDto(blocks, messages, commands, globals)`, és a gombváz is így zárul;
 - `request.getBlocks()`, `request.getParameters()`, `request.getOffset()`, `request.getLimit()`;
 - hooknál a rekord mezői: `:RENDELES.VEVO -> row.getVevo() / row.setVevo(..)`, és a szabály a Lombok-beant írja le;
 - a metódus `//region` megjegyzésében a migrátor tippjei is (`:vevo = row.getVevo()`, `eredmény -> row.setVevoNev(..)`,
@@ -220,17 +223,27 @@ mert a felismerő `…Row` típust várt. Most ezek is feladatok.
 
 Az alapformátum (`AWU_AZON` nélkül) promptja változatlan: `ActionResult`, `request.blocks()`, `row.mező`.
 
-A szabályok: a log1x-keret megtartása; az adatbázis-elérés a service `entityManager` mezőjén át, az eredeti
-Oracle SQL natív lekérdezésként, nevesített paraméterekkel (`createNativeQuery(sql).setParameter(...)`, majd
-`getResultList()`, `getSingleResult()` vagy `executeUpdate()`). Az oszlopértéket a `SqlValues.text/number/dateTime`
-olvassa, a null szöveg `""`-ként kötődik. Repository és JDBC nincs. Ezután jön az Oracle NULL/NUMBER/DATE/NO_DATA_FOUND
-szemantika, a képernyőértékek és az `ActionResult` használata. Adatvégpontnál és LOV-nál a szabály az `AI-feladat`
-lépései szerinti törzs, a `FormsChecks` mezőellenőrzés, a hookok hívása, a HTTP-válaszok (404, 409, 422), és az, hogy
-a zárolás és az írás `FormsErrors.translate`-tel adja a Forms-szerű hibát.
+Az adatbázis-szabály (a system promptban): az adatbázis-elérés a service `entityManager` mezőjén át, natív
+lekérdezésként, nevesített paraméterekkel (`createNativeQuery(sql).setParameter(...)`, majd `getResultList()`,
+`getSingleResult()` vagy `executeUpdate()`). Az oszlopértéket a `SqlValues.text/number/dateTime` olvassa, a null
+értéket a migrátor köti `SqlValues.bind`-dal. Repository és JDBC nincs. A feladat szabályai (a user részben): a
+log1x-keret megtartása, honnan jön az SQL (a megjegyzésből, illetve adatvégpontnál a konstansokból), a
+képernyőértékek (`PlsqlValues.text/number/datetime`, null-biztosan) és az `ActionResult` használata.
 
-A szabályok után rövid kódstílus-rész áll, a céges PMD/Checkstyle ellenőrzésekhez, egy mintával: a több soros
-kifejezés új sora az operátorral kezdődik (`+`, `&&`, `||` nem áll sor végén), és a lokális változó közvetlenül az
-első használata előtt, legfeljebb 5 sorral fölötte jön létre.
+Adatvégpontnál és LOV-nál a szabály az `AI-feladat` lépései szerinti törzs, és csak az, ami a művelethez kell:
+
+- új rekord, módosítás: a `FormsChecks` mezőellenőrzés, a hookok hívása, a HTTP-válaszok (404, 409, 422), és az,
+  hogy a zárolás és az írás `FormsErrors.translate`-tel adja a Forms-szerű hibát;
+- törlés: a hookok, a zárolás és a HTTP-válaszok;
+- lista, keresés: a hookok (POST-QUERY) és a 422; LOV: csak a 422. Mezőellenőrzés és zárolás itt nincs a szabályok
+  között: nem kell, és a kis modellt csak megzavarná.
+
+Az SQL-konstansok SQL-jét a prompt nem ismétli: a metódus `//region` megjegyzésében a konstans neve áll
+(`// LOV_LOV_STATUSZ_SQL`), a paraméterei a konstanslistában. Rövidebb, és nincs mit újragépelni.
+
+A kódstílus-rész (a system promptban, egy mintával) a céges PMD/Checkstyle ellenőrzésekhez: a több soros kifejezés
+új sora az operátorral kezdődik (`+`, `&&`, `||` nem áll sor végén), és a lokális változó közvetlenül az első
+használata előtt, legfeljebb 5 sorral fölötte jön létre.
 
 A kódban hívott adatbázis-rutinoknál (igazolt szignatúrával) a kérés megmondja a hívás módját: függvényt
 `SELECT PKG.F(:a) FROM DUAL`-lal, IN paraméteres eljárást `BEGIN PKG.P(:a); END;`-dal, OUT paraméteresnél
@@ -286,9 +299,25 @@ A feldolgozó ennél engedékenyebb, mert a kis modellek nem mindig követik bet
 
 Ezekért nem megy újabb kérés: egy javító kör egy teljes modellhívás (CPU-n percek), és a kis modell gyakran
 ugyanazt a hibát ismétli. Javítást csak az kér (a második hívásban az előző válaszával együtt), aminek nincs
-egyértelmű javítása: a service JDBC-t vagy repositoryt hív (`jdbc`, `DbCalls`, `xRepository`); benne maradt a
-PL/SQL-hívás vagy a `NOT_IMPLEMENTED` helyőrző; repository-kódot küld; vagy a Java-kód nem szintaktikus (a hibás
-sorral együtt).
+egyértelmű javítása: a service JDBC-t vagy ismeretlen repositoryt hív (`jdbc`, `DbCalls`, `xRepository`); benne
+maradt a PL/SQL-hívás vagy a `NOT_IMPLEMENTED` helyőrző; vagy a Java-kód nem szintaktikus (a hibás sorral együtt).
+
+### Mi állítja meg a javaslatot, és mi nem
+
+Az arany középút: újabb AI-hívást (és két hívás után hibás vázlatot) csak az okoz, ami **nem fordulna le**, vagy
+**biztosan hibát adna futáskor**, vagy biztonsági kérdés. Minden mást a migrátor helyben javít, vagy
+figyelmeztetésként mutat, és a javaslat átvehető.
+
+| A modell kódja | Mi történik |
+| --- | --- |
+| a service saját mezője (a fejlesztő `@Autowired` beanje), vagy a java-variables.json `autowired` mezője (`formsCommonsRepository.getIgKod(user)`) | rendben: ezek létező mezők. Korábban „ismeretlen repository” hibát adott, akkor is, ha a migrátor saját cseréje írta a kódba |
+| `private static final String SQL = "…";` a metódus mellett | a konstans értéke a kódba kerül (osztálymezőt a migrátor nem vesz fel); korábban szó nélkül kimaradt, és a kód nem fordult volna le |
+| más mező a metódus mellett, amit a kód használ | egy pontos javítási kérés: legyen helyi változó |
+| `setParameter` olyan névre, amely nincs a megírt SQL-ben | helyben törli (futáskor hibát adna), figyelmeztetéssel: nézd meg, nem maradt-e ki feltétel |
+| a hookok más sorrendben | figyelmeztetés (egy ciklus vagy segédmetódus is megváltoztathatja a szöveg szerinti sorrendet); hiányzó hookhívás továbbra is javítási kérés |
+| `// REPOSITORY` blokk `service` módban | kimarad, figyelmeztetéssel (ha a kód hívja, az a hívásnál derül ki) |
+| a modell megírta egy generált adatbázis-rutin metódusát | a generált marad, megjegyzéssel |
+| `"…".formatted(x)` | helyben `String.format("…", x)` |
 
 ### Ami lefordul, de futáskor hibázna
 
@@ -418,6 +447,14 @@ A service megtartja a meglévő metódus aláírását, log1x/tranzakciós keret
 Forms-kódot, illetve az `AI-feladat` lépéseit). A logika és az SQL a service-ben van: az `entityManager` natív
 lekérdezései, az eredeti Oracle SQL-lel. Az importokat a migrátor teszi be a használt JDK/Spring/JPA-típusokhoz és
 a `CommonMigrateTools` segédeihez (`SqlValues`, `FormsChecks`, `FormsErrors`, `LovQuery`, `PlsqlValues`).
+
+**A projekt `CommonMigrateTools.java`-ja legyen naprakész.** Ez az egy közös fájl nem települ a modulokkal: egyszer
+kell a projektbe tenni, és új változatnál cserélni (visszafelé kompatibilis). Az AI-módú kód a 9. változatot várja: a
+`LovQuery.limit` a 7.-ben, a `SqlValues.text/number/dateTime` és a `FormsErrors.translate` a 8.-ban, a
+`SqlValues.bind` a 9.-ben jelent meg. Ha a projektben régebbi van, a kód nem fordul le („cannot find symbol
+LovQuery”). Ha a projekt mappái be vannak állítva, a Java asszisztens minden javaslatnál figyelmeztet, ha a
+projektben régebbi `CommonMigrateTools.java` van; a telepítési jelentés is jelzi. A friss változat a modul
+`backend/CL/CommonMigrateTools.java` fájlja.
 
 A Domain és az üres repository a DPS-csomagban van, a JPA-annotációk csomagja a `jpa_namespace` beállítás (javax
 vagy jakarta). Összetett PK esetén a Domain beágyazott `Key` osztálya az id (`@IdClass`). A NUMBER BigDecimal marad.

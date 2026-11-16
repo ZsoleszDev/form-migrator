@@ -776,6 +776,36 @@ def declaration_place(code: str, mask: str, pairs: dict, query: Query, pieces: l
     return start, indent_at(code, start)
 
 
+def drop_extra(code: str, ctx, warnings: list) -> str:
+    """A setParameter for a name a written statement (a literal, an SQL constant) does not have: Hibernate refuses
+    the query at run time. The bind goes, with a warning (the SQL may have lost a condition: worth a look). One the
+    code cannot lose alone (a branch of an if/else) stays for answer_checks to report."""
+    from .answer_checks import native_queries, sql_parameters
+    constants = {c["name"]: c["sql"] for c in getattr(ctx, "sql_constants", None) or []}
+    dropped = []
+    for _ in range(50):
+        written = {q.span[0]: q for q in native_queries(code, constants) if q.sql is not None and q.complete}
+        target = None
+        for query in queries(code, constants):
+            known = written.get(query.opening + 1)
+            if known is None:
+                continue
+            expected = set(sql_parameters(known.sql))
+            target = next((b for b in query.binds if b.name not in expected and b.remove is not None), None)
+            if target:
+                break
+        if target is None:
+            break
+        code = code[:target.remove[0]] + code[target.remove[1]:]
+        code = drop_empty_ifs(code)
+        dropped.append(target.name)
+    if dropped:
+        warnings.append("Helyben törölve a setParameter azokra a nevekre, amelyek nincsenek az SQL-ben: "
+                        + ", ".join('"' + n + '"' for n in dict.fromkeys(dropped))
+                        + " (futáskor hibát adtak volna); ellenőrizd, nem maradt-e ki feltétel az SQL-ből.")
+    return code
+
+
 def problems(code: str, ctx) -> list[tuple[str, str]]:
     """(Hungarian, English) of every :name of a statement built at run time that nothing binds after the repairs."""
     from .answer_checks import native_queries

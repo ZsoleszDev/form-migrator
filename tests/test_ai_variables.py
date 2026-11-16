@@ -95,6 +95,50 @@ class VariableMapTests(unittest.TestCase):
             if shutil.which("java"):
                 ai.compile_module(self, output, Path(tempfile.mkdtemp(dir=root)))
 
+    def test_a_repository_field_of_the_map_is_not_an_unknown_repository(self):
+        # formsCommonsRepository.getIgKod(user) is the migrator's own repair: the checks must know the field
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            variables = root / "java-variables.json"
+            variables.write_text(json.dumps({"variables": [{
+                "variableName": "filter", "variableValue": "formsCommonsRepository.getIgKod(user)",
+                "autowired": "formsCommonsRepository", "import": "hu.company.pelda.FormsCommonsRepository"}]}),
+                encoding="utf-8")
+            with patch.dict(os.environ, {"FRM_JAVA_VARIABLE_MAP": str(variables)}):
+                output = ai.migrate(root, root / "module")
+                task = next(t for t in engine.prepare_workspace(output)["tasks"] if t["method"] == "onCtrlCountBtn")
+                client = ai.MethodClient(ai.ANSWERS)
+                with patch("frm_forms.ollama.opener", return_value=client):
+                    result = engine.propose(output, task["id"], engine.Options())
+            self.assertEqual(result["status"], "proposal", result["extraction"])
+            self.assertEqual(len(client.requests), 1)  # no correction round for the migrator's own code
+            self.assertFalse(any("repository" in p.lower() for p in result["extraction"]["problems"]))
+
+
+class ProjectHelperTests(unittest.TestCase):
+    def test_an_older_common_migrate_tools_in_the_project_is_named_in_every_proposal(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            output = ai.migrate(root, root / "module")
+            folder = root / "project/cl/src/main/java/hu/acme/cl"
+            folder.mkdir(parents=True)
+            copy = folder / "CommonMigrateTools.java"
+            copy.write_text('package hu.acme.cl;\npublic final class CommonMigrateTools {\n'
+                            '    public static final String VERSION = "6";\n}\n', encoding="utf-8")
+            effective = output / "analysis/effective-config.json"
+            data = json.loads(effective.read_text(encoding="utf-8"))
+            data["config"]["project_layout"] = {"CL": str(folder)}
+            effective.write_text(json.dumps(data), encoding="utf-8")
+            task = next(t for t in engine.prepare_workspace(output)["tasks"] if t["method"] == "onCtrlCountBtn")
+            warnings = engine.preview(output, task["id"], engine.Options())["warnings"]
+            self.assertTrue(any("6. változat" in w and "backend/CL/CommonMigrateTools.java" in w for w in warnings), warnings)
+            with patch("frm_forms.ollama.opener", return_value=ai.MethodClient(ai.ANSWERS)):
+                result = engine.propose(output, task["id"], engine.Options())
+            self.assertIn("CommonMigrateTools", result["extraction"]["warnings"][0])
+            # the project has the module's version: nothing to say
+            copy.write_text((output / "backend/CL/CommonMigrateTools.java").read_text(encoding="utf-8"), encoding="utf-8")
+            self.assertEqual(engine.preview(output, task["id"], engine.Options())["warnings"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

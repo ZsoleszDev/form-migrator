@@ -202,7 +202,22 @@ def big_decimal_literals(code: str) -> tuple[str, int]:
     return code, count + len(edits) + decimals
 
 
+def formatted(code: str) -> tuple[str, int]:
+    """"text %s".formatted(a) -> String.format("text %s", a): the same call, in Java 11."""
+    from .reply_repair import closing_paren
+    mask = java_mask(code)
+    edits = []
+    for start, end in literals(code):
+        call = re.match(r"\s*\.\s*formatted\s*\(", mask[end:])
+        close = closing_paren(mask, end + call.end() - 1) if call else -1
+        if close > 0:
+            arguments = code[end + call.end():close].strip()
+            edits.append((start, close + 1, "String.format(" + code[start:end] + (", " + arguments if arguments else "") + ")"))
+    return replace_all(code, edits), len(edits)
+
+
 REPAIRS = (
+    ('"...".formatted(x) -> String.format("...", x) (Java 11)', formatted),
     ("stream.toList() -> collect(Collectors.toList()) (Java 11)",
      lambda code: simple(code, r"\.\s*toList\s*\(\s*\)", ".collect(Collectors.toList())", static_call("Collectors"))),
     ("list.getFirst() -> list.get(0) (Java 11)",

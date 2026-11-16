@@ -349,10 +349,10 @@ def prepare_workspace(output: Path) -> dict:
     for task in tasks:
         task["tables"] = task["tables"] + [t for t in keyless if t not in task["tables"]]
     write_json(safe_file(output, "analysis/schema.json"), schema)
-    from .assistant_context import SYSTEM as system_prompt, rules
+    from .assistant_context import rules, system_prompt
     index = {"version": VERSION, "module": effective["module"], "tasks": tasks,
              "schema": full_sheet, "input_bindings": input_contract,
-             "default_instructions": system_prompt + "\n\n" + rules("service"),
+             "default_instructions": system_prompt("service") + "\n\n" + rules("service"),
              "notice": "A javaslatok külön készülnek; a generált végpontokat csak ellenőrzött átvétel módosítja."}
     write_json(safe_file(output, AREA + "/index.json"), index)
     guide = ("# Trigger javásítása\n\n"
@@ -895,6 +895,26 @@ def deterministic_response(prepared: dict) -> tuple[dict | None, str]:
     return action_java.response(packet, prepared["generated"], framework.load(effective["config"]))
 
 
+def tools_warning(output: Path) -> str | None:
+    """The project's CommonMigrateTools older than the module's (project folders set): the written code calls helpers
+    of the newer one, so it would not compile in the project until that one file is replaced."""
+    from .project_deploy import outdated_common_tools
+    try:
+        layout = read_json(safe_file(output, "analysis/effective-config.json"))["config"].get("project_layout") or {}
+        generated = safe_file(output, "backend/CL/CommonMigrateTools.java")
+        found = outdated_common_tools(layout, generated) if layout else None
+    except (OSError, ValueError, KeyError, TypeError, MigrationError):
+        return None
+    if found is None:
+        return None
+    path, version = found
+    wanted = re.search(r'\bVERSION\s*=\s*"(\d+)"', generated.read_text(encoding="utf-8")).group(1)
+    return (f"A projekt CommonMigrateTools.java-ja ({path}) régebbi ({version}. változat), a modul a(z) {wanted}.-at "
+            "várja: a kód új segédei (például LovQuery.limit, SqlValues.bind, SqlValues.text) ott nincsenek, így nem "
+            "fordul le. Cseréld le azt az egy fájlt a modul backend/CL/CommonMigrateTools.java fájljára (visszafelé "
+            "kompatibilis).")
+
+
 def preview(output: Path, task_id: str, options: Options) -> dict:
     """The exact request the next run would send, without calling the model."""
     prepared = prepare(output, task_id, options)
@@ -908,6 +928,9 @@ def preview(output: Path, task_id: str, options: Options) -> dict:
                         "a futtatás nem hívja a modellt, ez a kérés nem megy el.")
     elif prepared["required_tokens"] > options.num_ctx:
         warnings.append(budget_message(prepared["required_tokens"], options.num_ctx))
+    outdated = tools_warning(output)
+    if outdated:
+        warnings.append(outdated)
     return {"task_id": task_id, "method": prepared["packet"]["method"], "system": prompt["system"], "user": prompt["user"],
             "bytes": prompt["bytes"], "estimated_input_tokens": prepared["input_tokens"],
             "required_tokens": prepared["required_tokens"], "num_ctx": options.num_ctx, "num_predict": options.num_predict,
@@ -1347,6 +1370,9 @@ def _propose(prepared, options, cache, request, log, assistant_reply, jpa_assist
     extraction = dict(extraction or {})
     if draft_note:
         extraction["warnings"] = list(extraction.get("warnings", [])) + [draft_note]
+    outdated = tools_warning(output)
+    if outdated:
+        extraction["warnings"] = [outdated] + list(extraction.get("warnings", []))
     result = {"version": VERSION, "id": proposal_id, "task_id": task_id, "method": packet["method"],
               "status": response["status"], "model": "determinisztikus (AI nélkül)" if deterministic else options.model,
               "deterministic": deterministic, "cached": cached and not deterministic, "calls": calls,

@@ -304,6 +304,39 @@ class ProblemTests(unittest.TestCase):
         self.assertEqual(sql_binding.problems(fixed, CTX), [])
 
 
+class ExtraBindTests(unittest.TestCase):
+    def test_a_bind_for_a_name_the_written_sql_does_not_have_goes_with_a_warning(self):
+        code = '''public Object m(String code, String name) {
+    Query q = entityManager.createNativeQuery("SELECT A FROM T WHERE CODE = :code");
+    q.setParameter("code", code);
+    if (name != null) {
+        q.setParameter("name", name);
+    }
+    return entityManager.createNativeQuery("SELECT B FROM T WHERE ID = :id").setParameter("id", 1)
+            .setParameter("extra", 2).getResultList();
+}'''
+        warnings = []
+        fixed = sql_binding.drop_extra(code, CTX, warnings)
+        self.assertNotIn('"name"', fixed)
+        self.assertNotIn("if (name != null)", fixed)  # the if left empty goes too
+        self.assertIn('.setParameter("id", 1).getResultList();', fixed)
+        self.assertIn('q.setParameter("code", code);', fixed)
+        self.assertEqual(len(warnings), 1)
+        self.assertIn('"name", "extra"', warnings[0])
+        self.assertEqual(sql_binding.drop_extra(fixed, CTX, []), fixed)
+
+    def test_sql_built_from_pieces_or_a_branch_of_an_if_else_is_left(self):
+        built = '''StringBuilder sql = new StringBuilder("SELECT A FROM T WHERE 1 = 1");
+sql.append(where());
+Query q = entityManager.createNativeQuery(sql.toString());
+q.setParameter("kod", kod);'''
+        self.assertEqual(sql_binding.drop_extra(built, CTX, []), built)  # where() may hold :kod
+        branch = '''Query q = entityManager.createNativeQuery("SELECT A FROM T WHERE CODE = :code");
+if (a) q.setParameter("code", code);
+else q.setParameter("other", code);'''
+        self.assertEqual(sql_binding.drop_extra(branch, CTX, []), branch)
+
+
 class UnusedTests(unittest.TestCase):
     def test_a_screen_value_nothing_reads_goes_and_one_named_like_a_parameter_stays(self):
         code = '''public Object m(ActionRequest request) {

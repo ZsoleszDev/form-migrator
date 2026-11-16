@@ -20,6 +20,11 @@ class RepairTests(unittest.TestCase):
         deque = "Deque<String> d = new ArrayDeque<>(); String s = d.getFirst();"
         self.assertEqual(repaired(deque), deque)  # a Deque has getFirst() in Java 11
 
+    def test_formatted_on_a_literal_is_string_format(self):
+        self.assertEqual(repaired('String t = "%d sor, %s".formatted(n, name);'), 'String t = String.format("%d sor, %s", n, name);')
+        self.assertEqual(java_lint.problems(repaired('String t = "%d sor".formatted(n);')), [])
+        self.assertTrue(java_lint.problems(repaired("String t = pattern.formatted(n);")))  # not a literal: the model fixes it
+
     def test_a_literal_comes_first_and_a_string_is_never_compared_with_identity(self):
         self.assertEqual(repaired('if (status.equals("LEZART")) {'), 'if ("LEZART".equals(status)) {')
         self.assertEqual(repaired('if (values.get("B").get("X").equalsIgnoreCase("i")) {'),
@@ -112,7 +117,7 @@ class AssistantReplyTests(unittest.TestCase):
         return reply.Context(method="onX", service="", mode="service")
 
     def test_java_17_goes_back_to_the_model_with_the_java_11_way(self):
-        answer = '```java\n// SERVICE\nvar t = "%s".formatted(x);\nreturn null;\n```'
+        answer = '```java\n// SERVICE\nvar t = pattern.formatted(x);\nreturn null;\n```'
         result = reply.extract(answer, self.context())
         self.assertTrue(any("String.formatted()" in p.hu for p in result.problems), result.problems)
 

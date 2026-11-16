@@ -170,7 +170,7 @@ public ActionResult onCtrlBtn(UserDto user, ActionRequest request) throws Except
         if shutil.which('java'):
             compile_module(self, output, self.root / 'compile-nevkeres')
 
-    def test_a_model_that_writes_the_routine_itself_is_corrected(self):
+    def test_a_model_that_writes_the_routine_itself_keeps_the_generated_one(self):
         guessed = """```java
 // SERVICE
 private void triggerPreInsertB(BRow row, RuleContext context) {
@@ -181,17 +181,19 @@ private String kodPkgCheckInsert(String kod, java.time.LocalDateTime datum) {
     return kod;
 }
 ```"""
-        fixed = """```java
-// SERVICE
-private void triggerPreInsertB(BRow row, RuleContext context) {
-    row.nev = kodPkgCheckInsert(row.kod, row.datum);
-}
-```"""
-        client = Client(guessed, fixed)
+        client = Client(guessed)
         with patch('frm_forms.ollama.opener', return_value=client):
             result = engine.propose(self.output, self.tasks['triggerPreInsertB']['id'], engine.Options(data_access="jpa", attempts=2))
-        self.assertEqual(result['calls'], 2)
-        self.assertIn('Do not write kodPkgCheckInsert', client.requests[1]['messages'][-1]['content'])
+        # no correction round: the model's guess is left out, the generated routine method (Oracle runs it) stays
+        self.assertEqual((result['status'], result['calls']), ('proposal', 1), result['extraction'])
+        self.assertNotIn('return kod;', result['response']['private_methods'])
+        self.assertTrue(any('kodPkgCheckInsert' in note for note in result['extraction']['notes']))
+        engine.apply_proposal(self.output, result['id'], reviewed=True)
+        service = (self.output / 'backend/DPS/DbcallServiceImpl.java').read_text(encoding='utf-8')
+        self.assertIn('row.nev = dbcallDbRoutines.kodPkgCheckInsert(row.kod, row.datum);', method_text(service, 'triggerPreInsertB'))
+        self.assertNotIn('return kod;', service)
+        routines = (self.output / 'backend/DPS/DbcallDbRoutines.java').read_text(encoding='utf-8')
+        self.assertEqual(routines.count('public String kodPkgCheckInsert('), 1)
 
 
 if __name__ == '__main__':

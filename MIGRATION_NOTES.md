@@ -1,5 +1,26 @@
 # Következő változat (a 4.35 után) — minden metódust az AI ír a service-ben, tippekkel; entity és üres repository; valódi mentés, Forms-sorrend
 
+- **A Java asszisztens csak azon akad el, ami tényleg hibás.** Újabb AI-hívást (és két hívás után hibás vázlatot)
+  csak az okoz, ami nem fordulna le, biztosan hibát adna futáskor, vagy biztonsági kérdés. A többit a migrátor
+  helyben javítja vagy figyelmeztetéssel mutatja:
+  - a service saját mezői és a java-variables.json `autowired` mezői (`formsCommonsRepository`) ismert mezők;
+    korábban „ismeretlen repository” hiba lett belőlük, akkor is, ha a migrátor saját cseréje írta a kódba;
+  - a metódus mellé írt literál-konstans (`private static final String SQL = "…"`) értéke a kódba kerül; korábban
+    szó nélkül kimaradt, és a kód nem fordult volna le;
+  - a megírt SQL-ben nem szereplő névre hívott `setParameter` törlődik (figyelmeztetéssel);
+  - a hookok sorrendje csak figyelmeztetés; a `// REPOSITORY` blokk `service` módban és a modell saját
+    rutin-metódusa kimarad; a literálon hívott `.formatted(x)` `String.format`-ra javul.
+- **Gyorsabb és pontosabb prompt.** Minden feladattól független szabály (Java 11/PMD, Oracle-szemantika, az
+  adatbázis-szabály, a kódstílus) a system promptba került. Azt az Ollama modellbetöltésenként egyszer dolgozza fel,
+  így a feladatonként feldolgozandó rész 25–43%-kal rövidebb. Az adatvégpontok szabályai a művelethez igazodnak: a
+  lista és a LOV nem kap mezőellenőrzési és zárolási utasítást. A konstansok SQL-jét a prompt nem ismétli, csak
+  megnevezi, így nincs mit újragépelni. A gombok képernyőérték-szabálya a null-biztos `PlsqlValues`-t ajánlja.
+- **A LOV `:term` tippje érthető, és a projekt régi `CommonMigrateTools.java`-jára figyelmeztet a migrátor.** A
+  `:term` a mezőbe gépelt szöveg; a tipp most ezt mondja, és nem kér hozzá segédet. A `LovQuery` (és a
+  `SqlValues.bind`/`text`) a `CommonMigrateTools` 7–9. változatában jelent meg. Ez a közös fájl nem települ a
+  modulokkal, így egy korábban letöltött példány mellett a kód nem fordul le. Ha a projekt mappái be vannak
+  állítva, a Java asszisztens minden javaslatnál szól, ha a projektben régebbi változat van; a friss a modul
+  `backend/CL/CommonMigrateTools.java` fájlja.
 - **A LOV javaslatai megjelennek a mezőben.** A lekérdezés jó volt, de a javaslatok a struktúratömbön belül
   módosultak, az űrlapblokk signal-inputja ezt nem vette észre. Most új tömb kerül vissza, az érintett elem új
   objektumként.

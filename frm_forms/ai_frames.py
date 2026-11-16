@@ -268,7 +268,10 @@ def lov_frame(o: dict, log1x, user_type: str) -> str:
                 + '            throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED, "Ez a LOV ebben a modulban még nem érhető el.");\n'
                 + "        });\n    }")
     labels = lov_labels(plan)
-    params = [":term = LovQuery.term(request.term())", ":limit = LovQuery.limit(request.limit())"]
+    # :term: the text typed into the field (a null is bound as '' - "every row" in the SQL); :limit: the helper gives
+    # the default and the cap (the screen sends no limit: a null would fetch no row)
+    params = [":term = request.term() (a mezőbe gépelt szöveg: az így kezdődő sorok; üres: mind)",
+              ":limit = LovQuery.limit(request.limit()) (hiányzó: 50, legfeljebb 500)"]
     params += [f":{b['parameter']} = LovQuery.{b['type']}(request.parameters(), {quote(b['source'])})" for b in plan["binds"]]
     lines = ["SQL (a rekordcsoport lekérdezése, a beírt szövegre szűrve):", *plan["sql"].split("\n"),
              "Paraméterek: " + "; ".join(params) + ".",

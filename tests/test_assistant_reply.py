@@ -332,6 +332,81 @@ public interface AppAccountRepository extends JpaRepository<AppAccountDomain, ja
         self.assertEqual(result.response["repositories"][0]["imports"], ["jakarta.persistence.LockModeType"])
 
 
+DPS_SERVICE = """package hu.company.features.lookup.dps;
+
+@Service
+public class LookupServiceImpl extends ModuleServiceBase<DpsLogHelper> implements LookupService {
+    @PersistenceContext
+    private EntityManager entityManager;
+
+    @Autowired
+    private PartnerRepository partnerRepository;
+
+    @Override
+    public ActionResult onCtrlRun(UserDto user, ActionRequest request) throws Exception {
+        return log1x(log, LookupConstants.ON_CTRL_RUN_NAME, user, null, () -> {
+        });
+    }
+}
+"""
+
+COUNTING = """```java
+// SERVICE
+private static final String COUNT_SQL = "SELECT count(*) FROM app_orders "
+        + "WHERE code LIKE :filter || '%'";
+private static final int LIMIT = 50;
+
+public ActionResult onCtrlRun(UserDto user, ActionRequest request) throws Exception {
+    return log1x(log, LookupConstants.ON_CTRL_RUN_NAME, user, null, () -> {
+        String filter = PlsqlValues.text(request.blocks(), "CTRL", "FILTER");
+        Object total = entityManager.createNativeQuery(COUNT_SQL).setParameter("filter", filter).getSingleResult();
+        return new ActionResult(Map.of(), List.of(String.valueOf(total)), List.of(), Map.of());
+    });
+}
+```"""
+
+
+def service_mode(**changes):
+    return context(**{"service": DPS_SERVICE, "repositories": [], "mode": "service", **changes})
+
+
+class ServiceModeTests(unittest.TestCase):
+    """data access "service": the checks stop what would not compile or would fail at run time, nothing else."""
+
+    def test_the_services_own_fields_and_the_variable_maps_fields_are_known(self):
+        ctx = service_mode(variables={"igkod": {"name": "igkod", "value": "formsCommonsRepository.getIgKod(user)",
+                                                "autowired": "formsCommonsRepository"}})
+        self.assertLessEqual({"entityManager", "partnerRepository", "formsCommonsRepository"}, reply.known_fields(ctx))
+        text = service_block("String igkod = formsCommonsRepository.getIgKod(user);\n"
+                             "String name = partnerRepository.nameOf(igkod);\n"
+                             "return new ActionResult(Map.of(), List.of(name), List.of(), Map.of());")
+        self.assertEqual(reply.extract(text, ctx).problems, [])
+        unknown = reply.extract(text.replace("partnerRepository.nameOf", "ordersRepository.nameOf"), ctx)
+        self.assertTrue(any("ordersRepository" in p.hu for p in unknown.problems))
+
+    def test_a_literal_constant_of_the_model_is_written_into_the_code_another_field_is_asked_for(self):
+        result = reply.extract(COUNTING, service_mode())
+        self.assertEqual(result.problems, [])
+        self.assertIn("createNativeQuery(\"SELECT count(*) FROM app_orders WHERE code LIKE :filter || '%'\")",
+                      result.response["body"])
+        self.assertTrue(any("COUNT_SQL" in note for note in result.notes))
+        self.assertTrue(any("LIMIT" in note for note in result.notes))  # not used: left out, and said so
+        field = COUNTING.replace("private static final int LIMIT = 50;", "private Map<String, String> cache = new HashMap<>();")
+        field = field.replace("        Object total", "        cache.put(\"x\", filter);\n        Object total")
+        self.assertEqual([p.en for p in reply.extract(field, service_mode()).problems],
+                         ["Do not declare fields or constants in the class: declare cache as a local variable inside the "
+                          "method that uses it."])
+
+    def test_a_repository_block_or_a_routine_method_costs_no_correction_round(self):
+        text = service_block("callPkgCheck(user);\nreturn new ActionResult(Map.of(), List.of(), List.of(), Map.of());")
+        text = text.replace("\n}\n```\n", "\n}\n\nprivate void callPkgCheck(UserDto user) {\n"
+                            "    entityManager.createNativeQuery(\"BEGIN pkg.check; END;\").executeUpdate();\n}\n```\n") + REPO_BLOCK
+        result = reply.extract(text, service_mode(routines=frozenset({"callPkgCheck"})))
+        self.assertEqual(result.problems, [])
+        self.assertNotIn("callPkgCheck(UserDto", result.response["private_methods"])  # the generated one stays
+        self.assertTrue(any("repository-kódot is írt" in w for w in result.warnings))
+
+
 class ScanTests(unittest.TestCase):
     def test_members_statements_and_continuations(self):
         source = ("@PersistenceContext private EntityManager em;\nprivate static final String X = \"{\";\n"

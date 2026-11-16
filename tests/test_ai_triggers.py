@@ -577,7 +577,7 @@ class HookAssistantTests(unittest.TestCase):
         preview = engine.preview(self.output, task["id"], self.options)
         self.assertFalse(preview["deterministic"])
         self.assertEqual(preview["repositories"], [])
-        self.assertIn("the service's `entityManager` field", preview["user"])
+        self.assertIn("the service's `entityManager` field", preview["system"])  # every method's rule: cached once
         self.assertIn('SEQ.NEXTVAL: SqlValues.number(entityManager.createNativeQuery("SELECT SEQ.NEXTVAL FROM DUAL")', preview["user"])
         self.assertIn("SQL: SELECT app_orders_seq.NEXTVAL FROM dual; eredmény -> row.id", preview["user"])
         self.assertNotIn("Repositories:", preview["user"])
@@ -608,9 +608,14 @@ class HookAssistantTests(unittest.TestCase):
                 self.assertEqual(result["status"], "proposal", result)
                 engine.apply_proposal(self.output, result["id"], reviewed=True)
         self.assertEqual(len(client.requests), 9)
-        crud = client.requests[0]["messages"][1]["content"]
+        crud = client.requests[0]["messages"][1]["content"]  # listOrders
         self.assertIn("Write the body of this Java method from the steps of its AI-feladat comment", crud)
-        self.assertIn("FormsChecks.required(errors", crud)
+        # a list only reads: no field checks and no lock in its rules; the create endpoint has both
+        self.assertNotIn("FormsChecks.required(errors", crud)
+        self.assertNotIn("FormsErrors.translate", crud)
+        create = client.requests[1]["messages"][1]["content"]
+        self.assertIn("FormsChecks.required(errors", create)
+        self.assertIn("throw FormsErrors.translate(e)", create)
         self.assertEqual(engine.prepare_workspace(self.output)["tasks"], [])
         service = (self.output / SERVICE).read_text(encoding="utf-8")
         create = method_text(service, "createOrders")
