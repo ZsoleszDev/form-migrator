@@ -361,6 +361,7 @@ változóján, és a lekérdezésre ráadott `Map` elemei (`params.forEach(q::se
 | az `if` alatti darab `:név`-e mindig kötött, vagy sehol | `sqlParams.put("név", SqlValues.bind(érték));` a darab mellé, ugyanabba az `if`-be (a kapcsos zárójel nélküli `if` kapcsos zárójelet kap); `Map<String, Object> sqlParams = new LinkedHashMap<>();` a builder után, `sqlParams.forEach(q::setParameter);` a lekérdezés után. Ha a lekérdezésnek nincs változója, `Query sqlQuery = …` lesz belőle |
 | a modell saját `Map`-jéből hiányzik egy érték | a darab mellé kerül az ő `Map`-jébe; az értékei `SqlValues.bind(...)`-ot kapnak |
 | szövegliterál SQL `:név`-e nincs kötve | `.setParameter("név", érték)`, ha van hozzá érték |
+| `?:`-tal választott darab: `.append(e04 != null ? "AIT_E04 = :e04 and " : "")` | a mondat többi `:név`-e a szokásos módon kötődik; az ág `:név`-e ugyanazzal a feltétellel: `if (e04 != null) { sqlParams.put("e04", SqlValues.bind(e04)); }` a mondat után. A mindkét ágban szereplő név mindig kötött |
 | csak képernyőértéket vagy állandót olvasó, használatlan változó | törli (PMD UnusedLocalVariable); az SQL-paraméterrel azonos nevűt nem |
 
 **Az érték forrása,** sorrendben: a modell saját kötésének kifejezése (ha az ott, ahová kerül, elérhető), az
@@ -370,10 +371,15 @@ előtt.
 
 **Amihez nem nyúl** (figyelmeztetést kaphat):
 
-- a futáskor képzett paraméternév (`" OR ID = :p" + i`);
+- a futáskor képzett paraméternév (`" OR ID = :p" + i`); a `":név" + (feltétel ? " AND …" : "")` viszont nem ilyen:
+  a név ott véget ér;
 - az újrakezdett builder (`setLength(0)`, új értékadás);
-- a `?:`-tal választott darab: kivétel a „ha üres, ne kerüljön bele” minta (`where.isEmpty() ? "" : …`);
+- az egymásba ágyazott `?:` (`a ? x : b ? y : z`), és az a `?:` ág, amelynek feltétele nem futtatható kétszer
+  (értékadás, `++`, vagy olyan hívás, amely nem csak olvas: `it.hasNext()`). A mondat többi neve ilyenkor is kötődik;
 - a helyes kötés, az if/else ágakban külön értékkel kötött is.
+
+Amit nem tud végigkövetni, arról figyelmeztetést ad: a kötéseket nem ellenőrizte, nézd át. Korábban ez szó nélkül
+történt. Egy `?:` darab miatt például a mondat összes kötése elmaradt, a kiolvasott változó használatlan maradt (PMD).
 
 A prompt egy sora mutatja a feltételes darab mintáját: SQL-darab `if` alatt → az értéke ugyanabban az `if`-ben egy
 `Map`-be, majd `params.forEach(query::setParameter)`.

@@ -1,5 +1,11 @@
 # Következő változat (a 4.35 után) — minden metódust az AI ír a service-ben, tippekkel; entity és üres repository; valódi mentés, Forms-sorrend
 
+- **A `?:`-tal választott SQL-darab nem akasztja meg a kötéseket.** Egy `.append(e04 != null ? "AIT_E04 = :e04 and " :
+  "")` darab miatt a migrátor eddig az egész lekérdezést kihagyta, szó nélkül. A `:ubiIgkod` sem kapott értéket, a
+  változója használatlan maradt (PMD). Ugyanez történt, ha a `?:` előtti szöveg paraméterrel végződött
+  (`":nev" + (…)`), mert ezt futáskor képzett névnek vette. Most a mondat többi neve a szokásos módon kötődik, az ág
+  neve ugyanazzal a feltétellel (`if (e04 != null) { sqlParams.put(…); }`). A teljesen minősített típusú változót
+  (`java.math.BigDecimal x = …`) is felismeri. Amit nem tud végigkövetni, arról figyelmeztet.
 - **A Forms `:BLOKK.MEZŐ` hivatkozása a Java SQL-ben nevesített paraméter lesz, a képernyőérték változójával
   kötve.** A modell a `DEFAULT_WHERE` szövegét szó szerint átvette (`AIT_ILLIGAZ_KOD = :v_elek_adlap.ubi_igkod`).
   Ezt a Forms tölti ki, az Oracle és a JPA nem; a kiolvasott változó pedig használatlan maradt (PMD). Most a
@@ -45,8 +51,8 @@
 
   Az érték forrása, sorrendben: a modell saját kötése (ha ott elérhető), az azonos nevű változó, a java-variables.json
   bejegyzése. Ha egyik sincs, a modell pontos javítási kérést kap. Nem nyúl a futáskor képzett paraméternévhez
-  (`":p" + i`), az újrakezdett builderhez, a `?:`-tal választott darabhoz és a helyes kötéshez (az if/else ágakban
-  külön értékkel kötöttet is helyesnek látja). A használatlan, csak képernyőértéket olvasó változót törli (PMD). A
+  (`":p" + i`), az újrakezdett builderhez és a helyes kötéshez (az if/else ágakban külön értékkel kötöttet is
+  helyesnek látja). A használatlan, csak képernyőértéket olvasó változót törli (PMD). A
   prompt egy sorral bővült: a feltételes darab `Map`-es mintája.
 - **java-variables.json az AI által írt metódusokban is.** A térkép eddig csak a determinisztikus kódban működött.
   Most az AI változóját is utólag kicseréli (import és `@Autowired` mezővel), AI-hívás nélkül; ha a modell nem is
