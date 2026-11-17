@@ -1,5 +1,8 @@
 # Következő változat (a 4.35 után) — minden metódust az AI ír a service-ben, tippekkel; entity és üres repository; valódi mentés, Forms-sorrend
 
+- **A promptban nincs egy-egy esetre szabott szabály.** A kötés, a `?:` darab és a Forms-hivatkozás javítása
+  általános és determinisztikus, ezért a hozzájuk korábban betett promptsorok kikerültek: a feltételes darab
+  `Map`-es mintája, a lekérdezőgomb `:ubiKod` példája és a `:BLOKK.MEZŐ`-tipp.
 - **A `?:`-tal választott SQL-darab nem akasztja meg a kötéseket.** Egy `.append(e04 != null ? "AIT_E04 = :e04 and " :
   "")` darab miatt a migrátor eddig az egész lekérdezést kihagyta, szó nélkül. A `:ubiIgkod` sem kapott értéket, a
   változója használatlan maradt (PMD). Ugyanez történt, ha a `?:` előtti szöveg paraméterrel végződött
@@ -12,7 +15,7 @@
   hivatkozás neve az a változó, amelybe a modell az értéket kiolvasta (`:ubiIgkod`), és onnan kötődik. Ha nincs
   ilyen, az érték helyben jön (`PlsqlValues.text/number(values, "BLOKK", "MEZŐ")`, `:GLOBAL.X`-nél a kérés
   paramétere, hookban a `row` mezője). Korábban a migrátor a `:V_ELEK_ADLAP`-ot paraméternek vette, és ilyen nevű
-  változót kért a modelltől. A prompt egy sora is megmondja, ha a Forms-kód szövegében ilyen hivatkozás van.
+  változót kért a modelltől.
 - **A Java asszisztens csak azon akad el, ami tényleg hibás.** Újabb AI-hívást (és két hívás után hibás vázlatot)
   csak az okoz, ami nem fordulna le, biztosan hibát adna futáskor, vagy biztonsági kérdés. A többit a migrátor
   helyben javítja vagy figyelmeztetéssel mutatja:
@@ -52,8 +55,7 @@
   Az érték forrása, sorrendben: a modell saját kötése (ha ott elérhető), az azonos nevű változó, a java-variables.json
   bejegyzése. Ha egyik sincs, a modell pontos javítási kérést kap. Nem nyúl a futáskor képzett paraméternévhez
   (`":p" + i`), az újrakezdett builderhez és a helyes kötéshez (az if/else ágakban külön értékkel kötöttet is
-  helyesnek látja). A használatlan, csak képernyőértéket olvasó változót törli (PMD). A
-  prompt egy sorral bővült: a feltételes darab `Map`-es mintája.
+  helyesnek látja). A használatlan, csak képernyőértéket olvasó változót törli (PMD).
 - **java-variables.json az AI által írt metódusokban is.** A térkép eddig csak a determinisztikus kódban működött.
   Most az AI változóját is utólag kicseréli (import és `@Autowired` mezővel), AI-hívás nélkül; ha a modell nem is
   hozott létre változót a paraméterhez, a kötés a bejegyzés kifejezését kapja.

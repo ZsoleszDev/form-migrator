@@ -373,12 +373,14 @@ class FormsReferenceTests(unittest.TestCase):
         from frm_forms import answer_checks
         self.assertIn('"code"', answer_checks.problems(helper)[0][1])
 
-    def test_the_prompt_says_it_only_where_the_forms_code_has_one(self):
+    def test_the_prompt_has_no_rule_of_its_own_for_it(self):
+        # The binding is the migrator's, for every shape: the prompt carries no rule made for one case.
         from frm_forms import assistant_context
-        inside = "set_block_property('B', default_where, 'X = :b.kod');"
-        outside = "set_block_property('B', default_where, 'X = ''' || :b.kod || '''');"
-        self.assertIn(assistant_context.FORMS_REF_HINT, assistant_context.hints(inside, "action", service=True))
-        self.assertNotIn(assistant_context.FORMS_REF_HINT, assistant_context.hints(outside, "action", service=True))
+        hints = assistant_context.hints("set_block_property('B', default_where, 'X = :b.kod');", "action", service=True)
+        self.assertFalse([h for h in hints if ":BLOCK.ITEM" in h or ":b.kod" in h], hints)
+        prompt = assistant_context.system_prompt("service") + assistant_context.SERVICE_QUERY_RESULT
+        self.assertNotIn(":BLOCK.ITEM", prompt)
+        self.assertNotIn("Map<String, Object> in that if", prompt)
 
 
 class TernaryTests(unittest.TestCase):

@@ -381,8 +381,8 @@ előtt.
 Amit nem tud végigkövetni, arról figyelmeztetést ad: a kötéseket nem ellenőrizte, nézd át. Korábban ez szó nélkül
 történt. Egy `?:` darab miatt például a mondat összes kötése elmaradt, a kiolvasott változó használatlan maradt (PMD).
 
-A prompt egy sora mutatja a feltételes darab mintáját: SQL-darab `if` alatt → az értéke ugyanabban az `if`-ben egy
-`Map`-be, majd `params.forEach(query::setParameter)`.
+A prompt ehhez nem kap külön szabályt: a kötés a migrátoré, minden alakra. A promptba nem kerül egy-egy esetre
+szabott szabály; ami általánosan, determinisztikusan megoldható, azt a migrátor végzi.
 
 ### Forms-hivatkozás az SQL-ben (`:BLOKK.MEZŐ`)
 
@@ -407,9 +407,8 @@ változója adhat értéket. Ha nincs, a modell a paraméter új nevén kap jav�
 `V_ELEK_ADLAP` „változóra”. Korábban a hivatkozást `:V_ELEK_ADLAP` paraméternek olvasta, és ilyen nevű változót kért
 a modelltől, ami a Forms-stílust csak erősítette.
 
-Megelőzésként a prompt egy sora mondja meg, ha a Forms-kód egy szövegében ilyen hivatkozás van: a Java SQL-be
-nevesített paraméter kell (`:ubiKod`), a Java értékkel kötve. A lekérdezőgomb szabálya ugyanezt írja. Az
-adatbázis-szerkezet átadása ezen nem segítene: ez nem tábla- vagy oszlopkérdés, hanem a Forms kötési szintaxisa.
+A prompt erre sem kap külön szabályt: a javítás általános, minden ilyen hivatkozásra. Az adatbázis-szerkezet
+átadása ezen nem segítene: ez nem tábla- vagy oszlopkérdés, hanem a Forms kötési szintaxisa.
 
 ### Az adatvégpontok és a LOV-ok SQL-je: konstansok, Oracle szerinti összehasonlítás
 
