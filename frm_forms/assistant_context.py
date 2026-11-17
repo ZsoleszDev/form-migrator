@@ -75,8 +75,7 @@ SERVICE_RULE = """Database access (every method): the service's `entityManager` 
 with named parameters, never concatenated values: entityManager.createNativeQuery(sql).setParameter("name", value),
 then .getResultList() (List<Object[]>, or List<Object> for one column), .getSingleResult() or .executeUpdate(). Set
 every :name of the SQL. Read a column value with SqlValues.text(o), SqlValues.number(o) or SqlValues.dateTime(o).
-SQL added under an if (sql.append): put its :name into a Map<String, Object> in that if, then
-params.forEach(query::setParameter). No repositories, no JDBC."""
+No repositories, no JDBC."""
 # Rule 2 of a method in the service mode (the database rule itself is in the system prompt).
 SERVICE_TASK = "Database access: run the Oracle SQL of the comments as written, through the entityManager."
 SERVICE_CONSTANTS = ("Database access: run the SQL constants listed below (the exact SQL of the comment) through the\n"
@@ -140,9 +139,9 @@ SERVICE_QUERY_RESULT = """3. Screen values: PlsqlValues.text(request.blocks(), "
    paging: request.offset(), request.limit().
 4. This button queries the {block} block: its query, the row mapping and the fetch hooks are in the comment. Put the
    WHERE (and ORDER BY) the Forms code sets with SET_BLOCK_PROPERTY DEFAULT_WHERE / ORDER_BY into that query, with
-   named parameters for the screen values (:ubiKod, never :BLOCK.ITEM, never concatenated), run it through the
-   entityManager, map every row to a new {row_class} and return new PageResult<>(rows, messages, hasMore). MESSAGE
-   texts go to messages; an error: throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "text")."""
+   named parameters for the screen values (never concatenated), run it through the entityManager, map every row to
+   a new {row_class} and return new PageResult<>(rows, messages, hasMore). MESSAGE texts go to messages; an error:
+   throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "text")."""
 
 # A plain button (ActionResult): the shape of a body the migrator can insert as it is. Small local models copy a
 # skeleton far more reliably than they follow prose; the repaired slips (reply_repair) are the ones it shows right.
@@ -380,19 +379,10 @@ SQL_HINTS = {text for _, text in COMMON_HINTS if text.startswith(('SEQ.NEXTVAL:'
                                                                    'UPDATE / INSERT / DELETE'))}
 
 
-# A Forms string with a :BLOCK.ITEM in it (a DEFAULT_WHERE): Forms fills the item in, so the model copies it into the
-# Java SQL, where it is no parameter Oracle or Hibernate knows (sql_binding.forms_refs repairs what still slips).
-FORMS_STRING = re.compile(r"'(?:''|[^'])*'")
-FORMS_REF_IN_STRING = re.compile(r":\s*[A-Za-z_][\w$#]*\s*\.\s*[A-Za-z_][\w$#]*")
-FORMS_REF_HINT = (":BLOCK.ITEM inside a Forms string (DEFAULT_WHERE): Forms fills in the screen value there. In the Java SQL "
-                  "write a named parameter instead (:ubiKod for :V_BLOCK.UBI_KOD) and bind the Java value; :BLOCK.ITEM "
-                  "is no parameter of Oracle or JPA.")
-
-
 def hints(code: str, kind: str, sql_generated: bool = False, service: bool = False) -> list[str]:
     """Forms -> Java lines for the built-ins and references the Forms code (forms_code) uses."""
     chosen = (HOOK_HINTS if kind == "hook" else [] if kind == "commit" else ACTION_HINTS) + COMMON_HINTS
-    found = [FORMS_REF_HINT] if any(FORMS_REF_IN_STRING.search(m.group()) for m in FORMS_STRING.finditer(code)) else []
+    found = []
     for pattern, text in chosen:
         if service and text in SQL_HINTS:
             text = next(v for k, v in SERVICE_SQL_HINTS.items() if text.startswith(k))

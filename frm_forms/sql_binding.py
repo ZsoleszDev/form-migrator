@@ -31,7 +31,7 @@ from .java_scan import java_mask
 KEYWORDS = {"true", "false", "null", "new", "this", "super", "instanceof", "return", "var", "final", "int", "long",
             "boolean", "double", "char", "byte", "short", "float", "class", "else", "if", "for", "while", "case"}
 NAME = r"[A-Za-z_$][\w$]*"
-TYPE = r"(?:[A-Z][\w$.]*(?:\s*<[^;(){}=]*?>)?(?:\s*\[\s*\])*|var|int|long|boolean|double|float|char|short|byte)"
+TYPE = r"(?:(?:[a-z_][\w$]*\.)*[A-Z][\w$.]*(?:\s*<[^;(){}=]*?>)?(?:\s*\[\s*\])*|var|int|long|boolean|double|float|char|short|byte)"
 # The variables a statement can be built in, and how each adds a piece.
 BUILDERS = r"StringBuilder|StringBuffer|StringJoiner|String|var|(?:List|ArrayList|LinkedList|Collection)\s*<\s*String\s*>"
 ADDS = r"append|insert|add|addAll"
@@ -50,6 +50,8 @@ class Piece:
     proper: int             # the statement itself (after its brace-less if/else/for/while)
     parent: "Piece | None" = None   # the piece that reads the builder this one is added to (None: the argument)
     gated: bool = False     # it reads builders under a ?: (other than "is it empty"): their pieces are not followed
+    ternary: bool = False   # the text of one branch of a ?: in its statement (cond ? " AND X = :x" : "")
+    guard: str | None = None  # that branch's condition in Java, when it may run twice (no side effect); else unsure
 
 
 @dataclass(eq=False)
@@ -239,12 +241,13 @@ def drop_empty_ifs(code: str) -> str:
 
 # --- the pieces of a statement ------------------------------------------------------------------------------------
 
-def literal_runs(code: str, mask: str, start: int, end: int):
-    """The string literals of a span, joined where only + is between them: ("text", end of the last literal)."""
+def literal_runs(code: str, mask: str, start: int, end: int, skip=()):
+    """The string literals of a span, joined where only + is between them: ("text", end of the last literal). skip:
+    spans whose literals are not the statement's own (the branches of a ?:)."""
     from .answer_checks import CODE_TOKEN, text_of
     text, last = None, None
     for match in CODE_TOKEN.finditer(code, start, end):
-        if not match.group().startswith('"'):
+        if not match.group().startswith('"') or any(a <= match.start() < b for a, b in skip):
             continue
         if last is not None and mask[last:match.start()].replace("+", "").strip():
             yield text, last
@@ -257,7 +260,16 @@ def literal_runs(code: str, mask: str, start: int, end: int):
 
 def continues(code: str, mask: str, position: int, end: int) -> bool:
     """After a literal ending in :name and a +: whether the operand is part of the name (":p" + i). Not when it is a
-    builder or a String whose text starts with a space or a parenthesis (" AND ..." / ")")."""
+    builder or a String whose text starts with a space or a parenthesis (" AND ..." / ")"), nor a (cond ? ... : ...)
+    whose branches do (or are empty)."""
+    group = re.match(r"\s*\+\s*\(", mask[position:end])
+    if group:
+        opening = position + group.end() - 1
+        choices = branches(mask, opening + 1, closing(mask, opening))
+        if choices:
+            starts = [re.match(r'\s*(?:"(.?)|(\S))', code[a:b]) for _, then, other in choices for a, b in (then, other)]
+            return not all(m and m.group(1) is not None and not re.match(r"[\w$]", m.group(1)) for m in starts)
+        return True
     operand = re.match(r"\s*\+\s*(" + NAME + r")(?:\s*\.\s*toString\s*\(\s*\))?(?![\w$])(?!\s*[.(\[])", mask[position:end])
     if not operand:
         return True
@@ -269,18 +281,85 @@ def continues(code: str, mask: str, position: int, end: int) -> bool:
     return not first or bool(re.match(r"[\w$]", first.group(1)))
 
 
-def piece_params(code: str, mask: str, start: int, end: int) -> list[str] | None:
-    """The :names of the SQL text a statement adds; None when a name is built at run time (":p" + i) or the text is
-    chosen by ?: (the piece is conditional in a way the migrator does not follow)."""
+def piece_params(code: str, mask: str, start: int, end: int, skip=()) -> list[str] | None:
+    """The :names of the SQL text a statement adds; None when a name is built at run time (":p" + i)."""
     from .answer_checks import sql_parameters
     found = []
-    for text, last in literal_runs(code, mask, start, end):
+    for text, last in literal_runs(code, mask, start, end, skip):
         if re.search(r":[A-Za-z_]?\w*$", text) and re.match(r"\s*\+", mask[last:end]) and continues(code, mask, last, end):
             return None
         found += sql_parameters(text)
-    if found and "?" in mask[start:end]:
-        return None
     return list(dict.fromkeys(found))
+
+
+# A condition that may be evaluated again for its value's put: comparisons and calls that only read.
+READING = r"isEmpty|isBlank|length|size|equals|equalsIgnoreCase|trim|compareTo|signum|isPresent|contains|startsWith|" \
+          r"endsWith|isNull|nonNull|isNotBlank|isNotEmpty|hasText|hasLength|toString|intValue|longValue|booleanValue"
+
+
+def reads_only(condition: str) -> bool:
+    if re.search(r"(?<![=!<>])=(?!=)|\+\+|--", condition):
+        return False
+    return all(re.fullmatch(READING, call) for call in re.findall(r"(" + NAME + r")\s*\(", condition))
+
+
+def branches(mask: str, start: int, end: int) -> list[tuple] | None:
+    """The ?: of a statement: (condition, then, else) spans, each a whole expression; None for one nested in
+    another (a ? x : b ? y : z), which the migrator does not follow."""
+    found, index = [], start
+    while True:
+        mark = next((i for i in range(index, end) if mask[i] == "?" and mask[:i].rstrip()[-1:] != "<"
+                     and not re.match(r"\s*(?:>|extends\b|super\b|,)", mask[i + 1:end])), None)
+        if mark is None:
+            return found
+        depth, begin = 0, mark
+        while begin > start:
+            char = mask[begin - 1]
+            if char in ")]":
+                depth += 1
+            elif char in "([":
+                if depth == 0:
+                    break
+                depth -= 1
+            elif depth == 0 and (char in ",;{}" or (char == "=" and mask[begin - 2:begin - 1] not in "=!<>"
+                                                     and mask[begin:begin + 1] != "=")):
+                break
+            begin -= 1
+        begin = skip_space(mask, begin)
+        if re.match(r"return\b", mask[begin:]):
+            begin = skip_space(mask, begin + 6)
+        colon, depth = None, 0
+        for i in range(mark + 1, end):
+            char = mask[i]
+            if char in "([{":
+                depth += 1
+            elif char in ")]}":
+                if depth == 0:
+                    return None
+                depth -= 1
+            elif depth == 0 and char == "?":
+                return None
+            elif depth == 0 and char == ":" and mask[i + 1:i + 2] != ":" and mask[i - 1:i] != ":":
+                colon = i
+                break
+        if colon is None:
+            return None
+        stop, depth = colon + 1, 0
+        while stop < end:
+            char = mask[stop]
+            if char in "([{":
+                depth += 1
+            elif char in ")]}":
+                if depth == 0:
+                    break
+                depth -= 1
+            elif depth == 0 and char in ",;":
+                break
+            elif depth == 0 and char == "?":
+                return None
+            stop += 1
+        found.append(((begin, mark), (mark + 1, colon), (colon + 1, stop)))
+        index = stop
 
 
 def read_names(mask: str, start: int, end: int) -> list[str]:
@@ -293,13 +372,31 @@ def resolve(code: str, mask: str, pairs: dict, span: tuple, path_: tuple, proper
             constants: dict, parent: Piece | None) -> list[Piece] | None:
     """A statement adding SQL: its own :names, and, read from it, an SQL constant or a builder's pieces."""
     start, end = span
-    params = piece_params(code, mask, proper, end)
+    choices = branches(mask, proper, end)
+    if choices is None:
+        return None
+    # the text outside the ?: branches is the statement's own; each branch's is a piece under its condition
+    outside = [(then[0], other[1]) for _, then, other in choices]
+    params = piece_params(code, mask, proper, end, outside)
     if params is None:
         return None
     own = Piece(start, end, params, path_, proper, parent)
     # " WHERE " + (where.isEmpty() ? "" : where) keeps the pieces exact; any other ?: decides on its own
     own.gated = "?" in EMPTINESS.sub("", mask[proper:end])
     pieces = [own]
+    for condition, then, other in choices:
+        sides = [piece_params(code, mask, *then), piece_params(code, mask, *other)]
+        if None in sides:
+            return None
+        both = [n for n in sides[0] if n in sides[1]]  # in the statement either way
+        own.params += [n for n in both if n not in own.params]
+        java, shown = code[condition[0]:condition[1]].strip(), " ".join(mask[condition[0]:condition[1]].split())
+        safe = reads_only(mask[condition[0]:condition[1]])
+        for names, guard, label in ((sides[0], java, shown), (sides[1], "!(" + java + ")", "!(" + shown + ")")):
+            names = [n for n in names if n not in both]
+            if names:
+                pieces.append(Piece(start, end, names, path_ + ("if (" + label + ")",), proper, parent,
+                                    ternary=True, guard=guard if safe else None))
     for name in read_names(mask, proper, end):
         if name in seen:
             continue
@@ -573,6 +670,8 @@ def present(piece: Piece) -> bool:
 
 def exact(piece: Piece) -> bool:
     """In the statement exactly when its own statement runs: a value put next to it is bound exactly then."""
+    if piece.ternary and piece.guard is None:
+        return False  # a ?: whose condition may not run twice
     if piece.parent is None:
         return True
     return not piece.parent.gated and (present(piece.parent) or (prefix(piece.parent.path, piece.path) and exact(piece.parent)))
@@ -615,6 +714,10 @@ def bind(code: str, ctx, notes: list, warnings: list, extra: dict | None = None)
         if index >= len(found):
             break
         mask = java_mask(code)
+        if not found[index].followed:
+            warnings.append("Egy natív lekérdezés SQL-jét a migrátor nem tudta végigkövetni (futáskor képzett "
+                            "paraméternév, újrakezdett SQL-builder vagy egymásba ágyazott ?:); a :név-paraméterek "
+                            "kötését nem ellenőrizte, nézd át.")
         edits, done, shifted, unsure = plan(code, mask, braces(mask), found[index], ctx, extra)
         index += 1
         for name in unsure:
@@ -698,7 +801,8 @@ def plan(code: str, mask: str, pairs: dict, query: Query, ctx, extra: dict | Non
             map_name = target_map or new_map
             value_type = map_value_type(mask, target_map) if target_map else "Object"
             for piece, value in plans:
-                puts.setdefault(piece, []).append(map_name + '.put("' + name + '", ' + wrapped(value, value_type) + ');')
+                puts.setdefault((piece.start, piece.end, piece.proper), []).append(
+                    (piece.guard, map_name + '.put("' + name + '", ' + wrapped(value, value_type) + ');'))
         (moved if binds else fixed).append(name)
     edits = []
     # a removed bind: its whole statement when all of its setParameter calls go, else the call alone
@@ -721,21 +825,21 @@ def plan(code: str, mask: str, pairs: dict, query: Query, ctx, extra: dict | Non
                 edits.append((b.value_span[0], b.value_span[1], text))
     if chain:
         edits.append((query.call[1] + 1, query.call[1] + 1, "".join(chain)))
-    for piece, lines in puts.items():
-        head = CONTROL.match(mask, piece.start)
-        if head and head.start(1) < piece.proper:
+    for (start, end, proper), entries in puts.items():
+        head = CONTROL.match(mask, start)
+        if head and head.start(1) < proper:
             # a brace-less if (...) piece: braces around the piece and its value
             begin = head.start(1)
             indent = indent_at(code, begin)
             inner = indent + "    "
-            stop = skip_space(mask, piece.end + 1)
+            stop = skip_space(mask, end + 1)
             follows = re.match(r"else\b", mask[stop:])  # } else on one line (Checkstyle RightCurly)
-            edits.append((begin, stop if follows else piece.end + 1, code[begin:piece.proper].rstrip() + " {\n" + inner
-                          + code[piece.proper:piece.end + 1] + "".join("\n" + inner + line for line in lines)
+            edits.append((begin, stop if follows else end + 1, code[begin:proper].rstrip() + " {\n" + inner
+                          + code[proper:end + 1] + "".join("\n" + line for line in put_lines(entries, inner))
                           + "\n" + indent + "}" + (" " if follows else "")))
         else:
-            indent = indent_at(code, piece.proper)
-            edits.append((piece.end + 1, piece.end + 1, "".join("\n" + indent + line for line in lines)))
+            indent = indent_at(code, proper)
+            edits.append((end + 1, end + 1, "".join("\n" + line for line in put_lines(entries, indent))))
     if new_map:
         place = declaration_place(code, mask, pairs, query, list(puts))
         if place is None:
@@ -758,10 +862,18 @@ def plan(code: str, mask: str, pairs: dict, query: Query, ctx, extra: dict | Non
     return edits, fixed, moved, unsure
 
 
+def put_lines(entries: list, indent: str) -> list[str]:
+    """The puts after a statement: a ?: branch's under its condition (if (cond) { ... })."""
+    lines = [indent + line for guard, line in entries if guard is None]
+    for guard in dict.fromkeys(g for g, _ in entries if g is not None):
+        lines += [indent + "if (" + guard + ") {"] + [indent + "    " + line for g, line in entries if g == guard] + [indent + "}"]
+    return lines
+
+
 def declaration_place(code: str, mask: str, pairs: dict, query: Query, pieces: list) -> tuple[int, str] | None:
     """Where a new parameter map is declared: in the block holding every piece that puts into it and the query, right
     after the builder's declaration when that is there and before them, else first in that block."""
-    positions = [skip_space(mask, p.start) for p in pieces] + [skip_space(mask, query.statement[0])]
+    positions = [skip_space(mask, start) for start, _, _ in pieces] + [skip_space(mask, query.statement[0])]
     blocks = [o for o in sorted(pairs, reverse=True) if all(o < p <= pairs[o] for p in positions)]
     block = blocks[0] if blocks else -1
     first = min(positions)
@@ -775,6 +887,8 @@ def declaration_place(code: str, mask: str, pairs: dict, query: Query, pieces: l
             return skip_space(code, line_end + 1), indent_at(code, start)
     if block < 0:
         return None
+    if innermost(pairs, first) == block:
+        return first, indent_at(code, first)  # right before the first statement that needs it
     start = skip_space(code, block + 1)
     return start, indent_at(code, start)
 

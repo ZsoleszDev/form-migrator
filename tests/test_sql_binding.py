@@ -199,6 +199,23 @@ CASES = {
                           '.setParameter("ubiE04", PlsqlValues.number(values, "V_ELEK_ADLAP", "UBI_E04"))',
                           "'lásd :A.B'"],  # the text of an Oracle string stays
                                              [":V_ELEK_ADLAP", ":v_elek_adlap"]),
+    # reported next: a ?: piece in the chain left the whole statement unbound (:ubiIgkod too, an unused variable)
+    "a_conditional_piece_chosen_by_a_ternary": ("", '''
+        var values = request.blocks() == null ? Map.<String, Map<String, String>>of() : request.blocks();
+        String ubiInptipKod = PlsqlValues.text(values, "V_ELEK_ADLAP", "UBI_INPTIP_KOD");
+        java.math.BigDecimal ubiE04 = PlsqlValues.number(values, "V_ELEK_ADLAP", "UBI_E04");
+        String ubiIgkod = formsCommonsRepository.getIgKod(user);
+        StringBuilder sql = new StringBuilder();
+        sql.append("SELECT AIT_ID FROM AIT_ADLAP WHERE (")
+                .append(":ubiInptipKod = '26T104' and AIT_INPTIP_KOD = '26T104') and ")
+                .append(ubiE04 != null ? "AIT_E04 = :ubiE04 and " : "")
+                .append("AIT_ILLIGAZ_KOD = :ubiIgkod");
+        List<Object[]> rows = entityManager.createNativeQuery(sql.toString()).getResultList();
+        return rows;''', ['                .append("AIT_ILLIGAZ_KOD = :ubiIgkod");\n'
+                          '        if (ubiE04 != null) {\n'
+                          '            sqlParams.put("ubiE04", SqlValues.bind(ubiE04));\n'
+                          '        }',
+                          '.setParameter("ubiInptipKod", ubiInptipKod).setParameter("ubiIgkod", ubiIgkod).getResultList();'], []),
     "written_sql_missing_its_bind": ("", '''
         String kod = PlsqlValues.text(values, "B", "KOD");
         return entityManager.createNativeQuery("SELECT A FROM T WHERE KOD = :kod").getResultList();''',
@@ -356,12 +373,52 @@ class FormsReferenceTests(unittest.TestCase):
         from frm_forms import answer_checks
         self.assertIn('"code"', answer_checks.problems(helper)[0][1])
 
-    def test_the_prompt_says_it_only_where_the_forms_code_has_one(self):
+    def test_the_prompt_has_no_rule_of_its_own_for_it(self):
+        # The binding is the migrator's, for every shape: the prompt carries no rule made for one case.
         from frm_forms import assistant_context
-        inside = "set_block_property('B', default_where, 'X = :b.kod');"
-        outside = "set_block_property('B', default_where, 'X = ''' || :b.kod || '''');"
-        self.assertIn(assistant_context.FORMS_REF_HINT, assistant_context.hints(inside, "action", service=True))
-        self.assertNotIn(assistant_context.FORMS_REF_HINT, assistant_context.hints(outside, "action", service=True))
+        hints = assistant_context.hints("set_block_property('B', default_where, 'X = :b.kod');", "action", service=True)
+        self.assertFalse([h for h in hints if ":BLOCK.ITEM" in h or ":b.kod" in h], hints)
+        prompt = assistant_context.system_prompt("service") + assistant_context.SERVICE_QUERY_RESULT
+        self.assertNotIn(":BLOCK.ITEM", prompt)
+        self.assertNotIn("Map<String, Object> in that if", prompt)
+
+
+class TernaryTests(unittest.TestCase):
+    """cond ? " AND X = :x" : "": the rest of the statement is bound as usual, the branch under its condition."""
+
+    def bound(self, body):
+        code = "public Object m(ActionRequest request, String kod, String nev) {\n" + body + "\n}"
+        notes, warnings = [], []
+        return sql_binding.bind(code, CTX, notes, warnings), warnings
+
+    def test_the_other_branch_and_a_name_of_both_branches(self):
+        fixed, warnings = self.bound('''    String sql = "SELECT A FROM T WHERE "
+            + (kod == null ? "1 = 1" : "KOD = :kod")
+            + (nev != null ? " AND (NEV = :nev OR ALIAS = :nev)" : " AND NEV2 = :nev");
+    return entityManager.createNativeQuery(sql).getResultList();''')
+        self.assertEqual(warnings, [])
+        self.assertIn("    if (!(kod == null)) {\n        sqlParams.put(\"kod\", SqlValues.bind(kod));\n    }", fixed)
+        self.assertIn('.setParameter("nev", nev)', fixed)  # in the statement either way: bound always
+
+    def test_a_name_right_before_the_ternary_is_no_name_built_at_run_time(self):
+        # ":nev" + (cond ? ...): the text goes on with the branch, the name is complete (unlike ":p" + i)
+        fixed, warnings = self.bound('''    String sql = "SELECT A FROM T WHERE NEV = :nev" + (kod != null ? " AND KOD = :kod" : "");
+    return entityManager.createNativeQuery(sql).getResultList();''')
+        self.assertEqual(warnings, [])
+        self.assertIn('.setParameter("nev", nev)', fixed)
+        self.assertIn("    if (kod != null) {\n        sqlParams.put(\"kod\", SqlValues.bind(kod));\n    }", fixed)
+
+    def test_a_condition_that_may_not_run_twice_leaves_that_name_alone(self):
+        fixed, warnings = self.bound('''    java.util.Iterator<String> it = java.util.List.of("a").iterator();
+    String sql = "SELECT A FROM T WHERE NEV = :nev" + (it.hasNext() ? " AND KOD = :kod" : "");
+    return entityManager.createNativeQuery(sql).setParameter("kod", kod).getResultList();''')
+        self.assertIn('.setParameter("nev", nev)', fixed)  # the rest of the statement is still bound
+        self.assertIn('.setParameter("kod", kod)', fixed)  # left as written
+        self.assertTrue(any(":kod" in w for w in warnings), warnings)
+
+    def test_a_statement_it_cannot_follow_is_said_not_passed_silently(self):
+        _, fixed, _, warnings = repaired("names_built_at_run_time")
+        self.assertTrue(any("nem tudta végigkövetni" in w for w in warnings), warnings)
 
 
 class ExtraBindTests(unittest.TestCase):
