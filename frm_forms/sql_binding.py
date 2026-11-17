@@ -531,9 +531,10 @@ def in_scope(mask: str, pairs: dict, expression: str, position: int) -> bool:
     return True
 
 
-def candidates(name: str, query: Query, mask: str, ctx, preferred: list) -> list[str]:
+def candidates(name: str, query: Query, mask: str, ctx, preferred: list, extra: dict | None = None) -> list[str]:
     """Where a :name's value can come from, best first: the model's own binds, the variable of that name (or of the
-    same name in another spelling), a method parameter, the java-variables.json entry."""
+    same name in another spelling), a method parameter, the java-variables.json entry, and for a Forms reference the
+    screen value itself (forms_refs: PlsqlValues.text(values, "BLOCK", "ITEM"), the row's field)."""
     parameters = set(getattr(ctx, "parameters", None) or {})
     found = list(preferred) + [b.value for b in query.binds if b.name == name]
     if declared(mask, name) or name in parameters:
@@ -547,6 +548,7 @@ def candidates(name: str, query: Query, mask: str, ctx, preferred: list) -> list
     entry = (getattr(ctx, "variables", None) or {}).get(name)
     if entry and entry.get("value"):
         found.append(entry["value"])
+    found.append((extra or {}).get(name))
     return list(dict.fromkeys(v for v in found if v))
 
 
@@ -603,8 +605,9 @@ def covered(binds: list, query: Query) -> bool:
     return False
 
 
-def bind(code: str, ctx, notes: list, warnings: list) -> str:
-    """Every :name of every native query bound where its piece is (see the module); one query at a time."""
+def bind(code: str, ctx, notes: list, warnings: list, extra: dict | None = None) -> str:
+    """Every :name of every native query bound where its piece is (see the module); one query at a time. extra: the
+    values of the Forms references forms_refs renamed (name -> expression)."""
     constants = {c["name"]: c["sql"] for c in getattr(ctx, "sql_constants", None) or []}
     index, fixed, moved, typed = 0, [], [], False
     while True:
@@ -612,7 +615,7 @@ def bind(code: str, ctx, notes: list, warnings: list) -> str:
         if index >= len(found):
             break
         mask = java_mask(code)
-        edits, done, shifted, unsure = plan(code, mask, braces(mask), found[index], ctx)
+        edits, done, shifted, unsure = plan(code, mask, braces(mask), found[index], ctx, extra)
         index += 1
         for name in unsure:
             warnings.append(f"A(z) :{name} SQL-paraméter kötése nem biztos, hogy minden ágon helyes (feltételes "
@@ -642,7 +645,7 @@ def bind(code: str, ctx, notes: list, warnings: list) -> str:
     return code
 
 
-def plan(code: str, mask: str, pairs: dict, query: Query, ctx) -> tuple[list, list, list, list]:
+def plan(code: str, mask: str, pairs: dict, query: Query, ctx, extra: dict | None = None) -> tuple[list, list, list, list]:
     """The edits (start, end, text) that bind the query's :names right; the names fixed, moved and left unsure."""
     if not query.followed or not query.pieces:
         return [], [], [], []
@@ -658,7 +661,7 @@ def plan(code: str, mask: str, pairs: dict, query: Query, ctx) -> tuple[list, li
             if any(effective(b, query) for b in binds) or covered(binds, query):
                 continue
             values = list(dict.fromkeys(" ".join(b.value.split()) for b in binds))
-            value = next((v for v in candidates(name, query, mask, ctx, values)
+            value = next((v for v in candidates(name, query, mask, ctx, values, extra)
                           if in_scope(mask, pairs, v, query.statement[0])), None)
             if len(values) > 1 or value is None or not movable:
                 # bound in if/else branches with other values, or no value in reach: left as written
@@ -678,7 +681,7 @@ def plan(code: str, mask: str, pairs: dict, query: Query, ctx) -> tuple[list, li
             plans = []
             for piece in pieces:
                 own = [b.value for b in binds if b.path == piece.path]
-                value = next((v for v in candidates(name, query, mask, ctx, own)
+                value = next((v for v in candidates(name, query, mask, ctx, own, extra)
                               if in_scope(mask, pairs, v, piece.end)), None)
                 if value is None:
                     break
@@ -774,6 +777,110 @@ def declaration_place(code: str, mask: str, pairs: dict, query: Query, pieces: l
         return None
     start = skip_space(code, block + 1)
     return start, indent_at(code, start)
+
+
+# --- Forms references in the SQL ----------------------------------------------------------------------------------
+
+FORMS_REF = re.compile(r"(?<![:\w$#]):([A-Za-z_][\w$#]*)\.([A-Za-z_][\w$#]*)")
+REQUEST_VALUES = {"GLOBAL", "PARAMETER", "SYSTEM"}
+
+
+def camel(name: str) -> str:
+    parts = [p for p in re.split(r"[_$#]+", name.lower()) if p]
+    return parts[0] + "".join(p[:1].upper() + p[1:] for p in parts[1:]) if parts else name
+
+
+def unquoted(text: str) -> list[tuple[int, int]]:
+    """The parts of an SQL text outside its '...' strings."""
+    ranges, quoted, begin, index = [], False, 0, 0
+    while index < len(text):
+        if text[index] == "'":
+            if quoted and text[index + 1:index + 2] == "'":
+                index += 2
+                continue
+            if not quoted:
+                ranges.append((begin, index))
+            begin, quoted = index + 1, not quoted
+        index += 1
+    if not quoted:
+        ranges.append((begin, len(text)))
+    return ranges
+
+
+def forms_refs(code: str, ctx, notes: list, extra: dict, method: bool = True) -> str:
+    """:BLOCK.ITEM (or :GLOBAL.X) copied from the Forms code into the Java SQL - a DEFAULT_WHERE string holds them:
+    Forms reads the item there, Oracle and Hibernate do not (":V_ELEK_ADLAP" would be a parameter of its own). Each
+    becomes a named parameter, named like the Java variable that holds that screen value, so bind() gives it that
+    value; without such a variable it is read where it is (extra: PlsqlValues.text(values, "BLOCK", "ITEM"), the
+    request's parameter, the row's field)."""
+    constants = {c["name"]: c["sql"] for c in getattr(ctx, "sql_constants", None) or []}
+    from .answer_checks import CODE_TOKEN
+    spans = sorted({(m.start(), m.end()) for q in queries(code, constants) for p in q.pieces
+                    for m in CODE_TOKEN.finditer(code, p.proper, p.end) if m.group().startswith('"')})
+    if not any(FORMS_REF.search(code, start, end) for start, end in spans):
+        return code
+    mask = java_mask(code)
+    names, renamed, edits = {}, [], []
+    for start, end in spans:
+        body = code[start + 1:end - 1]
+        parts, last = [], 0
+        for begin, stop in unquoted(body):
+            for match in FORMS_REF.finditer(body, begin, stop):
+                key = (match.group(1).upper(), match.group(2).upper())
+                if key not in names:
+                    names[key] = reference_name(key, code, mask, ctx if method else None, set(names.values()), extra)
+                    renamed.append(f":{match.group(1)}.{match.group(2)} -> :{names[key]}")
+                parts += [body[last:match.start()], ":" + names[key]]
+                last = match.end()
+        if parts:
+            edits.append((start + 1, end - 1, "".join(parts) + body[last:]))
+    for start, end, text in reversed(edits):
+        code = code[:start] + text + code[end:]
+    notes.append("Helyben javítva: a Forms-hivatkozás nevesített paraméter lett (" + ", ".join(renamed)
+                 + "); az értékét a képernyőérték változója adja. A :BLOKK.MEZŐ-t a Forms oldja fel, az Oracle nem.")
+    return code
+
+
+def reference_name(key: tuple, code: str, mask: str, ctx, taken: set, extra: dict) -> str:
+    """The parameter of one Forms reference: the variable the model read that screen value into (or one of that
+    name), else a new name with the value to bind (extra). ctx None: a helper method, which has no request and no
+    row of its own: only its variables give a value."""
+    block, item = key
+    beans = bool(getattr(ctx, "beans", False))
+    parameters = getattr(ctx, "parameters", None) or {}
+    request = "request" in parameters
+    if block in REQUEST_VALUES:
+        wanted = camel(block + "_" + item)
+        value = ('request.' + ('getParameters()' if beans else 'parameters()') + '.get("' + block + "." + item + '")'
+                 if request else None)
+    else:
+        # String ubiInptipKod = PlsqlValues.text(values, "V_ELEK_ADLAP", "UBI_INPTIP_KOD"); (in code, not a comment)
+        read = next((m for m in re.finditer(r"(?<![\w$.])(?:final\s+)?" + TYPE + r"\s+(" + NAME + r")\s*=\s*PlsqlValues\s*\."
+                                            r"\s*(?:text|number|datetime|date)\s*\(\s*[^,;]+,\s*\"(?i:" + re.escape(block)
+                                            + r")\"\s*,\s*\"(?i:" + re.escape(item) + r")\"\s*\)", code)
+                     if mask[m.start()] == code[m.start()]), None)
+        if read:
+            return read.group(1)
+        wanted = camel(item)
+        same = [m.group(1) for m in re.finditer(r"(?<![\w$.])(?:final\s+)?" + TYPE + r"\s+(" + NAME + r")\s*(?=[=;:,)])", mask)
+                if m.group(1).lower() == wanted.lower()]
+        if same:
+            return same[0]
+        value = None
+        fields = set(getattr(ctx, "row_fields", None) or ())
+        if "row" in parameters and wanted in fields:
+            value = "row.get" + wanted[:1].upper() + wanted[1:] + "()" if beans else "row." + wanted
+        elif request:
+            kind = (getattr(ctx, "screen_items", None) or {}).get(key, "text")
+            reader = {"number": "number", "datetime": "datetime"}.get(kind, "text")
+            blocks = re.search(r"(?<![\w$.])(?:final\s+)?(?:var|Map\s*<[^;=]*>)\s+(" + NAME + r")\s*=\s*request\s*\.\s*"
+                               r"(?:getBlocks|blocks)\s*\(\s*\)[^;]*;", mask)
+            source = blocks.group(1) if blocks else "request." + ("getBlocks()" if beans else "blocks()")
+            value = f'PlsqlValues.{reader}({source}, "{block}", "{item}")'
+    name = wanted if wanted not in taken else camel(block + "_" + item)
+    if value and not ((getattr(ctx, "variables", None) or {}).get(name) or {}).get("value"):
+        extra[name] = value
+    return name
 
 
 def drop_extra(code: str, ctx, warnings: list) -> str:

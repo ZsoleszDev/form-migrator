@@ -20,7 +20,8 @@ import test_ai_triggers as ai
 
 setUpModule, tearDownModule = trigger_mode('ai')
 
-CTX = SimpleNamespace(parameters={"request": "ActionRequest"}, sql_constants=[],
+CTX = SimpleNamespace(parameters={"request": "ActionRequest"}, sql_constants=[], beans=False, row_fields=frozenset(),
+                      screen_items={("V_ELEK_ADLAP", "UBI_E04"): "number"},
                       variables={"igkod": {"name": "igkod", "value": "formsCommonsRepository.getIgKod(user)"}})
 
 # name: (method parameters, body, in the result, not in the result)
@@ -182,6 +183,22 @@ CASES = {
         return q.executeUpdate();''', ['sql.append(", NAME = :name");\n            sqlParams.put("name", SqlValues.bind(row.name));',
                                        'q.setParameter("code", row.code);', 'q.setParameter("id", row.id);'],
                                        ['q.setParameter("name"']),
+    # the reported case: a DEFAULT_WHERE copied with its Forms references (:BLOCK.ITEM is no parameter of Oracle/JPA)
+    "forms_references_of_a_default_where": ("", '''
+        var values = request.blocks() == null ? Map.<String, Map<String, String>>of() : request.blocks();
+        String ubiInptipKod = PlsqlValues.text(values, "V_ELEK_ADLAP", "UBI_INPTIP_KOD");
+        String ubiIgkod = formsCommonsRepository.getIgKod(user);
+        StringBuilder sql = new StringBuilder("SELECT AIT_ID FROM AIT_ADLAP WHERE ((");
+        sql.append("(:V_ELEK_ADLAP.UBI_INPTIP_KOD = '26T104' and AIT_INPTIP_KOD = '26T104')) and ");
+        sql.append("AIT_ILLIGAZ_KOD = :v_elek_adlap.ubi_igkod");
+        sql.append(" and (AIT_E04 = :V_ELEK_ADLAP.UBI_E04 or AIT_MEGJ = 'lásd :A.B'))");
+        List<Object[]> rows = entityManager.createNativeQuery(sql.toString()).getResultList();
+        return rows;''', ["sql.append(\"(:ubiInptipKod = '26T104' and AIT_INPTIP_KOD = '26T104')) and \");",
+                          'sql.append("AIT_ILLIGAZ_KOD = :ubiIgkod");',
+                          '.setParameter("ubiInptipKod", ubiInptipKod).setParameter("ubiIgkod", ubiIgkod)',
+                          '.setParameter("ubiE04", PlsqlValues.number(values, "V_ELEK_ADLAP", "UBI_E04"))',
+                          "'lásd :A.B'"],  # the text of an Oracle string stays
+                                             [":V_ELEK_ADLAP", ":v_elek_adlap"]),
     "written_sql_missing_its_bind": ("", '''
         String kod = PlsqlValues.text(values, "B", "KOD");
         return entityManager.createNativeQuery("SELECT A FROM T WHERE KOD = :kod").getResultList();''',
@@ -211,8 +228,9 @@ CASES = {
 def repaired(name):
     parameters, body, _, _ = CASES[name]
     code = "public Object " + name + "(" + ", ".join(p for p in ("ActionRequest request", parameters) if p) + ") {" + body + "\n}"
-    notes, warnings = [], []
-    return code, sql_binding.bind(code, CTX, notes, warnings), notes, warnings
+    notes, warnings, extra = [], [], {}
+    fixed = sql_binding.forms_refs(code, CTX, notes, extra)  # first, as finish() does
+    return code, sql_binding.bind(fixed, CTX, notes, warnings, extra), notes, warnings
 
 
 class VariantTests(unittest.TestCase):
@@ -302,6 +320,48 @@ class ProblemTests(unittest.TestCase):
         self.assertEqual(sql_binding.problems(written, CTX), [])  # answer_checks names its parameters
         _, fixed, _, _ = repaired("names_built_at_run_time")
         self.assertEqual(sql_binding.problems(fixed, CTX), [])
+
+
+class FormsReferenceTests(unittest.TestCase):
+    """:BLOCK.ITEM of the Forms code in the Java SQL: Forms fills it in, Oracle and JPA do not."""
+
+    def renamed(self, code, ctx=CTX, method=True):
+        notes, extra = [], {}
+        return sql_binding.forms_refs(code, ctx, notes, extra, method=method), extra, notes
+
+    def test_without_a_variable_it_is_read_where_it_is(self):
+        code = ('public Object m(ActionRequest request) {\n'
+                '    return entityManager.createNativeQuery("SELECT A FROM T WHERE K = :CTRL.KOD_X AND G = :GLOBAL.USER_ID")'
+                '.getResultList();\n}')
+        fixed, extra, notes = self.renamed(code)
+        self.assertIn("WHERE K = :kodX AND G = :globalUserId", fixed)
+        self.assertEqual(extra, {"kodX": 'PlsqlValues.text(request.blocks(), "CTRL", "KOD_X")',
+                                 "globalUserId": 'request.parameters().get("GLOBAL.USER_ID")'})
+        self.assertIn(":CTRL.KOD_X -> :kodX", notes[0])
+        beans = SimpleNamespace(**{**vars(CTX), "beans": True})
+        self.assertEqual(self.renamed(code, beans)[1]["kodX"], 'PlsqlValues.text(request.getBlocks(), "CTRL", "KOD_X")')
+
+    def test_in_a_hook_the_rows_field_in_a_helper_only_a_variable(self):
+        hook = SimpleNamespace(**{**vars(CTX), "parameters": {"row": "OrdersRow", "context": "RuleContext"},
+                                  "row_fields": frozenset({"code"})})
+        code = ('private void h(OrdersRow row, RuleContext context) {\n'
+                '    List<Object> r = entityManager.createNativeQuery("SELECT N FROM P WHERE C = :ORDERS.CODE").getResultList();\n}')
+        fixed, extra, _ = self.renamed(code, hook)
+        self.assertIn("WHERE C = :code", fixed)
+        self.assertEqual(extra, {"code": "row.code"})
+        helper, extra, _ = self.renamed(code, hook, method=False)
+        self.assertEqual(extra, {})  # a helper has no row or request of its own
+        # the model is then asked for :code by that name, never for a variable named ORDERS
+        self.assertEqual(sql_binding.problems(helper, hook), [])  # a written statement: answer_checks names :code
+        from frm_forms import answer_checks
+        self.assertIn('"code"', answer_checks.problems(helper)[0][1])
+
+    def test_the_prompt_says_it_only_where_the_forms_code_has_one(self):
+        from frm_forms import assistant_context
+        inside = "set_block_property('B', default_where, 'X = :b.kod');"
+        outside = "set_block_property('B', default_where, 'X = ''' || :b.kod || '''');"
+        self.assertIn(assistant_context.FORMS_REF_HINT, assistant_context.hints(inside, "action", service=True))
+        self.assertNotIn(assistant_context.FORMS_REF_HINT, assistant_context.hints(outside, "action", service=True))
 
 
 class ExtraBindTests(unittest.TestCase):
@@ -414,6 +474,28 @@ class QueryButtonTests(unittest.TestCase):
             if shutil.which("java"):
                 ai.compile_module(self, output, Path(tempfile.mkdtemp(dir=root)))
 
+    def test_a_forms_reference_copied_into_the_sql_is_the_screen_values_parameter(self):
+        # The DEFAULT_WHERE as the model copies it from the Forms code: :CTRL.FILTER, which Forms fills in
+        answer = SEARCH.replace("AND code like :filter || '%'", "AND code like :CTRL.FILTER || '%'")
+        self.assertIn(":CTRL.FILTER", answer)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            output = ai.migrate(root, root / "module")
+            task = next(t for t in engine.prepare_workspace(output)["tasks"] if t["method"] == "onCtrlSearchBtn")
+            client = ai.MethodClient({**ai.ANSWERS, "onCtrlSearchBtn": answer})
+            with patch("frm_forms.ollama.opener", return_value=client):
+                result = engine.propose(output, task["id"], engine.Options())
+            self.assertEqual(result["status"], "proposal", result["extraction"])
+            self.assertEqual(len(client.requests), 1)
+            self.assertTrue(any(":CTRL.FILTER -> :filter" in n for n in result["extraction"]["notes"]))
+            engine.apply_proposal(output, result["id"], reviewed=True)
+            method = ai.method_text((output / ai.SERVICE).read_text(encoding="utf-8"), "onCtrlSearchBtn")
+            body = re.sub(r"\s+", " ", ai.code_lines(method))
+            self.assertNotIn(":CTRL.FILTER", body)
+            self.assertIn('sql.append(" AND code like :filter || \'%\'"); sqlParams.put("filter", SqlValues.bind(filter));', body)
+            if shutil.which("java"):
+                ai.compile_module(self, output, Path(tempfile.mkdtemp(dir=root)))
+
 
 JAVA = """import java.util.*;
 import java.util.function.Supplier;
@@ -433,6 +515,7 @@ public class Variants {
     interface Repository { String getIgKod(Object user); }
     static final class PlsqlValues {
         static String text(Map<String, Map<String, String>> values, String block, String item) { return null; }
+        static java.math.BigDecimal number(Map<String, Map<String, String>> values, String block, String item) { return null; }
     }
     static final class SqlValues {
         static Object bind(Object value) { return value == null ? "" : value; }

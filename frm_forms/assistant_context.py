@@ -136,13 +136,13 @@ QUERY_RESULT = """3. Screen values: request.blocks().get("BLOCK").get("ITEM") (a
    throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "text")."""
 
 SERVICE_QUERY_RESULT = """3. Screen values: PlsqlValues.text(request.blocks(), "BLOCK", "ITEM") (a String or null),
-   PlsqlValues.number(...) (BigDecimal); parameters: request.parameters().get("NAME"); paging: request.offset(),
-   request.limit().
+   PlsqlValues.number(...) (BigDecimal); parameters: request.parameters().get("NAME");
+   paging: request.offset(), request.limit().
 4. This button queries the {block} block: its query, the row mapping and the fetch hooks are in the comment. Put the
    WHERE (and ORDER BY) the Forms code sets with SET_BLOCK_PROPERTY DEFAULT_WHERE / ORDER_BY into that query, with
-   named parameters for the screen values (never concatenated), run it through the entityManager, map every row to a
-   new {row_class} and return new PageResult<>(rows, messages, hasMore). MESSAGE texts go to messages; an error:
-   throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "text")."""
+   named parameters for the screen values (:ubiKod, never :BLOCK.ITEM, never concatenated), run it through the
+   entityManager, map every row to a new {row_class} and return new PageResult<>(rows, messages, hasMore). MESSAGE
+   texts go to messages; an error: throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "text")."""
 
 # A plain button (ActionResult): the shape of a body the migrator can insert as it is. Small local models copy a
 # skeleton far more reliably than they follow prose; the repaired slips (reply_repair) are the ones it shows right.
@@ -380,10 +380,19 @@ SQL_HINTS = {text for _, text in COMMON_HINTS if text.startswith(('SEQ.NEXTVAL:'
                                                                    'UPDATE / INSERT / DELETE'))}
 
 
+# A Forms string with a :BLOCK.ITEM in it (a DEFAULT_WHERE): Forms fills the item in, so the model copies it into the
+# Java SQL, where it is no parameter Oracle or Hibernate knows (sql_binding.forms_refs repairs what still slips).
+FORMS_STRING = re.compile(r"'(?:''|[^'])*'")
+FORMS_REF_IN_STRING = re.compile(r":\s*[A-Za-z_][\w$#]*\s*\.\s*[A-Za-z_][\w$#]*")
+FORMS_REF_HINT = (":BLOCK.ITEM inside a Forms string (DEFAULT_WHERE): Forms fills in the screen value there. In the Java SQL "
+                  "write a named parameter instead (:ubiKod for :V_BLOCK.UBI_KOD) and bind the Java value; :BLOCK.ITEM "
+                  "is no parameter of Oracle or JPA.")
+
+
 def hints(code: str, kind: str, sql_generated: bool = False, service: bool = False) -> list[str]:
     """Forms -> Java lines for the built-ins and references the Forms code (forms_code) uses."""
     chosen = (HOOK_HINTS if kind == "hook" else [] if kind == "commit" else ACTION_HINTS) + COMMON_HINTS
-    found = []
+    found = [FORMS_REF_HINT] if any(FORMS_REF_IN_STRING.search(m.group()) for m in FORMS_STRING.finditer(code)) else []
     for pattern, text in chosen:
         if service and text in SQL_HINTS:
             text = next(v for k, v in SERVICE_SQL_HINTS.items() if text.startswith(k))

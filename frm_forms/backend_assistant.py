@@ -1161,7 +1161,9 @@ def reply_context(prepared: dict, options: Options):
         dto_classes=dict(dialect["classes"]) if dialect["beans"] else {},
         parameters=dto_dialect.signature(packet.get("signature") or packet.get("existing_method") or "")[2],
         sql_constants=frame_sql.statements(packet) if options.data_access == "service" else [],
-        variables={e["name"]: e for e in packet.get("java_variables") or [] if e.get("name") and e.get("value")})
+        variables={e["name"]: e for e in packet.get("java_variables") or [] if e.get("name") and e.get("value")},
+        screen_items={(b["name"].upper(), i["name"].upper()): i.get("type") or "text"
+                      for b in packet.get("blocks") or [] for i in b.get("items") or [] if b.get("name") and i.get("name")})
 
 
 def id_type(descriptor: dict) -> str:
