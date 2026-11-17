@@ -378,6 +378,33 @@ előtt.
 A prompt egy sora mutatja a feltételes darab mintáját: SQL-darab `if` alatt → az értéke ugyanabban az `if`-ben egy
 `Map`-be, majd `params.forEach(query::setParameter)`.
 
+### Forms-hivatkozás az SQL-ben (`:BLOKK.MEZŐ`)
+
+A Forms `DEFAULT_WHERE` szövegében a `:V_ELEK_ADLAP.UBI_IGKOD` a Forms dolga: a lekérdezéskor ő írja be a
+képernyőértéket. A kis modell ezt a szöveget szó szerint átveszi a Java SQL-be, ahol se az Oracle, se a JPA nem érti.
+A Hibernate a `:V_ELEK_ADLAP`-ot külön paraméternek venné. A változót, amibe a modell az értéket kiolvasta
+(`String ubiIgkod = …`), semmi nem használja (PMD).
+
+Ezért a migrátor minden ilyen hivatkozást nevesített paraméterre cserél, a natív lekérdezés SQL-jében (az Oracle
+`'…'` szövegeit nem bántja):
+
+| A hivatkozás | A paraméter neve és értéke |
+| --- | --- |
+| `:V_ELEK_ADLAP.UBI_INPTIP_KOD`, és a modell kiolvasta: `String ubiInptipKod = PlsqlValues.text(values, "V_ELEK_ADLAP", "UBI_INPTIP_KOD")` | `:ubiInptipKod`, a `ubiInptipKod` változóból |
+| `:v_elek_adlap.ubi_igkod`, és van `ubiIgkod` változó (például a java-variables.json értékével) | `:ubiIgkod`, a `ubiIgkod` változóból |
+| változó nélkül | `:ubiE04`, az érték helyben: `PlsqlValues.number(values, "V_ELEK_ADLAP", "UBI_E04")` (a mező típusa szerint text/number/datetime) |
+| `:GLOBAL.X`, `:PARAMETER.X`, `:SYSTEM.X` | `:globalX`, `request.parameters().get("GLOBAL.X")` |
+| rekord-hookban a saját blokk mezője | `:code`, a `row.code` (beannél `row.getCode()`) |
+
+A kötést utána a szokásos módon teszi a helyére (feltételes darabnál a `Map`-be). A segédmetódusban csak a saját
+változója adhat értéket. Ha nincs, a modell a paraméter új nevén kap javítási kérést (`:code`), nem a régi
+`V_ELEK_ADLAP` „változóra”. Korábban a hivatkozást `:V_ELEK_ADLAP` paraméternek olvasta, és ilyen nevű változót kért
+a modelltől, ami a Forms-stílust csak erősítette.
+
+Megelőzésként a prompt egy sora mondja meg, ha a Forms-kód egy szövegében ilyen hivatkozás van: a Java SQL-be
+nevesített paraméter kell (`:ubiKod`), a Java értékkel kötve. A lekérdezőgomb szabálya ugyanezt írja. Az
+adatbázis-szerkezet átadása ezen nem segítene: ez nem tábla- vagy oszlopkérdés, hanem a Forms kötési szintaxisa.
+
 ### Az adatvégpontok és a LOV-ok SQL-je: konstansok, Oracle szerinti összehasonlítás
 
 Ezeknek a metódusoknak az SQL-je a migrátoré (a blokk lekérdezése, a `FOR UPDATE NOWAIT` zárolás, az

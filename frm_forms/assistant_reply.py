@@ -85,6 +85,8 @@ class Context:
     sql_constants: list = field(default_factory=list)
     # java-variables.json: variableName -> {"name", "value", "autowired", "type", "imports"} (java_variables.entry_of)
     variables: dict = field(default_factory=dict)
+    # The form's items: (BLOCK, ITEM) -> number / datetime / text (a :BLOCK.ITEM of the SQL read as its type)
+    screen_items: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -846,9 +848,13 @@ def finish(ctx: Context, reply: Reply, service, helpers, service_imports, repo_p
             used = set()
             body = frame_sql.use_constants(body, ctx.sql_constants, fixes, reply.warnings, used)
             helpers = [frame_sql.use_constants(h, ctx.sql_constants, fixes, reply.warnings, used) for h in helpers]
+        # A Forms :BLOCK.ITEM copied into the SQL (a DEFAULT_WHERE string): a named parameter of the screen value.
+        extra = {}
+        body = sql_binding.forms_refs(body, ctx, fixes, extra)
+        helpers = [sql_binding.forms_refs(h, ctx, fixes, {}, method=False) for h in helpers]
         # Every :name of the native SQL bound where its piece gets into the statement: a missing setParameter, a
         # conditional piece bound always or the other way round (sql_binding: plain Java, the model is not asked).
-        body = sql_binding.bind(body, ctx, fixes, reply.warnings)
+        body = sql_binding.bind(body, ctx, fixes, reply.warnings, extra)
         helpers = [sql_binding.bind(h, ctx, fixes, reply.warnings) for h in helpers]
         # ... and a setParameter for a name the written SQL does not have goes (Hibernate would refuse the query).
         body = sql_binding.drop_extra(body, ctx, reply.warnings)

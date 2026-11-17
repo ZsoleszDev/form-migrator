@@ -1,5 +1,12 @@
 # Következő változat (a 4.35 után) — minden metódust az AI ír a service-ben, tippekkel; entity és üres repository; valódi mentés, Forms-sorrend
 
+- **A Forms `:BLOKK.MEZŐ` hivatkozása a Java SQL-ben nevesített paraméter lesz, a képernyőérték változójával
+  kötve.** A modell a `DEFAULT_WHERE` szövegét szó szerint átvette (`AIT_ILLIGAZ_KOD = :v_elek_adlap.ubi_igkod`).
+  Ezt a Forms tölti ki, az Oracle és a JPA nem; a kiolvasott változó pedig használatlan maradt (PMD). Most a
+  hivatkozás neve az a változó, amelybe a modell az értéket kiolvasta (`:ubiIgkod`), és onnan kötődik. Ha nincs
+  ilyen, az érték helyben jön (`PlsqlValues.text/number(values, "BLOKK", "MEZŐ")`, `:GLOBAL.X`-nél a kérés
+  paramétere, hookban a `row` mezője). Korábban a migrátor a `:V_ELEK_ADLAP`-ot paraméternek vette, és ilyen nevű
+  változót kért a modelltől. A prompt egy sora is megmondja, ha a Forms-kód szövegében ilyen hivatkozás van.
 - **A Java asszisztens csak azon akad el, ami tényleg hibás.** Újabb AI-hívást (és két hívás után hibás vázlatot)
   csak az okoz, ami nem fordulna le, biztosan hibát adna futáskor, vagy biztonsági kérdés. A többit a migrátor
   helyben javítja vagy figyelmeztetéssel mutatja:
